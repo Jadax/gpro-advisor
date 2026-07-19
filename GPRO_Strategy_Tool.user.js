@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GPRO Strategy Tool
 // @namespace    https://gpro.net
-// @version      3.25.0
+// @version      3.26.0
 // @description  Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author       Tushant Sharma
 // @match        https://www.gpro.net/gb/gpro.asp
@@ -2106,6 +2106,27 @@
     }));
   }
 
+  // "Testing targets" - which upcoming races a testing session run TODAY will actually land on.
+  // Ported from gpro-pitwall's TestingTargetsService (reviewed 2026-07-19, fully disclosed, no
+  // secret constants): test points decay through the pipeline over 3 race weekends, so they land
+  // in the car for the +3/+4/+5 races. Uses our own SEASON_RACE_LIST + D.tracks pha data; targets
+  // past race 17 are skipped silently (next season's calendar isn't in our data, same as pitwall
+  // skips when GPRO hasn't published it).
+  function calcTestingTargets(currentTrackName) {
+    if (!currentTrackName || !SEASON_RACE_LIST.length) return null;
+    const idx = SEASON_RACE_LIST.findIndex(t => currentTrackName.includes(t.name.split(' ')[0]) || t.name.includes(currentTrackName.split(' ')[0]));
+    if (idx === -1) return null;
+    const targets = [];
+    [3, 4, 5].forEach(offset => {
+      const targetIdx = idx + offset; // 0-based; race numbers shown 1-based below
+      if (targetIdx >= SEASON_RACE_LIST.length) return;
+      const t = SEASON_RACE_LIST[targetIdx];
+      const prof = TRACK_PROFILES[t.name] || {};
+      targets.push({ offset, race: targetIdx + 1, name: t.name, pha: prof.pha || null });
+    });
+    return targets.length ? targets : null;
+  }
+
   // GAPP's per-track wear data is PRIMARY here whenever the track is found (falls back to our
   // Montreal-only calibration otherwise). NOTE: a numeric check at Montreal found GAPP's numbers
   // run a consistent ~25-30% higher than our gproanalyzer calibration across all 11 parts - own
@@ -2669,6 +2690,22 @@
       }
     });
 
+    // PHA-alignment note on upgrade/replace recs - ported from PartUpgradeAdvisorService
+    // (reviewed 2026-07-19): only added when the specific level change already being recommended
+    // would flip the car from not-PHA-similar to PHA-similar against this track, never a generic
+    // claim. Uses D.phaContrib (same GAPP-verified table as the Car Advisor's reference table).
+    const trackPhaForAlign = trackData && (trackData.trackPower || trackData.trackHandl || trackData.trackAccel)
+      ? { power: parseInt(trackData.trackPower) || 0, handling: parseInt(trackData.trackHandl) || 0, accel: parseInt(trackData.trackAccel) || 0 }
+      : null;
+    const carPhaForAlign = { power: parseInt(carData.carPower) || 0, handling: parseInt(carData.carHandl) || 0, accel: parseInt(carData.carAccel) || 0 };
+    if (trackPhaForAlign) {
+      recs.forEach(r => {
+        if (r.verdict !== 'UPGRADE' && r.verdict !== 'REPLACE') return;
+        const alignment = calcPartUpgradeAlignment(trackPhaForAlign, carPhaForAlign, r.part.name, r.part.lvl);
+        if (alignment) r.phaAlignment = alignment.rationale;
+      });
+    }
+
     const sortOrder = { FAIL: 0, CRITICAL: 1, UPGRADE: 2, REPLACE: 3, DOWNGRADE: 4, WAIT: 5, SAVE: 6 };
     recs.sort((a, b) => (sortOrder[a.verdict] || 99) - (sortOrder[b.verdict] || 99));
 
@@ -2710,6 +2747,52 @@
     const carTop = attrsAtRank(carRanks, 1);
     const top = !perfect && trackTop.length === 1 && trackTop[0] === carTop[0] && carTop.length === 1;
     return { level: perfect ? 'perfect' : top ? 'top' : 'none', carRanks, trackRanks };
+  }
+
+  // "PHA-similar" - a stricter, distinct check from calcPhaMatch's perfect/top/none tiers, ported
+  // from PhaMatchService's own definition (reviewed 2026-07-19): true only when BOTH car and track
+  // have a fully distinct (no-tie) P/H/A ordering AND their top-2 attributes coincide in order
+  // (with 3 attributes, a matching top-2 forces the third to match too). A tied ordering on either
+  // side is never similar - there's no exploitable ranking to align to.
+  function calcPhaSimilar(carPha, trackPha) {
+    if (!carPha || !trackPha) return false;
+    const order = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]);
+    const hasTies = (sorted) => sorted.some((e, i) => i > 0 && e[1] === sorted[i - 1][1]);
+    const carSorted = order(carPha), trackSorted = order(trackPha);
+    if (hasTies(carSorted) || hasTies(trackSorted)) return false;
+    return carSorted[0][0] === trackSorted[0][0] && carSorted[1][0] === trackSorted[1][0];
+  }
+
+  // Hypothetical car PHA after changing one part by `delta` levels, using D.phaContrib (GAPP-
+  // verified power/handling/accel-per-level table, see the reference table on the Car Advisor
+  // page). Ported from PartUpgradeAdvisorService::carAfterSwap() (reviewed 2026-07-19).
+  function carAfterPartSwap(carPha, part, delta) {
+    const c = (D.phaContrib && D.phaContrib[part]) || { power: 0, handling: 0, accel: 0 };
+    return {
+      power: (carPha.power || 0) + c.power * delta,
+      handling: (carPha.handling || 0) + c.handling * delta,
+      accel: (carPha.accel || 0) + c.accel * delta,
+    };
+  }
+
+  // Suggests a +/-1 level swap for a part already flagged for replacement, ONLY when that specific
+  // shift would flip the car from not-PHA-similar to PHA-similar against this track - matches
+  // PartUpgradeAdvisorService::bestOption() exactly (reviewed 2026-07-19): if the car already
+  // aligns, or no single-step swap helps, returns null rather than a claim we can't back up.
+  function calcPartUpgradeAlignment(trackPha, carPha, part, currentLevel) {
+    if (!trackPha || !carPha || calcPhaSimilar(carPha, trackPha)) return null;
+    for (const delta of [-1, 1]) {
+      const targetLevel = currentLevel + delta;
+      if (targetLevel < 1 || targetLevel > 9) continue;
+      const shiftedCar = carAfterPartSwap(carPha, part, delta);
+      if (calcPhaSimilar(shiftedCar, trackPha)) {
+        const c = (D.phaContrib && D.phaContrib[part]) || { power: 0, handling: 0, accel: 0 };
+        const strongest = Object.entries(c).sort((a, b) => b[1] - a[1])[0][0];
+        const strongestLabel = strongest === 'power' ? 'Power' : strongest === 'handling' ? 'Handling' : 'Acceleration';
+        return { suggestedLevel: targetLevel, delta, rationale: `Replacing with a ${delta > 0 ? 'higher' : 'lower'}-level ${part} realigns your car - ${part} leans into ${strongestLabel}.` };
+      }
+    }
+    return null;
   }
 
   // "Push or hold?" checklist - turns several independent signals into one read for how much CTR
@@ -3103,6 +3186,22 @@
         });
         twHtml += `<div style="font-size:9px;color:#f59e0b;margin-top:4px;">Testing wears the car at roughly half the full-race per-lap rate (ported from gpro-pitwall's disclosed 0.53 factor, calibrated against real sessions) - own estimate, not confirmed against your actual current wear.</div>`;
         h += mkSection(`Testing Wear (${testing.trackName})`, twHtml);
+      }
+    }
+
+    // Testing targets - which races today's test points actually land on (+3/+4/+5 race decay,
+    // ported from gpro-pitwall's TestingTargetsService, reviewed 2026-07-19). Helps pick the test
+    // priority (Power/Handling/Accel focus) by showing what those races demand, not this one.
+    {
+      const targets = calcTestingTargets((practice||{}).trackName || (track||{}).trackName);
+      if (targets) {
+        let ttHtml = '';
+        targets.forEach(t => {
+          const phaStr = t.pha ? `P${t.pha.power} / H${t.pha.handling} / A${t.pha.accel}` : '?';
+          ttHtml += mkRow(`+${t.offset} (Race ${t.race}) ${t.name}`, phaStr);
+        });
+        ttHtml += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Test points convert over 3 race weekends, so a session run this week lands in the car for these races - pick your test priority for what THEY demand, not this weekend's track.</div>`;
+        h += mkSection('Testing Targets', ttHtml);
       }
     }
 
@@ -3566,6 +3665,7 @@
         } else if (r.verdict === 'UPGRADE' || r.verdict === 'REPLACE') {
           text += `<br><span style="font-size:10px;">${r.detail}</span>`;
           text += `<br><span style="font-size:10px;color:#6b7280;">Cash after: $${r.remainingCash.toLocaleString()}</span>`;
+          if (r.phaAlignment) text += `<br><span style="font-size:10px;color:#60a5fa;">🎯 ${r.phaAlignment}</span>`;
         } else if (r.verdict === 'DOWNGRADE') {
           text += `<br><span style="font-size:10px;color:#f59e0b;">${r.detail}</span>`;
           text += `<br><span style="font-size:10px;color:#6b7280;">⚠ Loses performance — free option to survive race</span>`;
@@ -3606,7 +3706,28 @@
     // Note
     h += mkSection('Rules', mkRec('One car update per race. Debt = relegation. Recommendations never cross $0.', 'info'));
 
+    // AI Coaching - same opt-in pattern as Qualify/RaceSetup (see wireAiCoachButton). Context is
+    // the already-computed analysis summary, never a recalculation.
+    let aiCoachContextCar = null;
+    if (getAiKey()) {
+      aiCoachContextCar = {
+        page: 'CarAdvisor',
+        track: trackData ? (trackData.name || trackData.trackName || 'unknown') : 'unknown',
+        league: analysis.league,
+        cash: analysis.cash,
+        projectedCash: analysis.projectedCash,
+        partsAtRisk: analysis.parts.filter(p => p.willFail || p.atRisk).map(p => ({ name: p.name, lvl: p.lvl, endWear: Math.round(p.endWear) })),
+        recommendations: analysis.recs.slice(0, 6).map(r => ({ part: r.part.name, verdict: r.verdict, cost: r.cost || 0 })),
+      };
+      h += mkSection('AI Coaching',
+        `<button id="gpro-ai-coach-btn-car" style="background:#7c3aed;color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;">🤖 Get AI Coaching</button><div id="gpro-ai-coach-out-car" style="margin-top:6px;"></div>`
+      );
+    }
+
     body(h);
+    if (aiCoachContextCar) {
+      wireAiCoachButton('gpro-ai-coach-btn-car', 'gpro-ai-coach-out-car', aiCoachContextCar, `ai_coach_car_${aiCoachContextCar.track}`);
+    }
   }
 
   // ============================================================

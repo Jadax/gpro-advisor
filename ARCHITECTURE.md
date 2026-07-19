@@ -209,6 +209,45 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-19 — Iteration 20 (pitwall source review COMPLETE, 3 features shipped)
+
+Finished the remaining service files. **The full gpro-pitwall src/Service review is now complete**
+- every game-logic service has been read in current source form (the ~15 remaining files are
+infrastructure: auth/email/cookies/rate-limiting/API-client plumbing, no game logic).
+
+Shipped this iteration:
+- **PHA-alignment notes on upgrade/replace recommendations** (`calcPhaSimilar`, `carAfterPartSwap`,
+  `calcPartUpgradeAlignment` - ported from `PartUpgradeAdvisorService`, fully disclosed, built on
+  our own GAPP-verified `D.phaContrib`): when a part already being recommended for replacement
+  could flip the car from not-PHA-similar to PHA-similar with a ±1 level choice, the rec now says
+  so ("🎯 Replacing with a higher-level X realigns your car..."). Never a generic claim - only
+  shown when that specific shift actually flips the verdict, exactly like the source.
+- **Testing Targets section** in `renderRaceSetup` (ported from `TestingTargetsService`, fully
+  disclosed, zero secret constants): test points land +3/+4/+5 races out, so the section shows
+  those races' names and PHA demands from our own `SEASON_RACE_LIST`/`D.tracks` - pick the test
+  priority for what those races demand, not this weekend's. Targets past race 17 skipped silently
+  (next-season calendar not in our data - same behavior as pitwall when unpublished).
+- **AI Coaching extended to the Car Advisor page** (`renderUpdateCar`) via the shared
+  `wireAiCoachButton` - context is the already-computed analysis (at-risk parts, recommendations,
+  cash), consistent with the AI-advisor-everywhere aim.
+
+Reviewed but NOT built, with reasons:
+- **`TrainingAdvisorService`/`IdealPilotService`/`InsightService`/`PilotCalculatorService`**: all
+  depend on a crowd-seeded per-division pilot database (`PilotRepository`) and secrets-injected OA
+  factors - the "ideal pilot" is an average over peers stored server-side. No equivalent data
+  source exists for a client-only userscript. The concept (rank training options by weighted
+  shortfall against a division-ideal profile) is recorded for the future platform phase, where a
+  backend could accumulate this.
+- **`RecruitmentService`**: scores the full market against the division-ideal (same blocker), BUT
+  it revealed something independently useful: it reads `GetMarketFile.asp` - the bulk market
+  download our own `gpro-public-api.yml` documents as **requiring no authentication** (updated
+  hourly, gzip). That's a real, free data source for a future deep-search/market-analytics feature
+  that doesn't touch the API budget at all. Recorded in TODOs.
+- **`PilotCalculatorService`'s OA-cap adjustment logic** (motivation drains first, then secondary
+  stats scale down): interesting for understanding how GPRO caps OA per division, but the factors
+  are secrets-injected; nothing portable.
+- Verified with `node --check`; bumped `@version` to `3.26.0` (`gpro-data.js` untouched).
+
 ### 2026-07-19 — Iteration 19 (StrategyService + PartSwapAdvisorService reviewed)
 
 - **`StrategyService.php`** (the tyre/fuel strategy calculator, most directly comparable to
@@ -735,6 +774,13 @@ Refactored the live userscript (no `packages/` code touched yet, since nothing c
 shape is written correctly against Anthropic's documented API but has never actually been clicked
 with a live key on live gpro.net from this environment. First priority next time a real browser
 session with a key is available.
+
+**GetMarketFile.asp bulk market data** (iteration 20 finding) - `RecruitmentService` revealed that
+`GetMarketFile.asp` (documented in our own `gpro-public-api.yml`) serves the full driver/TD market
+as an hourly-updated gzip download with NO authentication and NO API-budget cost. A future "deep
+driver search" feature (filter the whole market by any stat range, not just GPRO's default 20-row
+page) could be built on this - needs gzip decompression in the userscript (DecompressionStream is
+available in modern browsers) and a look at the actual file format first.
 
 **Part-swap advisor rework** (iteration 19 finding) - `analyzeCar`'s upgrade/downgrade
 recommendation currently picks one option per flagged part. gpro-pitwall's `PartSwapAdvisorService`
