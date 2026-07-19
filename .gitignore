@@ -1,0 +1,9 @@
+# Local tool config, not project config
+.claude/
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
+
+# Future package tooling (none yet, but keep this ready)
+node_modules/

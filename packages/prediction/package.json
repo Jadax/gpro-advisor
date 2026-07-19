@@ -1,0 +1,8 @@
+{
+  "name": "@gpro/prediction",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Statistical/ML-ish forecasting: driver progress, race outcome probabilities, career trajectory. Deterministic fallbacks always available (see AI-first principles in ARCHITECTURE.md).",
+  "main": "src/index.js",
+  "type": "commonjs"
+}

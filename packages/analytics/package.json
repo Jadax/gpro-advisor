@@ -1,0 +1,8 @@
+{
+  "name": "@gpro/analytics",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Historical data analysis: season/track/driver trend explorers, transfer market valuation, sponsor optimization.",
+  "main": "src/index.js",
+  "type": "commonjs"
+}
