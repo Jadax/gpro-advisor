@@ -209,6 +209,25 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-19 — Iteration 16 (repo pushed to GitHub, AI Coaching extended to Qualify)
+
+- **First git history**: this project had no `.git` until now. Initialized, added a `.gitignore`
+  (excludes `.claude/` local tool settings - never project config), committed everything as of
+  v3.21.0, and pushed to `https://github.com/Jadax/gpro-advisor` (repo created by the user; the
+  push itself needed explicit per-session confirmation - pushing to a remote is treated as a
+  visible/shared-state action, not something to do on a standing instruction alone). Going
+  forward: version bump + `node --check` + ARCHITECTURE.md entry + commit + push is the per-
+  iteration pattern, same rigor as before, now with actual version control backing it.
+- **AI Coaching extended to `renderQualify`** (Q1/Q2 pages) - same opt-in, click-to-fetch,
+  transparency-block pattern as `renderRaceSetup`, with a track+session-scoped cache key so Q1/Q2
+  (which can have different weather/tyre calls for the same track) don't collide.
+- **Extracted `wireAiCoachButton(btnId, outId, context, cacheKey)`** - the click-handler/cache-
+  check/transparency-block sequence was about to become copy-pasted a second time (Qualify +
+  RaceSetup); pulled out into one shared function instead and had `renderRaceSetup`'s original
+  inline version call it too, so there's exactly one implementation of "wire an AI Coaching
+  button" now, not two near-identical ones.
+- Verified with `node --check`; bumped `@version` to `3.22.0` (`gpro-data.js` untouched).
+
 ### 2026-07-19 — Iteration 15 (AI Coaching hardened: current model, richer context, transparency, key test)
 
 Follow-up pass on iteration 14's AI Coaching feature (user asked to log into gprohub.net for

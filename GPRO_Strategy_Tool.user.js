@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GPRO Strategy Tool
 // @namespace    https://gpro.net
-// @version      3.21.0
+// @version      3.22.0
 // @description  Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author       Tushant Sharma
 // @match        https://www.gpro.net/gb/gpro.asp
@@ -176,6 +176,36 @@
         },
         onerror() { resolve({ error: 'Network error reaching api.anthropic.com.' }); },
       });
+    });
+  }
+
+  // Shared "Get AI Coaching" button wiring - handles the cache-check/fetch/render/transparency
+  // sequence identically wherever an AI Coaching button appears (renderQualify, renderRaceSetup).
+  // btnId/outId: element ids already rendered into `h`. context: the plain object to send (and to
+  // show verbatim in the "what was sent" block). cacheKey: string, should be unique per
+  // page+session+track so Q1/Q2/Race don't collide.
+  function wireAiCoachButton(btnId, outId, context, cacheKey) {
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+    const sentBlock = `<details style="margin-top:4px;"><summary style="cursor:pointer;color:#6b7280;font-size:9px;">What was sent to the AI</summary><pre style="font-size:9px;color:#9ca3af;white-space:pre-wrap;margin:4px 0 0;">${JSON.stringify(context, null, 2)}</pre></details>`;
+    btn.addEventListener('click', async () => {
+      const out = document.getElementById(outId);
+      const cached = getCachedData(cacheKey);
+      if (cached) {
+        out.innerHTML = mkRec(`🤖 ${cached}`, 'info') + `<div style="font-size:9px;color:#6b7280;margin-top:2px;">Cached - AI-generated, not a deterministic calculation.</div>` + sentBlock;
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Asking...';
+      const result = await callAiCoach(context);
+      btn.disabled = false;
+      btn.textContent = '🤖 Get AI Coaching';
+      if (result.text) {
+        setCachedData(cacheKey, result.text);
+        out.innerHTML = mkRec(`🤖 ${result.text}`, 'info') + `<div style="font-size:9px;color:#6b7280;margin-top:2px;">AI-generated (Claude), not a deterministic calculation - a second opinion, not a replacement for the numbers above.</div>` + sentBlock;
+      } else {
+        out.innerHTML = mkRec(`AI coaching failed: ${result.error}`, 'warn');
+      }
     });
   }
 
@@ -2725,8 +2755,30 @@
       }
     }
 
+    // AI Coaching - same opt-in, click-to-fetch, cached-per-race pattern as renderRaceSetup
+    // (see callAiCoach/ARCHITECTURE.md iteration 14/15). Cache key includes the session label so
+    // Q1 and Q2 pages for the same track don't collide (they can have different weather/tyre calls).
+    let aiCoachContextQ = null;
+    if (getAiKey()) {
+      aiCoachContextQ = {
+        session: sessionLabel,
+        track: qualTrackName || 'unknown',
+        weather: analyze ? { commitRain: analyze.commitRain, maxRain: analyze.maxRain } : null,
+        setup: setup ? { source: setup.source, sessionTemp: Math.round(sessionTemp), sessionWet } : null,
+        tyreChoice: tyre ? { compound: tyre.finalRec, reason: tyre.recReason, source: tyre.source } : null,
+        ctr,
+      };
+      h += mkSection('AI Coaching',
+        `<button id="gpro-ai-coach-btn-q" style="background:#7c3aed;color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;">🤖 Get AI Coaching</button><div id="gpro-ai-coach-out-q" style="margin-top:6px;"></div>`
+      );
+    }
+
     body(h);
     wireDecisionBoard();
+
+    if (aiCoachContextQ) {
+      wireAiCoachButton('gpro-ai-coach-btn-q', 'gpro-ai-coach-out-q', aiCoachContextQ, `ai_coach_${aiCoachContextQ.track}_${aiCoachContextQ.session}`);
+    }
 
     // Q1/Q2 weather dropdown handlers - recalculate in-place (no reload)
     setTimeout(() => {
@@ -3183,32 +3235,8 @@
 
     // AI Coaching button - fetches on click only (never automatic), cached per track for
     // CACHE_TTL so revisiting/re-rendering the same race doesn't re-spend the user's API credits.
-    const aiCoachBtn = document.getElementById('gpro-ai-coach-btn');
-    if (aiCoachBtn && aiCoachContext) {
-      // Full transparency into what was actually sent (AI-first principle: "display assumptions") -
-      // the context object is exactly what callAiCoach JSON-stringifies into the prompt, no more,
-      // no less, so this <details> is never out of sync with the real request.
-      const sentBlock = `<details style="margin-top:4px;"><summary style="cursor:pointer;color:#6b7280;font-size:9px;">What was sent to the AI</summary><pre style="font-size:9px;color:#9ca3af;white-space:pre-wrap;margin:4px 0 0;">${JSON.stringify(aiCoachContext, null, 2)}</pre></details>`;
-      aiCoachBtn.addEventListener('click', async () => {
-        const out = document.getElementById('gpro-ai-coach-out');
-        const cacheKey = 'ai_coach_' + aiCoachContext.track;
-        const cached = getCachedData(cacheKey);
-        if (cached) {
-          out.innerHTML = mkRec(`🤖 ${cached}`, 'info') + `<div style="font-size:9px;color:#6b7280;margin-top:2px;">Cached - AI-generated, not a deterministic calculation.</div>` + sentBlock;
-          return;
-        }
-        aiCoachBtn.disabled = true;
-        aiCoachBtn.textContent = 'Asking...';
-        const result = await callAiCoach(aiCoachContext);
-        aiCoachBtn.disabled = false;
-        aiCoachBtn.textContent = '🤖 Get AI Coaching';
-        if (result.text) {
-          setCachedData(cacheKey, result.text);
-          out.innerHTML = mkRec(`🤖 ${result.text}`, 'info') + `<div style="font-size:9px;color:#6b7280;margin-top:2px;">AI-generated (Claude), not a deterministic calculation - a second opinion, not a replacement for the numbers above.</div>` + sentBlock;
-        } else {
-          out.innerHTML = mkRec(`AI coaching failed: ${result.error}`, 'warn');
-        }
-      });
+    if (aiCoachContext) {
+      wireAiCoachButton('gpro-ai-coach-btn', 'gpro-ai-coach-out', aiCoachContext, 'ai_coach_' + aiCoachContext.track);
     }
 
     // Setup copy button handlers - getText reads `setup` live (not captured at wire-time), so a
