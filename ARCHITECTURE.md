@@ -209,6 +209,50 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-19 — Iteration 17 (gpro-pitwall faithfulness pass — real source, not README)
+
+The user flagged directly: had the RiskAdvisorService/PhaMatchService ports actually been checked
+against gpro-pitwall's real, current source, or just its README description? Honest answer: the
+latter, for these two. Since it's an actively-maintained project (unlike GAPP), that's a real gap.
+Fetched the raw source of `RiskAdvisorService.php`, `PhaMatchService.php`, and
+`WearAdvisorService.php` directly and compared line-by-line against our ports:
+
+- **`calcDriverStrategyRecommendation`'s formula and constants were already exactly faithful** -
+  every constant (`OVERTAKE_BASE`/`DEFEND_BASE`/`GRIP_FACTOR`/`TYRE_WEAR_FACTOR`/
+  `ATTRIBUTE_SCALE`/`RAIN_WATCH_THRESHOLD`/`SHORT`/`LONG_RACE_KM`/`MIN`/`MAX_RISK`/
+  `PROBLEM_LAP_LOSS`/`PROBLEM_REPAIR_TIME`) matches the real source exactly. No changes needed.
+- **`mkRaceEngineerNarrative` was noticeably thinner than the real `phrase()` method** - ours only
+  covered 4 threshold-based bits (overtake tier, defend tier, grip, long-race); the real source has
+  a **per-rating-tier lead sentence** (distinct wording for Very Easy/Easy/Hard-Very Hard/Normal,
+  not just a magnitude threshold) plus an **ordered caveat list capped at 2** (wet-race talent
+  tiers, rain-watch, grip, aggression-gap, tyre-wear-very-high, long-race-stamina, falling back to
+  a confidence/ceiling read when nothing else applies). Rewrote it to match that structure
+  (reimplemented independently in JS, not copied).
+- **Two entirely missing pieces found and added**: `calcStrategyTip()` (pit-count tie-breaker
+  advice - "take fewer stops when passing is hard, more stops OK when passing is easy") and
+  `calcDistanceTip()` (race-distance-vs-driver-energy narrative, shown only for the short/long
+  tails) - both real `RiskAdvisorService` methods (`strategyTip()`/`distanceTip()`) we simply
+  hadn't ported at all. Wired into `renderRaceSetup`'s Driver Strategy section.
+- **`calcPhaMatch` had a real correctness bug**: it ranked attributes via `Array.sort()`, which is
+  wrong on ties - two equal PHA values (e.g. a fresh car at 6/6/6) get an arbitrary, unstable order
+  from `sort()`, so "perfect" match could silently misfire. `PhaMatchService::matchLevel()`'s real
+  algorithm uses **competition ranking** (ties share a rank) and explicitly only calls something
+  'top' when the track has a single unambiguous #1 that coincides with the car's single #1 - a
+  tied #1 on either side can only ever be 'perfect', never 'top'. Rewrote `calcPhaMatch` to match
+  this exactly.
+- **Added a one-line severity headline** to the Car Advisor's parts table (`renderUpdateCar`),
+  matching `WearAdvisorService::headline()`'s concept ("All parts will finish comfortably." / "2
+  parts will not survive the race - swap them.") - built from the `willFail`/`atRisk` flags already
+  computed, not a new wear calculation.
+- Verified with `node --check` after each change; version was already bumped to `3.23.0` for this
+  batch (`gpro-data.js` untouched).
+
+**Takeaway for future research passes**: for an actively-maintained reference project, always fetch
+the actual current source before porting/trusting a description of it - a README or an earlier
+session's summary can go stale or was never fully accurate to begin with. GAPP is unmaintained, so
+that risk is lower there, but gpro-pitwall changes; treat every prior port from it as "verify
+against source, don't assume it's still accurate" rather than settled.
+
 ### 2026-07-19 — Iteration 16 (repo pushed to GitHub, AI Coaching extended to Qualify)
 
 - **First git history**: this project had no `.git` until now. Initialized, added a `.gitignore`

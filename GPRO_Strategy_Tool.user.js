@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GPRO Strategy Tool
 // @namespace    https://gpro.net
-// @version      3.22.0
+// @version      3.23.0
 // @description  Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author       Tushant Sharma
 // @match        https://www.gpro.net/gb/gpro.asp
@@ -1830,43 +1830,95 @@
     return { overtakeRisk, defendRisk, dryRisk, wetRisk, malfunctionRisk, startRisk, startRiskLabel, problemPitLaps, overtaking, longRace };
   }
 
-  // Plain-language "race engineer" summary of calcDriverStrategyRecommendation's dials, in the
-  // style of gpro-pitwall's Race Engineer advisor (reviewed 2026-07-19): lead with the verdict,
-  // explain the one or two biggest reasons, in one sentence a manager can act on without decoding
-  // a risk-dial table. Purely a template over numbers we already computed - no LLM involved, and
-  // it degrades to a generic sentence if driver data is thin (see AI-first principles in
-  // ARCHITECTURE.md: deterministic, explains reasoning, no hard AI dependency).
-  function mkRaceEngineerNarrative(rec, track, driver) {
+  // Plain-language "race engineer" summary of calcDriverStrategyRecommendation's dials.
+  // Reimplemented (2026-07-19) directly against gpro-pitwall's actual current
+  // RiskAdvisorService::phrase() source (previously this was built from the README's description
+  // only, which turned out to undersell it - the real version has a per-rating-tier lead sentence
+  // plus up to 2 caveats from a richer, ordered list, not just grip/long-race). Purely a template
+  // over numbers already computed here - no LLM involved, degrades to a generic sentence if driver
+  // data is thin, per the AI-first principles in ARCHITECTURE.md.
+  function mkRaceEngineerNarrative(rec, track, driver, raceWet) {
     if (!rec) return '';
-    const overtakingLabel = (track && track.overtaking || 'Normal').toLowerCase();
+    const trackName = (track && (track.name || track.trackName)) || 'this track';
+    const overtaking = rec.overtaking;
     const grip = (track && track.gripLevel) || '';
-    const bits = [];
+    const tyreWear = (track && track.tyreWear) || '';
+    const n = (key) => Math.max(0, Math.min(100, (parseFloat(driver && driver[key]) || 125) / RISK_ATTR_SCALE));
 
-    if (rec.overtakeRisk >= 45) {
-      bits.push(`overtaking here is ${overtakingLabel}, so I'd push to ${rec.overtakeRisk} on attack to make moves stick`);
-    } else if (rec.overtakeRisk <= 20) {
-      bits.push(`overtaking is ${overtakingLabel} here, so there's little to gain from attacking - I've kept it to ${rec.overtakeRisk}`);
+    let lead;
+    if (overtaking === 'Very Easy') {
+      lead = `Passing at ${trackName} comes cheap, so I'd keep overtake modest at ${rec.overtakeRisk} and put the effort into defending at ${rec.defendRisk}. And remember these dials only act in traffic - on a track this open, the lap time lives in your clear-track risk.`;
+    } else if (overtaking === 'Easy') {
+      lead = `Passing at ${trackName} comes cheap, so I'd keep overtake modest at ${rec.overtakeRisk} and put the effort into defending at ${rec.defendRisk} - your position is what's under threat here.`;
+    } else if (overtaking === 'Hard' || overtaking === 'Very Hard') {
+      lead = `Overtaking at ${trackName} is ${overtaking.toLowerCase()}, so I'd push overtake up to ${rec.overtakeRisk} to make moves stick - and since the track already makes you hard to pass, ${rec.defendRisk} on defence is plenty.`;
     } else {
-      bits.push(`I'd set attack around ${rec.overtakeRisk} given how ${overtakingLabel} passing is here`);
+      lead = `${trackName} is neutral for passing - a balanced ${rec.overtakeRisk} overtake / ${rec.defendRisk} defend split fits.`;
     }
 
-    if (rec.defendRisk <= 25) {
-      bits.push(`since the track already makes him hard to pass, ${rec.defendRisk} on defence is plenty`);
-    } else if (rec.defendRisk >= 45) {
-      bits.push(`he'll need to defend harder (${rec.defendRisk}) since this track makes passing easy for others too`);
+    // Same priority order and 2-caveat cap as the source: wet/rain-watch, grip, aggression gap,
+    // tyre wear, long-race stamina, falling back to a confidence read when nothing else applies.
+    const caveats = [];
+    if (raceWet) {
+      const tal = n('talent');
+      caveats.push(tal >= 70
+        ? `It's a wet race and talent at ${Math.round(tal)} thrives in the spray, so I've only trimmed lightly.`
+        : tal < 40
+          ? `It's a wet race and with talent at ${Math.round(tal)} I'd stay well clear of trouble - both numbers are trimmed.`
+          : `It's a wet race, so I've trimmed both - talent at ${Math.round(tal)} buys some margin, but not enough to push.`);
     }
-
     if (grip === 'Very Low' || grip === 'Low') {
-      bits.push(`grip here is ${grip.toLowerCase()} - sliding cars punish ambition, so I've shaved both numbers`);
+      caveats.push(`Grip here is ${grip.toLowerCase()} - sliding cars punish ambition, so I've shaved both numbers.`);
     }
-    if (rec.longRace) {
-      bits.push(`it's a long race, so I've left stamina headroom rather than maxing either dial`);
+    const aggGap = Math.max(0, n('aggressiveness') - n('experience'));
+    if (aggGap > 15) {
+      caveats.push(`Watch the temper: aggressiveness ${Math.round(n('aggressiveness'))} against experience ${Math.round(n('experience'))} invites mistakes, so I held back a notch.`);
+    }
+    if (tyreWear === 'Very High') {
+      caveats.push(`Tyre wear runs very high here - pushing chews the rubber you'll need at the end of each stint.`);
+    }
+    if (rec.longRace && n('stamina') < 60) {
+      caveats.push(`It's a long race and stamina at ${Math.round(n('stamina'))} will fade late - another reason to stay tidy.`);
+    }
+    if (!caveats.length) {
+      const conc = n('concentration'), exp = n('experience');
+      caveats.push((conc + exp) / 2 >= 70
+        ? `Concentration ${Math.round(conc)} and experience ${Math.round(exp)} give plenty of margin for these numbers.`
+        : `The driver is the ceiling here - train concentration and experience before pushing these dials higher.`);
     }
 
-    let sentence = bits.length ? bits[0].charAt(0).toUpperCase() + bits[0].slice(1) : `Attack ${rec.overtakeRisk}, defend ${rec.defendRisk} feels right for this track.`;
-    if (bits.length > 1) sentence += ' — ' + bits.slice(1).join('; ');
-    sentence += `. On race start: ${rec.startRiskLabel.toLowerCase()}.`;
-    return sentence;
+    return `${lead} ${caveats.slice(0, 2).join(' ')}`;
+  }
+
+  // Pit-count tie-breaker note, driven by how hard passing is at this track. Suppressed when rain
+  // is likely, since a wet race rewrites the whole plan anyway. Ported from gpro-pitwall's
+  // RiskAdvisorService::strategyTip() (reviewed 2026-07-19) - a heuristic, not a game formula.
+  function calcStrategyTip(overtaking, raceWet, rainAvg) {
+    if (raceWet || rainAvg >= RISK_RAIN_WATCH) return null;
+    if (overtaking === 'Hard' || overtaking === 'Very Hard') {
+      return "Unsure between two strategies? Take the one with fewer pit stops - every stop drops you into traffic you can't easily clear when passing is this hard.";
+    }
+    if (overtaking === 'Very Easy' || overtaking === 'Easy') {
+      return 'If two strategies are close on paper, the extra pit stop is affordable here - fresh tyres and clean air beat track position when passing is easy.';
+    }
+    return 'If two strategies are within a few seconds, prefer the one with fewer stops - track position still breaks ties.';
+  }
+
+  // Narrative on how race distance affects driver energy - only flagged for the short/long tails
+  // (normal-length races say nothing). Ported from gpro-pitwall's RiskAdvisorService::distanceTip()
+  // (reviewed 2026-07-19) - same RISK_SHORT_RACE_KM/RISK_LONG_RACE_KM bands already used elsewhere
+  // in this file for calcDriverStrategyRecommendation's own long-race multiplier.
+  function calcDistanceTip(distanceKm, stamina) {
+    if (!distanceKm || distanceKm <= 0) return '';
+    if (distanceKm < RISK_SHORT_RACE_KM) {
+      return 'This is a short race, well under the usual length, so it spends less driver energy. You can carry higher clear-track risk for the extra pace and place your boost laps freely - there\'ll still be energy left to convert it.';
+    }
+    if (distanceKm > RISK_LONG_RACE_KM) {
+      const staminaN = (parseFloat(stamina) || 125) / RISK_ATTR_SCALE;
+      const staminaNote = staminaN < 60 ? " And with this driver's stamina, he'll fade late - lean conservative." : '';
+      return `This is a long race, well over the usual length, so it drains more driver energy. Keep clear-track risk in check and budget your boost laps - a driver who runs flat crawls home.${staminaNote}`;
+    }
+    return '';
   }
 
   // "Time gain due to CTR" gadget (from gproanalyzer.info's toolset, reviewed 2026-07-19).
@@ -2600,14 +2652,34 @@
   // 'perfect' = car and track agree on the full Power/Handling/Accel priority order, 'top' = they
   // at least agree on which one matters most, 'none' = no alignment. Deterministic, no thresholds
   // borrowed from anywhere secret - just a rank comparison over data we already have.
+  // Rewritten 2026-07-19 against gpro-pitwall's actual current PhaMatchService::matchLevel()
+  // source (previous version used naive Array.sort()-based ranking, which is wrong on ties - two
+  // equal values get an arbitrary, unstable order from sort(), so "perfect" could silently
+  // misfire whenever a car or track had two equal PHA values, e.g. a fresh car at 6/6/6).
+  // Competition ranking (ties share a rank, e.g. 1,1,3) is the correct comparison: 'perfect' =
+  // every attribute at the same rank on both sides (ties included); 'top' = the track has a
+  // single, unambiguous #1 attribute that's also the car's single #1 (a tied #1 on either side
+  // can only ever be 'perfect', never 'top' - matches the source's stated design exactly).
   function calcPhaMatch(carData, trackPha) {
     if (!carData || !trackPha) return null;
-    const rank = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(e => e[0]);
-    const carRank = rank({ power: parseInt(carData.carPower) || 0, handling: parseInt(carData.carHandl) || 0, accel: parseInt(carData.carAccel) || 0 });
-    const trackRank = rank({ power: trackPha.power || 0, handling: trackPha.handling || 0, accel: trackPha.accel || 0 });
-    const perfect = carRank.every((v, i) => v === trackRank[i]);
-    const top = carRank[0] === trackRank[0];
-    return { level: perfect ? 'perfect' : top ? 'top' : 'none', carRank, trackRank };
+    const competitionRank = (vals) => {
+      const entries = Object.entries(vals);
+      const ranks = {};
+      entries.forEach(([attr, v]) => {
+        ranks[attr] = 1 + entries.filter(([, v2]) => v2 > v).length;
+      });
+      return ranks;
+    };
+    const attrsAtRank = (ranks, r) => Object.keys(ranks).filter(a => ranks[a] === r).sort();
+    const car = { power: parseInt(carData.carPower) || 0, handling: parseInt(carData.carHandl) || 0, accel: parseInt(carData.carAccel) || 0 };
+    const trk = { power: trackPha.power || 0, handling: trackPha.handling || 0, accel: trackPha.accel || 0 };
+    const carRanks = competitionRank(car);
+    const trackRanks = competitionRank(trk);
+    const perfect = Object.keys(trk).every(attr => carRanks[attr] === trackRanks[attr]);
+    const trackTop = attrsAtRank(trackRanks, 1);
+    const carTop = attrsAtRank(carRanks, 1);
+    const top = !perfect && trackTop.length === 1 && trackTop[0] === carTop[0] && carTop.length === 1;
+    return { level: perfect ? 'perfect' : top ? 'top' : 'none', carRanks, trackRanks };
   }
 
   // "Push or hold?" checklist - turns several independent signals into one read for how much CTR
@@ -3068,7 +3140,7 @@
       const rainAvgForRisk = analyze ? analyze.maxRain : 0;
       const driverRiskRec = calcDriverStrategyRecommendation(driver, ctr, track, raceWetForRisk, rainAvgForRisk, distanceKm);
       let drHtml = '';
-      drHtml += mkRec(mkRaceEngineerNarrative(driverRiskRec, track, driver), 'info');
+      drHtml += mkRec(mkRaceEngineerNarrative(driverRiskRec, track, driver, raceWetForRisk), 'info');
       drHtml += mkRow('...when attempting to overtake', `${driverRiskRec.overtakeRisk}`);
       drHtml += mkRow('...when defending his position', `${driverRiskRec.defendRisk}`);
       drHtml += mkRow('...when the track is clear and dry', `${driverRiskRec.dryRisk}`);
@@ -3076,6 +3148,10 @@
       drHtml += mkRow('...if the car is malfunctioning', `${driverRiskRec.malfunctionRisk}`);
       drHtml += mkRow('Start of race', driverRiskRec.startRiskLabel);
       drHtml += mkRow('Pit on solvable problem if >', `${driverRiskRec.problemPitLaps} laps remaining`);
+      const strategyTip = calcStrategyTip(driverRiskRec.overtaking, raceWetForRisk, rainAvgForRisk);
+      if (strategyTip) drHtml += `<div style="font-size:9px;color:#9ca3af;padding-left:4px;margin-top:2px;">💡 ${strategyTip}</div>`;
+      const distanceTip = calcDistanceTip(distanceKm, driver && driver.stamina);
+      if (distanceTip) drHtml += `<div style="font-size:9px;color:#9ca3af;padding-left:4px;margin-top:2px;">⏱️ ${distanceTip}</div>`;
       const ctrGainForRisk = calcCtrTimeGain(lookupSeasonTrack((practice||{}).trackName || (track||{}).trackName), ctr);
       if (ctrGainForRisk) {
         drHtml += mkRow(`Time gain from CTR ${ctr}`, `~${ctrGainForRisk.total}s (${ctrGainForRisk.perLap}s/lap)`);
@@ -3393,6 +3469,18 @@
       const tempCtx = stData ? ` | Avg temp: ${stData.avgTemp}C` : '';
       const ctrCtx = stData ? ` | CTR: +${stData.ctrGain}s/lap` : '';
       const hasCrossCheck = analysis.parts.some(p => p.gappRaceWear !== null);
+      // One-line severity headline, matching gpro-pitwall's WearAdvisorService::headline()
+      // concept (reviewed 2026-07-19) - a plain-language summary before the per-part table, not a
+      // new wear calculation (uses the willFail/atRisk flags already computed above).
+      const willFailCount = analysis.parts.filter(p => p.willFail).length;
+      const atRiskCount = analysis.parts.filter(p => p.atRisk && !p.willFail).length;
+      const headline = willFailCount > 0
+        ? `${willFailCount} part${willFailCount === 1 ? '' : 's'} will not survive the race - ${willFailCount === 1 ? 'swap it' : 'swap them'}.`
+        : atRiskCount > 0
+          ? 'No mandatory swaps, but some parts will finish in the red.'
+          : 'All parts will finish comfortably.';
+      const headlineTone = willFailCount > 0 ? 'bad' : atRiskCount > 0 ? 'warn' : 'good';
+      let tblPrefix = mkRec(headline, headlineTone);
       let tbl = `<table style="width:100%;border-collapse:collapse;font-size:9px;">`;
       tbl += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:2px 4px;">Part</td><td>Lvl</td><td>Now</td><td>End</td>${hasCrossCheck ? '<td title="own calibration cross-check end wear">End (own)</td>' : ''}<td>Target</td><td>Status</td></tr>`;
       analysis.parts.forEach(p => {
@@ -3404,7 +3492,7 @@
         tbl += `<tr style="color:#d1d5db;"><td style="padding:2px 4px;">${p.name}</td><td>L${p.lvl}</td><td>${wearBar} ${p.remaining}%</td><td style="color:${endColor};font-weight:${p.willFail ? 700 : 400};">${Math.round(p.endWear)}%</td>${hasCrossCheck ? `<td style="color:#9ca3af;">${ownEnd !== null ? Math.round(ownEnd) + '%' : '-'}</td>` : ''}<td>L${p.target}</td><td style="color:${statusColor};font-weight:${status === 'FAIL' ? 700 : 400};">${status}</td></tr>`;
       });
       tbl += `</table>`;
-      h += mkSection(`${trackName} (${analysis.laps} laps${wearCtx}${tempCtx}${ctrCtx})`, tbl +
+      h += mkSection(`${trackName} (${analysis.laps} laps${wearCtx}${tempCtx}${ctrCtx})`, tblPrefix + tbl +
         `<div style="font-size:8px;color:#6b7280;margin-top:3px;">End wear = current + estimated wear over ${analysis.laps} laps. FAIL = will break mid-race. Only one upgrade per race.${hasCrossCheck ? ' "End" uses gapp (track-specific); "(own)" is our calibration cross-check.' : ''}</div>`);
     } else {
       // No track data — show parts without predictions
