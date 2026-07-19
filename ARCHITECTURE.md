@@ -209,6 +209,43 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-19 — Iteration 18 (continued gpro-pitwall source review: SetupCalculatorService, CarWearService, BoostFuelService)
+
+Continued fetching real current source (not README) for the remaining high-value services:
+
+- **`SetupCalculatorService.php`**: confirmed the `special_track_mult` default of `0.39` for
+  Indianapolis Oval/Rafaela Oval (already ported) is correct, and the overall formula *shape*
+  (talent-driven wings/engine/brakes, concentration-driven gearbox, experience+weight-driven
+  suspension with a wet-only tech-insight term, wing split from talent+level+temp) independently
+  matches our GAPP-derived `calcCarSetupGappSession` structurally. The actual numeric coefficients
+  are still redacted in a `secrets.php` this repo doesn't include - nothing new to port, but real
+  confirmation our GAPP port has the right shape.
+- **`CarWearService.php`**: same story for the race-wear formula shape (`driverFactor =
+  concentration^c * talent^t * experience^e`, `end = trackBase * levelFactor^risk *
+  driverFactor`) - matches our `gappPartRaceWear`/`calcDriverWearFactor` exactly in form. **But
+  found one fully-disclosed, usable constant**: `TESTING_WEAR_FACTOR = 0.53` (their own comment:
+  calibrated against two real testing sessions, a 30-lap and a 100-lap run, both best-fitting
+  ~0.533) for `testingWearRates()` - testing wears the car at roughly half the full-race per-lap
+  rate, no risk/level exponent (testing has no clear-track risk). Added `calcTestingWearPerLap()`
+  using this exact factor against our own already-loaded GAPP wear data, and a new "Testing Wear"
+  section in `renderRaceSetup` (shown only when a real testing session with laps done exists, at
+  whichever track the testing happened at - can differ from the race track).
+- **`BoostFuelService.php`**: confirmed boost-lap fuel cost is a **real disclosed GPRO formula**
+  (`extra_fuel = ROUNDUP(boost_laps * lap_length_km * a per-track dry/wet coefficient)`), not a
+  heuristic - genuinely different status from most of what we've ported. However the per-track
+  coefficient itself isn't available from any source checked (not in GAPP's `trackData` columns,
+  not disclosed in this file either - it's presumably in the same redacted `secrets.php`). Rather
+  than leave the existing vague "budget a few extra litres" reminder unexplained forever, updated
+  it to state plainly that this is a real formula we can't compute a number for, and why.
+- Verified with `node --check` after each change; bumped `@version` to `3.24.0` (`gpro-data.js`
+  untouched).
+
+Still unreviewed from the full `src/Service/` list (34 files): `PartSwapAdvisorService`,
+`PartUpgradeAdvisorService`, `TrainingAdvisorService`, `IdealPilotService`, `RecruitmentService`,
+`TestingTargetsService`, `StrategyService`, `PilotCalculatorService`, `InsightService` - worth
+continuing this same source-verification pass on the next iteration rather than assuming the ones
+checked so far are representative of all of them.
+
 ### 2026-07-19 — Iteration 17 (gpro-pitwall faithfulness pass — real source, not README)
 
 The user flagged directly: had the RiskAdvisorService/PhaMatchService ports actually been checked

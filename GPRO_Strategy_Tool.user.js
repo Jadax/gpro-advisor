@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GPRO Strategy Tool
 // @namespace    https://gpro.net
-// @version      3.23.0
+// @version      3.24.0
 // @description  Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author       Tushant Sharma
 // @match        https://www.gpro.net/gb/gpro.asp
@@ -1961,7 +1961,13 @@
         ? 'Boost the in-laps before the stops to jump the cars around you through the pit cycle; any spare set defends the final laps.'
         : 'No stops to play with, so spread the sets - one early, one mid-race, one to bring it home.');
     if (raceWet || rainAvg >= RISK_RAIN_WATCH) note += ' Rain could move the pit laps - treat these as dry-plan numbers.';
-    note += ' Boosts burn extra fuel - budget a few extra litres per set in your fuel plan.';
+    // Real GPRO formula (confirmed via gpro-pitwall's disclosed BoostFuelService, reviewed
+    // 2026-07-19): extra fuel = ROUNDUP(boost_laps * lap_length_km * a per-track dry/wet
+    // coefficient). We don't have that per-track coefficient from any source we've checked (not in
+    // GAPP's trackData columns, not disclosed in gpro-pitwall's own public code either) so we can't
+    // compute a real number - saying so explicitly rather than leaving a vague "a few extra litres"
+    // reminder that looks like it should be more specific than it is.
+    note += ' Boosts burn extra fuel per the real GPRO formula (laps x lap length x a per-track coefficient) - budget for it, but we don\'t have that coefficient from any source checked, so no number is shown here.';
 
     return { laps: picked, note };
   }
@@ -2074,6 +2080,26 @@
     const clampedLvl = Math.min(9, Math.max(1, lvl || 1));
     const levelExp = Math.pow(levelFactors[clampedLvl - 1], ctr);
     return Math.round(gappWear.values[partIdx] * levelExp * driverFactor);
+  }
+
+  // Testing-session per-lap wear estimate. Ported from gpro-pitwall's CarWearService
+  // (reviewed 2026-07-19, `testingWearRates()`) - the one fully-disclosed public constant in that
+  // file: TESTING_WEAR_FACTOR = 0.53, calibrated by that project against two real testing sessions
+  // (a 30-lap and a 100-lap run, both best-fitting ~0.533). Their own reasoning, reused as-is:
+  // testing wears the car at roughly half the full-race per-lap rate, with no risk/CTR exponent
+  // and no level factor (level only modulates *risk-driven* wear, and testing has no clear-track
+  // risk) - so this is just (full-race trackBase wear / race laps) * driverFactor * 0.53, using the
+  // exact same gappWear.values[] this file already uses for race-wear (gappPartRaceWear above).
+  const TESTING_WEAR_FACTOR = 0.53;
+  function calcTestingWearPerLap(trackName, driver) {
+    const gappWear = lookupGappTrack(trackName, 'wearData');
+    const seasonTrack = lookupSeasonTrack(trackName);
+    if (!gappWear || !seasonTrack || !seasonTrack.laps) return null;
+    const driverFactor = calcDriverWearFactor(driver);
+    return PART_NAMES.map((name, i) => ({
+      name,
+      perLap: +(gappWear.values[i] * driverFactor * TESTING_WEAR_FACTOR / seasonTrack.laps).toFixed(3),
+    }));
   }
 
   // GAPP's per-track wear data is PRIMARY here whenever the track is found (falls back to our
@@ -3056,6 +3082,24 @@
       );
     } else {
       h += mkSection('Fuel Strategy', mkRec('Complete testing to get fuel data', 'warn'));
+    }
+
+    // Testing wear estimate - ported from gpro-pitwall's CarWearService::testingWearRates()
+    // (reviewed 2026-07-19), a fully-disclosed constant (TESTING_WEAR_FACTOR=0.53) this project
+    // didn't have any equivalent for. Only shown when there's an actual testing session with laps
+    // done, at whichever track the testing happened at (can differ from the race track).
+    if (testing && testing.trackName && testing.stintsDone && testing.stintsDone.length) {
+      const lapsDoneTotal = testing.stintsDone.reduce((sum, s) => sum + (parseInt((s.lapsDone || '0/0').split('/')[0]) || 0), 0);
+      const wearRates = lapsDoneTotal > 0 ? calcTestingWearPerLap(testing.trackName, driver) : null;
+      if (wearRates) {
+        let twHtml = mkRow('Testing laps done', lapsDoneTotal);
+        wearRates.forEach(w => {
+          const added = +(w.perLap * lapsDoneTotal).toFixed(1);
+          if (added >= 0.5) twHtml += mkRow(w.name, `+${added}% (${w.perLap}%/lap)`);
+        });
+        twHtml += `<div style="font-size:9px;color:#f59e0b;margin-top:4px;">Testing wears the car at roughly half the full-race per-lap rate (ported from gpro-pitwall's disclosed 0.53 factor, calibrated against real sessions) - own estimate, not confirmed against your actual current wear.</div>`;
+        h += mkSection(`Testing Wear (${testing.trackName})`, twHtml);
+      }
     }
 
     // Tyre
