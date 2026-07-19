@@ -209,6 +209,33 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-19 — Iteration 19 (StrategyService + PartSwapAdvisorService reviewed)
+
+- **`StrategyService.php`** (the tyre/fuel strategy calculator, most directly comparable to
+  `calcTyreStrategyGapp`): mostly independent confirmation, not new numbers - the redacted
+  `secrets.php` still hides the actual per-driver/car coefficients, but two disclosed constants in
+  this file **already match ours exactly**: the TCD formula's `0.00018` constant (identical to our
+  `gapp.compoundCalcConstant`) and the Rain wear modifier `0.73` (identical to our `wetFactor: 0.73`
+  for Rain). Strong independent validation that our GAPP port is correct on both.
+- **Found and fixed a real gap**: `StrategyService` clamps pit time to `max(15.0, $pitTime)` - a
+  sanity floor on the game itself, not tied to either project's specific coefficients. Our
+  `calcTyreStrategyGapp` had no equivalent floor. Added `Math.max(15, ...)` around the per-stop pit
+  time calculation.
+- **`PartSwapAdvisorService.php`**: this is a materially richer system than our current
+  `analyzeCar` upgrade recommender - it re-projects every GPRO-offered option through the wear
+  formula, classifies each by post-swap PHA tier (via `PhaMatchService::tierFor`, not just cost/
+  survival), and presents up to **4 named slots** (free_downgrade / downgrade / sidegrade / upgrade)
+  per flagged part instead of one single pick. It also filters options against a peer group's
+  observed car-level "operating band" (`GetMoneyLevels`-sourced, min-1..max+1) that we have no
+  equivalent data source for. **Not rewritten this iteration** - this would be a substantial rework
+  of a working, already-good recommendation system, not a small faithfulness fix, and doing it
+  properly needs the peer-group data question resolved first. Recorded precisely in TODOs rather
+  than attempted piecemeal.
+- Verified with `node --check`; bumped `@version` to `3.25.0` (`gpro-data.js` untouched).
+
+Still unreviewed: `PartUpgradeAdvisorService`, `TrainingAdvisorService`, `IdealPilotService`,
+`RecruitmentService`, `TestingTargetsService`, `PilotCalculatorService`, `InsightService`.
+
 ### 2026-07-19 — Iteration 18 (continued gpro-pitwall source review: SetupCalculatorService, CarWearService, BoostFuelService)
 
 Continued fetching real current source (not README) for the remaining high-value services:
@@ -708,6 +735,16 @@ Refactored the live userscript (no `packages/` code touched yet, since nothing c
 shape is written correctly against Anthropic's documented API but has never actually been clicked
 with a live key on live gpro.net from this environment. First priority next time a real browser
 session with a key is available.
+
+**Part-swap advisor rework** (iteration 19 finding) - `analyzeCar`'s upgrade/downgrade
+recommendation currently picks one option per flagged part. gpro-pitwall's `PartSwapAdvisorService`
+does something richer: re-projects every GPRO-offered option through the wear formula, classifies
+each by post-swap PHA tier (not just cost/survival), and presents up to 4 named slots
+(free_downgrade/downgrade/sidegrade/upgrade). Worth adopting the PHA-tier-aware ranking and 4-slot
+presentation using our own already-computed `calcPhaMatch`/wear data - but skip the peer-group
+"operating band" filter (`GetMoneyLevels`-sourced min-1..max+1), since we have no equivalent data
+source and no scoped plan to get one. Don't rewrite `analyzeCar` piecemeal - plan the whole slot
+structure first, since it changes what the "Recommendations" section actually shows per part.
 
 **Testing.asp / Car Test Points is CLOSED, not open** - checked GAPP, gpro-pitwall, and the
 official GPRO wiki directly; the conversion formula is deliberately undocumented by GPRO itself

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GPRO Strategy Tool
 // @namespace    https://gpro.net
-// @version      3.24.0
+// @version      3.25.0
 // @description  Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author       Tushant Sharma
 // @match        https://www.gpro.net/gb/gpro.asp
@@ -1410,8 +1410,12 @@
       const staffStress = (staffTd && staffTd.staffStress) || 0;
       const tdExp = (staffTd && staffTd.tdExperience) || 0;
       const tdPitCoord = (staffTd && staffTd.tdPitCoordination) || 0;
-      const pitTimePerStop = (fuelPerStint * infl.fuelInfluence) + pt.base + (infl.concInfluence * staffConc) +
-        (hasTd ? (infl.stressInfluence * staffStress) + (infl.tdExpInfluence * tdExp) + (infl.tdPitCoordInfluence * tdPitCoord) : 0);
+      // Floor at 15s/stop - confirmed via gpro-pitwall's StrategyService (`max(15.0, $pitTime)`,
+      // reviewed 2026-07-19) as a real sanity clamp GPRO's own pit stop can't go below. Our
+      // GAPP-derived coefficients are a different calibration, but this floor is a fact about the
+      // game itself, not something tied to either project's specific coefficients.
+      const pitTimePerStop = Math.max(15, (fuelPerStint * infl.fuelInfluence) + pt.base + (infl.concInfluence * staffConc) +
+        (hasTd ? (infl.stressInfluence * staffStress) + (infl.tdExpInfluence * tdExp) + (infl.tdPitCoordInfluence * tdPitCoord) : 0));
       const pits = stops * (pitTimePerStop + pitInOut);
       const total = tcd + fld + pits;
 
