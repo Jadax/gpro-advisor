@@ -124,10 +124,23 @@ Same track/weather block as Qualify.asp. Additional:
 - Active sponsor contracts table + ongoing negotiations table (progress %, priority, contested Y/N). Car spot names: Engine cover, Sidepods, Nose, Rear wing, Front wing.
 - Not consumed by the tool; could inform a future "sponsor priority" advisor.
 
+## TrainingSession.asp
+
+Parsed by `parseTrainingSessionDOM()`. Captured 2026-07-26:
+- `<h1 class="block">` → "Driver training: {name}".
+- Driver skills: `<TABLE class="squashed leftalign">` with `<th>` (label) / `<td>` (value) pairs: Overall, Concentration, Talent, Aggressiveness, Experience, Technical insight, Stamina, Charisma, Motivation, Reputation. Energy bar: `<div class="barLabel">100%</div>`. Weight/Age in same table.
+- Contract: `<table class="squashed">` with Salary, Points bonus, Podium bonus, Win bonus, Races left as `<th>`/`<td>` pairs.
+- Career: Trophies, Number of GPs, Wins, Podiums, Points scored, Pole positions, Fastest laps, Av pts/race.
+- Training sessions: `<select name="SessionType">` with options: fitness (Fitness class, $750k), yoga (Yoga, $700k), pr (PR Training, $500k), tech (Technical training, $600k), sportspsychologist (Sports psychologist, $400k), ninja (Ninja class, $550k), spa (Spa resort, $500k). Submit button: `<input name="TrainDriver">`.
+
+## AvailDrivers.asp / AvailTechDirectors.asp
+
+Not DOM-parsed (data fetched via API `/AvailDrivers` and `/AvailTDs`). Pages are now `@match`ed and routed to `renderMarketPage()` which shows the same market table + selection criteria as the menu command.
+
 ---
 
 ## Notes on scraping strategy
 
 - Numeric car-character (Power/Handling/Accel) appears as **plain digits** in some places (UpdateCar.asp, Qualify pages tyre/risk row) but as **filled-vs-empty `lvl.gif` image counts** in the track-PHA bars on Qualify/Qualify2/RaceSetup — don't assume one format site-wide.
 - Money is always dot-thousands (`$5.902.387`), matching `parseGproCash()` in the script already.
-- **DOM-scraping fallback status (updated 2026-07-19)**: `UpdateCar.asp` (`parseUpdateCarDOM`), `DriverProfile.asp` (`parseDriverProfileDOM`), `TrackDetails.asp` (`parseTrackDetailsDOM`), and `Suppliers.asp` (`parseTyreSuppliersDOM`) all now scrape passively via `runPassiveCapture()` whenever the script's `@match`ed and the user visits that page, writing into the same long-lived `stale_api_*` cache the API uses for graceful degradation - so a dead API token still gets fresh-ish driver/track/supplier data as long as the user occasionally visits those pages. Weather/Q1/Q2 temps are scraped live in-place on Qualify.asp/Qualify2.asp/RaceSetup.asp (`scrapeSessionTempsFromDOM`) but not written to the stale cache. `/Office` and `/Testing` still have no DOM fallback (Office's fields — tyre supplier ID, TD/staff info — aren't cleanly exposed anywhere else on the site; Testing's stint-by-stint fuel data lives only in the API response).
+- **DOM-scraping fallback status (updated 2026-07-19)**: `UpdateCar.asp` (`parseUpdateCarDOM`), `DriverProfile.asp` (`parseDriverProfileDOM`), `TrackDetails.asp` (`parseTrackDetailsDOM`), `Suppliers.asp` (`parseTyreSuppliersDOM`), `StaffAndFacilities.asp` (`parseStaffFacilitiesDOM`), and `Testing.asp` (`parseTestingDOM`, **unverified against a live page - see ARCHITECTURE.md TODO 0b**) all scrape passively via `runPassiveCapture()`/`backgroundCaptureAuxPages()` whenever the script's `@match`ed and the user visits (or has recently visited) that page, writing into the same long-lived `stale_api_*` cache the API uses for graceful degradation. Weather/Q1/Q2 temps are scraped live in-place on Qualify.asp/Qualify2.asp/RaceSetup.asp (`scrapeSessionTempsFromDOM`) but not written to the stale cache. `/Office` is the one remaining category with no DOM fallback at all - its fields (tyre supplier ID, TD/staff info) aren't cleanly exposed anywhere else on the site.
