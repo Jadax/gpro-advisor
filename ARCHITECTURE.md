@@ -838,6 +838,20 @@ Refactored the live userscript (no `packages/` code touched yet, since nothing c
 
 ### TODOs for next iteration
 
+**0d. Driver/TD market "what to look for" guidance is league-incomplete** (iteration 22) - the
+user reported the Driver/TD Market advisors "not shortlisting anyone" and suspected a
+league-dependent staff bug. There is no shortlisting/filter logic at all — the table just lists
+whatever `/AvailDrivers`/`/AvailTDs` returns — so the real bugs were: (a) API errors were being
+silently swallowed (`.catch(() => null)`) and shown as a generic "check your league" message
+regardless of the actual failure (token expired, budget hit, network error) — fixed, now surfaces
+the real error message; (b) `D.driverSelection` in gpro-data.js only has calibrated target-attribute
+guidance for Rookie/Amateur, nothing for Pro/Master/Elite, and there is no `D.tdSelection` table at
+all for TDs in any league — rather than inventing numbers for leagues we have no calibrated source
+for (against CLAUDE.md's "don't guess" rule), the UI now says plainly when that guidance doesn't
+exist yet instead of silently omitting the section. **Still open**: actually calibrating
+Pro/Master/Elite driver targets and a full TD selection table needs a real source (GPRO wiki,
+gproanalyzer, or the user's own league experience), not a guess.
+
 **0. Verify AI Coaching end-to-end with a real Anthropic API key** (iteration 14) - the request
 shape is written correctly against Anthropic's documented API but has never actually been clicked
 with a live key on live gpro.net from this environment. First priority next time a real browser

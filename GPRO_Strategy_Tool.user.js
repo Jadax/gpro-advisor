@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.4.2
+// @version 5.4.3
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -4847,18 +4847,24 @@
  createPanel(type === 'drivers' ? 'Driver Market Advisor' : 'TD Market Advisor');
  body(`<div style="${ST.loading}">Loading market data...</div>`);
  try {
+ // Don't swallow the real failure reason (token expired/budget hit/network error) into a
+ // generic "check your league" message - that message is only actually true when the API call
+ // itself succeeded and GPRO genuinely returned zero drivers/TDs. A user reporting "nothing is
+ // shortlisted" usually means the request failed silently, not that the market is empty.
+ let apiErr = null;
  const [resp, menu] = await Promise.all([
- type === 'drivers' ? apiGet('/AvailDrivers').catch(() => null) : apiGet('/AvailTDs').catch(() => null),
+ (type === 'drivers' ? apiGet('/AvailDrivers') : apiGet('/AvailTDs')).catch((e) => { apiErr = e; return null; }),
  getDataSmart('/Menu').catch(() => null),
  ]);
  let h = '';
  const league = detectLeagueFromMenu(menu) || (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.currentLeague) || 'Amateur';
+ const emptyReason = apiErr ? `Request failed: ${apiErr.message}` : 'GPRO returned no listings for your league right now — try again later or check AvailDrivers.asp/AvailTechDirectors.asp directly.';
 
  if (type === 'drivers') {
  const drivers = (resp && resp.drivers) || [];
  h += mkDecisionBoard([{ id: 'gpro-sec-market-drivers', label: 'Drivers', verdict: `${drivers.length} listed`, tone: drivers.length ? 'info' : 'warn' }]);
  h += mkSection(`Available Drivers (${drivers.length})`,
- drivers.length ? mkMarketTable(drivers, 'driId') : mkRec('No drivers returned — visit AvailDrivers.asp to cache data, or check your league.', 'warn'),
+ drivers.length ? mkMarketTable(drivers, 'driId') : mkRec(emptyReason, 'warn'),
  'gpro-sec-market-drivers');
 
  // Driver selection criteria
@@ -4871,13 +4877,21 @@
  });
  selHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">${sel.budget}</div>`;
  h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#60a5fa;font-size:11px;font-weight:700;padding:4px 0;">What to look for (${league} league)</summary>${selHtml}</details>`;
+ } else if (league) {
+ // D.driverSelection only has calibrated targets for Rookie/Amateur so far - rather than
+ // silently omitting the section for Pro/Master/Elite (which reads as "nothing to shortlist"),
+ // say plainly that the guidance doesn't exist yet for this league.
+ h += `<div style="font-size:9px;color:#f59e0b;margin-top:8px;">No target-attribute guidance calibrated yet for ${league} league (only Rookie/Amateur so far) - the driver list above is still real, just without a "what to look for" checklist.</div>`;
  }
  } else {
  const tds = (resp && resp.tds) || [];
  h += mkDecisionBoard([{ id: 'gpro-sec-market-tds', label: 'TDs', verdict: `${tds.length} listed`, tone: tds.length ? 'info' : 'warn' }]);
  h += mkSection(`Available Technical Directors (${tds.length})`,
- tds.length ? mkMarketTable(tds, 'tdId') : mkRec('No TDs returned — visit AvailTechDirectors.asp to cache data, or check your league.', 'warn'),
+ tds.length ? mkMarketTable(tds, 'tdId') : mkRec(emptyReason, 'warn'),
  'gpro-sec-market-tds');
+ // No D.tdSelection table exists at all yet (unlike D.driverSelection for drivers) - say so
+ // rather than leaving the gap unexplained, same reasoning as the driver-side league gap above.
+ h += `<div style="font-size:9px;color:#f59e0b;margin-top:8px;">No target-attribute guidance calibrated yet for TD selection (any league) - the TD list above is still real, just without a "what to look for" checklist.</div>`;
  }
 
  h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Value = OA per $1M salary. 🕐 = retiring soon. Skill/range filters are GPRO Supporters-only via the API.</div>`;
@@ -5356,9 +5370,10 @@
  createPanel('Driver & TD Market');
  body(`<div style="${ST.loading}">Loading market data...</div>`);
  try {
+ let driversErr = null, tdsErr = null;
  const [driversResp, tdsResp, menu] = await Promise.all([
- apiGet('/AvailDrivers').catch(() => null),
- apiGet('/AvailTDs').catch(() => null),
+ apiGet('/AvailDrivers').catch((e) => { driversErr = e; return null; }),
+ apiGet('/AvailTDs').catch((e) => { tdsErr = e; return null; }),
  getDataSmart('/Menu').catch(() => null),
  ]);
  let h = '';
@@ -5369,10 +5384,10 @@
  { id: 'gpro-sec-market-tds', label: 'TDs', verdict: `${tds.length} listed`, tone: tds.length ? 'info' : 'warn' },
  ]);
  h += mkSection(`Available Drivers (${drivers.length})`,
-  drivers.length ? mkMarketTable(drivers, 'driId') : mkRec('No drivers returned — visit AvailDrivers.asp to cache data, or check your league.', 'warn'),
+  drivers.length ? mkMarketTable(drivers, 'driId') : mkRec(driversErr ? `Request failed: ${driversErr.message}` : 'GPRO returned no listings for your league right now — try again later or check AvailDrivers.asp directly.', 'warn'),
  'gpro-sec-market-drivers');
  h += mkSection(`Available Technical Directors (${tds.length})`,
-  tds.length ? mkMarketTable(tds, 'tdId') : mkRec('No TDs returned — visit AvailTechDirectors.asp to cache data, or check your league.', 'warn'),
+  tds.length ? mkMarketTable(tds, 'tdId') : mkRec(tdsErr ? `Request failed: ${tdsErr.message}` : 'GPRO returned no listings for your league right now — try again later or check AvailTechDirectors.asp directly.', 'warn'),
  'gpro-sec-market-tds');
 
  // What-to-look-for reference (D.driverSelection, established attribute priorities per
