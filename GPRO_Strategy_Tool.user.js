@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GPRO Strategy Tool
 // @namespace    https://gpro.net
-// @version      3.27.0
+// @version      3.27.1
 // @description  Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author       Tushant Sharma
 // @match        https://www.gpro.net/gb/gpro.asp
@@ -3349,15 +3349,23 @@
           mixedFuelHtml = `<div style="color:#d1d5db;margin-top:4px;">⛽ Real total for this race: <strong>${wetFuel + dryFuel}L</strong> (${wetFuel}L over ${rainLaps} wet laps on Rain + ${dryFuel}L over ${dryLaps} dry laps on ${dryCompoundName}) - the "Total Fuel" figure above assumes the whole race on one compound and will be wrong for a race that actually dries out.</div>`;
         }
 
+        // GPRO doesn't let you pick a pit lap directly - you only set start fuel (Q2) and fuel-after-
+        // stop-1..5; the game pits you whenever that stint's fuel runs out. So "pit at lap ~X" here is
+        // an ESTIMATE of when stop 1 will happen given the fuel you load, not a lap you select - the
+        // actionable instruction is the fuel number to enter in stop 1's fuel field.
+        const stop1Fuel = dryLaps > 0 && tyre.bestWet
+          ? Math.ceil((tyre.bestWet.fuelPerStint / Math.max(1, tyre.bestWet.lapsPerStint)) * rainLaps)
+          : null;
+
         let rainHtml = '';
         rainHtml += mkRow('Rain Start', `${segs[0].rainMin}-${segs[0].rainMax}%`);
         rainHtml += mkRow('Est. Rain Laps', rainLaps > 0 ? `${rainLaps} laps` : 'None');
         rainHtml += mkRow('Est. Dry Laps', dryLaps > 0 ? `${dryLaps} laps` : 'None');
         rainHtml += `<div style="margin-top:8px;padding:6px;background:#1e293b;border-radius:4px;font-size:10px;">`;
         rainHtml += `<div style="color:#60a5fa;font-weight:700;margin-bottom:4px;">🌧️ Rain Strategy Plan:</div>`;
-        rainHtml += `<div style="color:#d1d5db;">1. <strong>Start on Rain tyres</strong> (rain ${segs[0].rainMin}-${segs[0].rainMax}%)</div>`;
-        rainHtml += `<div style="color:#d1d5db;">2. <strong>Pit at lap ~${pitLap}</strong> when track dries</div>`;
-        rainHtml += `<div style="color:#d1d5db;">3. <strong>Switch to ${dryCompoundName}</strong> for remaining ${dryLaps} laps (best dry compound per the tyre table above)</div>`;
+        rainHtml += `<div style="color:#d1d5db;">1. <strong>Start on Rain tyres</strong> (rain ${segs[0].rainMin}-${segs[0].rainMax}%) - set Q2/start fuel to ${stop1Fuel !== null ? `<strong>${stop1Fuel}L</strong>` : 'the wet-stint total below'}</div>`;
+        rainHtml += `<div style="color:#d1d5db;">2. <strong>Set Stop 1 fuel to ${stop1Fuel !== null ? `${stop1Fuel}L` : '~' + Math.ceil((tyre.bestWet ? tyre.bestWet.fuelPerStint : 0))}</strong> - GPRO pits you automatically when it runs out, around <strong>lap ~${pitLap}</strong> if the track dries as forecast (you don't choose the lap directly)</div>`;
+        rainHtml += `<div style="color:#d1d5db;">3. <strong>Switch to ${dryCompoundName}</strong> at that stop, for the remaining ~${dryLaps} laps (best dry compound per the tyre table above)</div>`;
         rainHtml += `<div style="color:#9ca3af;margin-top:4px;">⚡ Pit loss: ${pitLoss}s</div>`;
         rainHtml += mixedFuelHtml;
         rainHtml += `</div>`;
