@@ -209,6 +209,74 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-19 — Iteration 21 (DOM-only architecture push + real tyre/fuel conflict bug fixed)
+
+User-reported, screenshot-illustrated bug plus an explicit architecture request, both real and both
+fixed:
+
+**Bug: conflicting dry-tyre recommendations + confusing fuel total.** Screenshots showed the tyre
+table (real GAPP calc) recommending Medium as the best dry compound, while the "Rain Strategy Plan"
+section - shown because the race starts wet and dries out - said "Switch to Hard". Root cause: that
+section picked its post-rain compound from a **crude lap-count-only heuristic**
+(`dryLaps > 20 ? 'Hard' : ...`) completely independent of `tyre.bestDry`, which the tyre table
+above it already computes correctly from the real formula. Fixed to use `tyre.bestDry.name`
+directly - same number everywhere now. Also added a **real two-phase fuel calculation**: the main
+"Total Fuel" figure assumes the whole race runs on one compound's consumption rate, which is wrong
+for a wet-start/dries-out race (this was the source of the "why only 95L" question - that total
+never accounted for the wet phase's own fuel rate). The Rain Strategy section now computes actual
+wet-phase + dry-phase fuel from each compound's own already-computed `fuelPerStint`/`lapsPerStint`
+(no new formula - just composing numbers already on screen), and the main Fuel Strategy section now
+carries an explicit warning pointing to that real breakdown instead of presenting a single-compound
+total as if it described the whole race. Left the drop numeric anomaly in the raw TCD column
+(Medium's TCD showing near-zero relative to other compounds in the screenshot) **unresolved** -
+could not conclusively diagnose from a screenshot alone without a live session to test against;
+flagged as a TODO rather than guessed at.
+
+**DOM-only architecture, explicitly requested for 8 categories** (Practice/Weather, Track Profile,
+Driver Profile, Office/Tyre Supplier, Car Data, Testing/Fuel Data, Tyre Suppliers, Staff/
+Facilities):
+
+- Added `getDataDomOnly(endpoint, domParseFn)` - same DOM-live-parse-then-DOM-fed-stale-cache
+  tiers as `getDataSmart`, but **never falls through to a real API call**. Returns `null` (not a
+  sentinel object) so every existing falsy-check throughout the file keeps working unchanged.
+- **Found the big one while investigating**: the literal 8-category list the user quoted is
+  `renderHome`'s "Data Freshness" dashboard row labels verbatim - meaning that dashboard, shown on
+  gpro.asp (the most-visited page every race), was spending **up to 8 real API calls on every
+  single visit** via `apiGet(endpoints[key].ep)` for all of them. Switched to `getDataDomOnly` for
+  every category except Office (see below); "Missing" rows now show "visit X page once" instead of
+  an API error, since the DOM-fed stale cache is the actual source now, not the API.
+- **Found and fixed a second real bug** while touching this: the Staff & Facilities page branch in
+  `init()` was fetching **`/Office`** instead of **`/StaffAndFacilities`** for its own staff-skill
+  data - CLAUDE.md already documented this exact class of mistake once before (concentration/
+  stressHandling live on `/StaffAndFacilities`, not `/Office`) for a different call site; this one
+  had the same bug, unnoticed because it didn't throw, it just silently produced an all-undefined
+  staff object. Fixed, and expanded `parseStaffFacilitiesDOM` (previously only captured
+  concentration/stressHandling) to cover every field `renderStaff` actually needs: overall,
+  experience, motivation, technicalSkill, efficiency, plus all 7 facility levels.
+- **Car data (UpdateCar.asp) is now fully DOM-only**: the page's own `parseUpdateCarDOM()` already
+  overrides API values whenever DOM has data (confirmed by re-reading that merge logic), so the
+  `apiGet('/UpdateCar')` call before it was redundant - removed. `renderUpdateCar` now gets an
+  honest "no data found - visit this page and wait a moment" message instead of a silently-empty
+  all-zero analysis if DOM genuinely finds nothing.
+- **Added a Testing.asp DOM parser** (`parseTestingDOM`) plus `@match` and wiring into
+  `runPassiveCapture`/`backgroundCaptureAuxPages` - Testing/Fuel Data had zero DOM coverage before
+  this. **Explicitly flagged as unverified**: this project has no way to hold a real Testing.asp
+  session open to confirm the exact markup, so it's written defensively (multiple fallback text
+  patterns, same style as `parseUpdateCarDOM`'s cash parsing) rather than committing to brittle
+  selectors. If it silently returns nothing on a real page, that's the signal to capture real
+  markup into `docs/page-structures.md` and fix the patterns - `getDataDomOnly` degrades to "no
+  data yet" rather than ever guessing at fuel numbers either way.
+- **The one confirmed, honest exception: Office.** Its fields (TD id, staff concentration/stress
+  used in the pit-time calc) have no DOM source anywhere on the site - already researched and
+  documented in `docs/page-structures.md` before this session. Office keeps `getDataSmart` (DOM
+  tier still tried first, stale-cache next, real API only as a last resort) rather than pretending
+  a DOM source exists. This is a deliberate, disclosed deviation from the "no API" request, not an
+  oversight - flagged here and in-code rather than silently kept.
+- `renderSeasonOverview` switched to `getDataDomOnly` too for consistency (Practice/TrackProfile are
+  2 of the 8 categories, even though this menu command isn't part of the main race-day flow).
+- Verified with `node --check` after every change, then re-ran the dead-function sweep (clean).
+  Bumped `@version` to `3.27.0` (`gpro-data.js` untouched).
+
 ### 2026-07-19 — Iteration 20 (pitwall source review COMPLETE, 3 features shipped)
 
 Finished the remaining service files. **The full gpro-pitwall src/Service review is now complete**
@@ -774,6 +842,18 @@ Refactored the live userscript (no `packages/` code touched yet, since nothing c
 shape is written correctly against Anthropic's documented API but has never actually been clicked
 with a live key on live gpro.net from this environment. First priority next time a real browser
 session with a key is available.
+
+**0b. Verify `parseTestingDOM` against a real Testing.asp page** (iteration 21) - written
+defensively with fallback text patterns since this project has no way to hold a real testing
+session open to confirm the exact markup. Check on a live page, capture the real structure into
+`docs/page-structures.md`, and tighten the patterns once confirmed (or fix them if wrong).
+
+**0c. Investigate the TCD-column numeric anomaly from the iteration-21 bug report** - the user's
+screenshot showed Medium's TCD at ~0.0s while other dry compounds showed a pattern that didn't
+obviously match the `tcd = oneStepTcd * c.idx` formula's expected monotonic-with-idx shape
+(Extra Soft appeared highest, Medium near-zero). Could not conclusively diagnose from a screenshot
+without live driver/track/supplier inputs to recompute against - re-check with real values next
+time a race with a wet-to-dry forecast is live, rather than guess at a fix now.
 
 **GetMarketFile.asp bulk market data** (iteration 20 finding) - `RecruitmentService` revealed that
 `GetMarketFile.asp` (documented in our own `gpro-public-api.yml`) serves the full driver/TD market

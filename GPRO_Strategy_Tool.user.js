@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GPRO Strategy Tool
 // @namespace    https://gpro.net
-// @version      3.26.0
+// @version      3.27.0
 // @description  Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author       Tushant Sharma
 // @match        https://www.gpro.net/gb/gpro.asp
@@ -13,6 +13,7 @@
 // @match        https://www.gpro.net/gb/DriverProfile.asp*
 // @match        https://www.gpro.net/gb/TrackDetails.asp*
 // @match        https://www.gpro.net/gb/Suppliers.asp
+// @match        https://www.gpro.net/gb/Testing.asp
 // @match        https://app.gpro.net/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -374,6 +375,30 @@
       return Object.assign({}, stale.data, { __stale: true, __staleTime: stale.time });
     }
     return apiGet(endpoint).catch(() => null);
+  }
+
+  // Strict DOM-only resolution - live DOM parse, then the DOM-fed stale cache (written by
+  // runPassiveCapture/backgroundCaptureAuxPages when the user visits/passively background-fetches
+  // the dedicated page), but NEVER falls through to a real API call. Used for the categories the
+  // user asked to keep off the API budget entirely: Practice/Weather, Track Profile, Driver
+  // Profile, Tyre Suppliers, Staff/Facilities, Car Data, Testing. Returns { __noData: true } (not
+  // null) when nothing's available yet, so callers can show "visit X page once" instead of
+  // silently pretending there's no rain/no wear/etc.
+  // Returns null (same contract as getDataSmart, not a truthy sentinel object) when nothing's
+  // available yet, so every existing `if (track)`/`track || {}` falsy-check throughout the file
+  // keeps working unchanged - the difference from getDataSmart is purely "never call the API",
+  // not a different return shape callers need to special-case.
+  function getDataDomOnly(endpoint, domParseFn) {
+    if (domParseFn) {
+      let domData = null;
+      try { domData = domParseFn(); } catch (e) { /* ignore, fall through */ }
+      if (domData) return domData;
+    }
+    const stale = getStaleData(endpoint);
+    if (stale) {
+      return Object.assign({}, stale.data, { __stale: true, __staleTime: stale.time });
+    }
+    return null;
   }
 
   // ============================================================
@@ -771,18 +796,37 @@
   // Staff concentration/stress from StaffAndFacilities.asp - plain digit values, not level-dot bars.
   // Field names match the real /StaffAndFacilities API response (`concentration`, `stressHandling` -
   // confirmed against gpro-public-api.yml) so DOM- and API-sourced data are interchangeable.
+  // Expanded 2026-07-19 to cover everything renderStaff actually needs (was only concentration/
+  // stressHandling) - found while fixing a real bug where the 'staff' page branch in init() was
+  // fetching /Office instead of /StaffAndFacilities (CLAUDE.md already documented this exact
+  // mistake once before - concentration/stressHandling live on /StaffAndFacilities, not /Office -
+  // so this call site had regressed/never been fixed). Field labels per docs/page-structures.md's
+  // confirmed DOM capture: `<th>Label:</th><td>N</td>` pairs for both the staff-skills table and
+  // the facility-levels table on the same page.
   function parseStaffFacilitiesDOM(root) {
     root = root || document;
     try {
-      let concentration = null, stressHandling = null;
+      const out = {};
+      const staffLabels = {
+        'overall': 'overall', 'experience': 'experience', 'motivation': 'motivation',
+        'technicalskill': 'technicalSkill', 'stresshandling': 'stressHandling',
+        'concentration': 'concentration', 'efficiency': 'efficiency',
+      };
+      const facilityLabels = {
+        'windtunnel': 'windtunnel', 'pitstoptrainingcenter': 'pitstopTrainingCenter',
+        'r&dworkshop': 'rdWorkshop', 'r&ddesigncenter': 'rdDesign', 'r&ddesign': 'rdDesign',
+        'engineeringworkshop': 'engineering', 'engineering': 'engineering',
+        'alloyandchemicallab': 'lab', 'lab': 'lab', 'commercial': 'commercial',
+      };
       root.querySelectorAll('th').forEach((th) => {
-        const label = th.textContent.trim();
+        const label = th.textContent.replace(/:/g, '').replace(/\s+/g, '').toLowerCase();
         const td = th.parentElement.querySelector('td');
         if (!td) return;
-        if (/^Concentration:/i.test(label)) concentration = parseInt(td.textContent) || null;
-        else if (/^Stress handling:/i.test(label)) stressHandling = parseInt(td.textContent) || null;
+        const val = parseInt(td.textContent) || 0;
+        if (staffLabels[label]) out[staffLabels[label]] = val;
+        else if (facilityLabels[label]) out[facilityLabels[label]] = val;
       });
-      return (concentration !== null || stressHandling !== null) ? { concentration, stressHandling } : null;
+      return Object.keys(out).length ? out : null;
     } catch (e) { return null; }
   }
 
@@ -862,6 +906,43 @@
     return w;
   }
 
+  // Testing.asp's completed-stints table, shaped to match what calcTyreStrategyGapp/calcFuelSimple
+  // read off a /Testing response (testing.stintsDone[].setFuel/fuelLeft/lapsDone). UNVERIFIED
+  // against a live Testing.asp page (this project has no way to hold a real session open there) -
+  // written defensively with multiple fallback text patterns, same style as parseUpdateCarDOM's
+  // cash-parsing, rather than committing to brittle exact selectors we can't confirm. If this
+  // silently returns null on a real page, that's a signal to capture the real markup into
+  // docs/page-structures.md and fix the patterns here - getDataDomOnly() falls back to the DOM-fed
+  // stale cache (or ultimately shows "no data yet") rather than ever guessing at fuel numbers.
+  function parseTestingDOM(root) {
+    root = root || document;
+    try {
+      const h2 = root.querySelector('h2');
+      const trackM = h2 && h2.textContent.match(/(?:Next race|Testing at|Track):?\s*(.+)/i);
+      const trackName = trackM ? trackM[1].trim() : null;
+
+      // Each completed stint is typically a table row with "Laps done" (e.g. "12/15"), a fuel-set
+      // amount, and fuel remaining - look for rows containing a laps-done-style fraction plus two
+      // nearby numeric fuel figures, rather than assuming a specific table id/class.
+      const stintsDone = [];
+      root.querySelectorAll('tr').forEach((tr) => {
+        const text = tr.textContent || '';
+        const lapsM = text.match(/(\d+)\s*\/\s*(\d+)/);
+        if (!lapsM) return;
+        const nums = Array.from(text.matchAll(/(?<![\d.])(\d{1,3})(?:\s*[Ll])?(?![\d.])/g)).map(m => parseInt(m[1]));
+        // Heuristic: the laps-done fraction contributes 2 of the matched numbers; look for at least
+        // 2 more plausible fuel-litre values (0-180, GPRO's tank cap) elsewhere in the row.
+        const fuelCandidates = nums.filter(n => n > 0 && n <= 180 && n !== parseInt(lapsM[1]) && n !== parseInt(lapsM[2]));
+        if (fuelCandidates.length >= 2) {
+          stintsDone.push({ lapsDone: `${lapsM[1]}/${lapsM[2]}`, setFuel: fuelCandidates[0], fuelLeft: fuelCandidates[1] });
+        }
+      });
+
+      if (!trackName && !stintsDone.length) return null;
+      return { trackName, stintsDone };
+    } catch (e) { return null; }
+  }
+
   // Runs once per passive page load (DriverProfile/TrackDetails/Suppliers/StaffAndFacilities) - no
   // extra panel, just capture into the stale-fallback cache.
   // Foundational storage piece for the driver attribute-drift estimator (gpro-tools.eu's "Driver
@@ -923,6 +1004,9 @@
     } else if (path.includes('StaffAndFacilities.asp')) {
       const staff = parseStaffFacilitiesDOM();
       if (staff) setStaleData('/StaffAndFacilities', staff);
+    } else if (path.includes('Testing.asp')) {
+      const t = parseTestingDOM();
+      if (t) setStaleData('/Testing', t);
     }
   }
 
@@ -947,7 +1031,7 @@
   // links already present on gpro.asp itself (`DriverProfile.asp?ID=N`, `TrackDetails.asp?id=N`) -
   // both are always on the home page, so no extra request is needed to discover them.
   async function backgroundCaptureAuxPages() {
-    const results = { driver: false, track: false, suppliers: false, staff: false, weather: false };
+    const results = { driver: false, track: false, suppliers: false, staff: false, weather: false, testing: false };
     const driverLink = document.querySelector('a[href*="DriverProfile.asp?ID="]');
     const trackLink = document.querySelector('a[href*="TrackDetails.asp?id="]');
     const driverId = driverLink && (driverLink.getAttribute('href').match(/ID=(\d+)/) || [])[1];
@@ -978,6 +1062,11 @@
       const staff = parseStaffFacilitiesDOM(doc);
       if (staff) { setStaleData('/StaffAndFacilities', staff); results.staff = true; }
     }).catch((e) => logError('background StaffAndFacilities fetch failed:', e.message)));
+    jobs.push(fetchPageHTML('Testing.asp').then((html) => {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const t = parseTestingDOM(doc);
+      if (t) { setStaleData('/Testing', t); results.testing = true; }
+    }).catch((e) => logError('background Testing fetch failed:', e.message)));
     // Qualify.asp carries the same weather forecast used on Qualify2/RaceSetup - fetching it here
     // means /Practice has a fallback even if the user hasn't opened a qualify page this race weekend.
     jobs.push(fetchPageHTML('Qualify.asp').then((html) => {
@@ -3165,7 +3254,14 @@
           : `Load <strong>${fuel.fuelPerStint}L</strong> per stint (${fuel.stops} stop${fuel.stops === 1 ? '' : 's'})`) +
           (fuel.stopLaps.length ? ` - car auto-pits around lap ${fuel.stopLaps.join('/')} when that fuel runs out (or sooner for rain/damage)` : ''), 'good') +
         `<div style="font-size:9px;color:#6b7280;margin-top:2px;">You set fuel amounts per stint on RaceSetup.asp, not pit laps - the game pits automatically when fuel runs low, tyres/weather force a change, or a mechanical issue occurs.</div>` +
-        (fuel.fromDomFuelStart ? `<div style="font-size:9px;color:#f59e0b;margin-top:2px;">Simple dry-race split - if rain changes tyre compound mid-race, fuel/lap changes too and this doesn't yet model that per-segment.</div>` : '')
+        (fuel.fromDomFuelStart ? `<div style="font-size:9px;color:#f59e0b;margin-top:2px;">Simple dry-race split - if rain changes tyre compound mid-race, fuel/lap changes too and this doesn't yet model that per-segment.</div>` : '') +
+        // This total/fuel-per-lap always assumes ONE compound for the whole race. When the race
+        // actually starts wet and dries out, the Rain Strategy section below computes the real
+        // two-phase (wet+dry) fuel need instead - point at it rather than let this number stand
+        // alone looking authoritative for a race it doesn't actually describe.
+        (analyze && analyze.commitRain && analyze.segs.some(s => s.rainMax < 20)
+          ? `<div style="font-size:9px;color:#f59e0b;margin-top:2px;">⚠️ This race starts wet and dries out - the figures above assume the WHOLE race on one compound. See "Rain Strategy" below for the real wet+dry fuel split.</div>`
+          : '')
       );
     } else {
       h += mkSection('Fuel Strategy', mkRec('Complete testing to get fuel data', 'warn'));
@@ -3220,7 +3316,13 @@
       h += `</div>`;
 
       // === RAIN STRATEGY ===
-      if (analyze && analyze.maxRain >= 40) {
+      // Real bug fixed 2026-07-19: this block used to pick the post-rain dry compound from a crude
+      // lap-count-only heuristic ("dryLaps > 20 ? Hard : ..."), completely independent of the tyre
+      // table above, which already computes the REAL best dry compound (tyre.bestDry) from the
+      // actual GAPP stop/fuel/pit-time formula. That produced exactly the kind of conflicting
+      // recommendation a manager would see and rightly distrust (e.g. table says Medium, this
+      // section said Hard). Now uses tyre.bestDry.name - the same number shown everywhere else.
+      if (analyze && analyze.maxRain >= 40 && tyre && tyre.bestDry) {
         const laps = parseInt(track.laps) || 0;
         const segs = analyze.segs;
         // Find when rain stops: first segment with rainMax < 20
@@ -3231,6 +3333,22 @@
         const pitLoss = parseFloat(track.timeInOutPits) || 13.5;
         // Estimate when to pit: after rain stops + 1 lap buffer
         const pitLap = Math.max(1, rainLaps);
+        const dryCompoundName = tyre.bestDry.name;
+
+        // Real two-phase fuel need (wet stint at Rain's own per-lap rate, dry stint at the actual
+        // best-dry-compound's rate) - each compound's per-lap rate is derived from its own already-
+        // computed fuelPerStint/lapsPerStint (no new formula, just composing numbers already on
+        // screen), replacing the single-compound "Total Fuel" further up which silently assumed the
+        // WHOLE race ran on one compound's consumption rate even though this is a wet-then-dry race.
+        let mixedFuelHtml = '';
+        if (dryLaps > 0 && tyre.bestWet) {
+          const wetPerLap = tyre.bestWet.fuelPerStint / Math.max(1, tyre.bestWet.lapsPerStint);
+          const dryPerLap = tyre.bestDry.fuelPerStint / Math.max(1, tyre.bestDry.lapsPerStint);
+          const wetFuel = Math.ceil(wetPerLap * rainLaps);
+          const dryFuel = Math.ceil(dryPerLap * dryLaps);
+          mixedFuelHtml = `<div style="color:#d1d5db;margin-top:4px;">⛽ Real total for this race: <strong>${wetFuel + dryFuel}L</strong> (${wetFuel}L over ${rainLaps} wet laps on Rain + ${dryFuel}L over ${dryLaps} dry laps on ${dryCompoundName}) - the "Total Fuel" figure above assumes the whole race on one compound and will be wrong for a race that actually dries out.</div>`;
+        }
+
         let rainHtml = '';
         rainHtml += mkRow('Rain Start', `${segs[0].rainMin}-${segs[0].rainMax}%`);
         rainHtml += mkRow('Est. Rain Laps', rainLaps > 0 ? `${rainLaps} laps` : 'None');
@@ -3239,8 +3357,9 @@
         rainHtml += `<div style="color:#60a5fa;font-weight:700;margin-bottom:4px;">🌧️ Rain Strategy Plan:</div>`;
         rainHtml += `<div style="color:#d1d5db;">1. <strong>Start on Rain tyres</strong> (rain ${segs[0].rainMin}-${segs[0].rainMax}%)</div>`;
         rainHtml += `<div style="color:#d1d5db;">2. <strong>Pit at lap ~${pitLap}</strong> when track dries</div>`;
-        rainHtml += `<div style="color:#d1d5db;">3. <strong>Switch to ${dryLaps > 20 ? 'Hard' : dryLaps > 12 ? 'Medium' : 'Soft'}</strong> for remaining ${dryLaps} laps</div>`;
-        rainHtml += `<div style="color:#9ca3af;margin-top:4px;">⚡ Pit loss: ${pitLoss}s | Net gain: ~${Math.round((dryLaps * 0.8) - pitLoss)}s vs staying on Rain</div>`;
+        rainHtml += `<div style="color:#d1d5db;">3. <strong>Switch to ${dryCompoundName}</strong> for remaining ${dryLaps} laps (best dry compound per the tyre table above)</div>`;
+        rainHtml += `<div style="color:#9ca3af;margin-top:4px;">⚡ Pit loss: ${pitLoss}s</div>`;
+        rainHtml += mixedFuelHtml;
         rainHtml += `</div>`;
         h += mkSection('Rain Strategy', rainHtml);
       }
@@ -3548,6 +3667,16 @@
   // ============================================================
   function renderUpdateCar(car, trackData, driver, league) {
     const domData = parseUpdateCarDOM();
+    // Now DOM-only for car data (no /UpdateCar API call - see init()'s updateCar branch): if the
+    // page's own DOM parse found nothing AND there's no cached car object either, there's genuinely
+    // no data to show - say so plainly instead of silently rendering an all-zero-parts analysis.
+    const hasAnyCarData = (domData.parts && domData.parts.length > 0) || (car && PART_LVL_KEYS.some(k => car[k]));
+    if (!hasAnyCarData) {
+      body(mkRec('No car data found on this page yet. If this page just loaded, wait a moment and click Retry.', 'warn') +
+        `<div style="margin-top:8px;"><button id="gpro-retry" style="background:#374151;color:#d1d5db;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;">Retry</button></div>`);
+      setTimeout(() => { document.getElementById('gpro-retry')?.addEventListener('click', () => location.reload()); }, 100);
+      return;
+    }
     console.log('[GPRO] API car levels:', PART_LVL_KEYS.map(k => `${k}=${car?.[k] ?? 'null'}`).join(', '));
     console.log('[GPRO] API car wear:', PART_WEAR_KEYS.map(k => `${k}=${car?.[k] ?? 'null'}`).join(', '));
     console.log('[GPRO] API car cash:', car?.cash ?? 'null', '| DOM cash:', domData.cash);
@@ -3790,14 +3919,14 @@
     body(`<div style="${ST.loading}">Fetching all data...</div>`);
 
     const endpoints = {
-      practice:  { ep: '/Practice', label: 'Practice / Weather', icon: '🌤️' },
-      track:     { ep: '/TrackProfile', label: 'Track Profile', icon: '🏁' },
-      driver:    { ep: '/DriProfile', label: 'Driver Profile', icon: '👤' },
+      practice:  { ep: '/Practice', label: 'Practice / Weather', icon: '🌤️', visit: 'Qualify.asp, Qualify2.asp, or RaceSetup.asp' },
+      track:     { ep: '/TrackProfile', label: 'Track Profile', icon: '🏁', visit: 'TrackDetails.asp' },
+      driver:    { ep: '/DriProfile', label: 'Driver Profile', icon: '👤', visit: 'DriverProfile.asp' },
       office:    { ep: '/Office', label: 'Office / Tyre Supplier', icon: '🏢' },
-      car:       { ep: '/UpdateCar', label: 'Car Data (Wear/Levels)', icon: '🏎️' },
-      testing:   { ep: '/Testing', label: 'Testing / Fuel Data', icon: '🧪' },
-      suppliers: { ep: '/TyreSuppliers', label: 'Tyre Suppliers', icon: '🛞' },
-      staff:     { ep: '/StaffAndFacilities', label: 'Staff / Facilities', icon: '👷' },
+      car:       { ep: '/UpdateCar', label: 'Car Data (Wear/Levels)', icon: '🏎️', visit: 'Qualify.asp, Qualify2.asp, or UpdateCar.asp' },
+      testing:   { ep: '/Testing', label: 'Testing / Fuel Data', icon: '🧪', visit: 'Testing.asp' },
+      suppliers: { ep: '/TyreSuppliers', label: 'Tyre Suppliers', icon: '🛞', visit: 'Suppliers.asp' },
+      staff:     { ep: '/StaffAndFacilities', label: 'Staff / Facilities', icon: '👷', visit: 'StaffAndFacilities.asp' },
     };
 
     let data = {};
@@ -3805,10 +3934,20 @@
     const startTime = Date.now();
 
     try {
-      // Fetch all in parallel
+      // DOM-only for every endpoint here except Office (see getDataDomOnly - no DOM source exists
+      // anywhere on the site for Office's fields, confirmed 2026-07-19). This dashboard used to spend
+      // up to 7 real API calls just to show a status table on every single visit to gpro.asp, the
+      // most-visited page every race - now it only ever reports what's already been DOM-captured
+      // (live parse when the current page happens to supply it, otherwise the DOM-fed stale cache
+      // from runPassiveCapture/backgroundCaptureAuxPages), same data, zero budget cost. "Missing"
+      // rows below mean "visit that page once" rather than "the API is down".
+      const domParsers = { practice: buildLivePracticeDOM, testing: parseTestingDOM, car: parseQualifyCarDOM };
       const keys = Object.keys(endpoints);
       const results = await Promise.allSettled(
-        keys.map(key => apiGet(endpoints[key].ep).then(d => { data[key] = d; return d; }))
+        keys.map(key => {
+          const fetcher = key === 'office' ? getDataSmart(endpoints[key].ep) : Promise.resolve(getDataDomOnly(endpoints[key].ep, domParsers[key]));
+          return fetcher.then(d => { data[key] = d; return d; });
+        })
       );
       results.forEach((r, i) => { if (r.status === 'rejected') errors[keys[i]] = r.reason && r.reason.message || 'Unknown error'; });
 
@@ -3829,7 +3968,7 @@
         if (!ok) { statusLabel = 'Missing'; statusColor = '#ef4444'; statusBg = 'rgba(239,68,68,0.12)'; }
         else if (ageMs <= 2 * 3600 * 1000) { statusLabel = 'Fresh'; statusColor = '#10b981'; statusBg = 'rgba(16,185,129,0.12)'; }
         else { statusLabel = 'Stale'; statusColor = '#f59e0b'; statusBg = 'rgba(245,158,11,0.12)'; }
-        const reason = !ok ? errors[key] : (stale ? d.__staleReason : null);
+        const reason = !ok ? (errors[key] || (cfg.visit ? `No data captured yet - visit ${cfg.visit} once` : null)) : (stale ? d.__staleReason : null);
         return `<tr>
           <td style="padding:6px 4px;color:#d1d5db;font-size:11px;white-space:nowrap;">${cfg.icon} ${cfg.label}</td>
           <td style="padding:6px 4px;color:#6b7280;font-size:10px;white-space:nowrap;">${time ? formatRelativeTime(time) : '—'}</td>
@@ -4166,52 +4305,62 @@
       if (page === 'home') {
         await renderHome();
       } else if (page === 'qualify1' || page === 'qualify2') {
-        // DOM-first: weather + car setup/levels/wear are both directly readable off this exact page
-        // (Qualify.asp/Qualify2.asp show their own "Setup related parts" table and weather widget),
-        // so those two never touch the API at all here. Track/Driver/Office/Suppliers have no live-DOM
-        // substitute on this page, so they fall to stale-cache-first (populated by background capture)
-        // and only hit the real API if nothing's cached yet.
+        // DOM-only for everything except Office (see below): weather + car setup/levels/wear are
+        // directly readable off this exact page (Qualify.asp/Qualify2.asp show their own "Setup
+        // related parts" table and weather widget). Track/Driver/Staff/Suppliers have no live-DOM
+        // substitute on THIS page, but getDataDomOnly still resolves them from the DOM-fed stale
+        // cache (populated by runPassiveCapture/backgroundCaptureAuxPages visiting/background-
+        // fetching TrackDetails.asp/DriverProfile.asp/StaffAndFacilities.asp/Suppliers.asp) -
+        // never a live API call. Office is the one confirmed exception: its fields (TD id, staff
+        // conc/stress used in pit-time calc) have no DOM source anywhere on the site (checked
+        // 2026-07-19 - see docs/page-structures.md), so it alone keeps the API fallback.
         const [practice, track, driver, office, staff, car, supplierData] = await Promise.all([
-          getDataSmart('/Practice', buildLivePracticeDOM), getDataSmart('/TrackProfile'),
-          getDataSmart('/DriProfile'), getDataSmart('/Office'), getDataSmart('/StaffAndFacilities'),
-          getDataSmart('/UpdateCar', parseQualifyCarDOM), getDataSmart('/TyreSuppliers')
+          getDataDomOnly('/Practice', buildLivePracticeDOM), getDataDomOnly('/TrackProfile'),
+          getDataDomOnly('/DriProfile'), getDataSmart('/Office'), getDataDomOnly('/StaffAndFacilities'),
+          getDataDomOnly('/UpdateCar', parseQualifyCarDOM), getDataDomOnly('/TyreSuppliers')
         ]);
         const supplier = resolveActiveSupplier(office, supplierData);
         const staffTd = await buildStaffTdInfo(office, staff);
         renderQualify(practice, track, driver, supplier, page === 'qualify2', mergeWithCachedCarData(car), staffTd);
       } else if (page === 'raceSetup') {
-        // Weather is DOM-live here too (RaceSetup.asp has the same weather widget/forecast). Car setup
-        // has no readout on this page though (only editable input boxes default to 0), so /UpdateCar
-        // still needs stale-cache-first/API - Testing (fuel-stint data) has no page substitute at all.
+        // Same DOM-only policy as Qualify above, plus Testing (fuel-stint data) now has a real
+        // parser (parseTestingDOM) fed by visiting/background-fetching Testing.asp, so it's
+        // DOM-only too - Office remains the one confirmed no-DOM-source exception.
         const [practice, track, testing, driver, office, staff, car, supplierData, menu] = await Promise.all([
-          getDataSmart('/Practice', buildLivePracticeDOM), getDataSmart('/TrackProfile'),
-          getDataSmart('/Testing'), getDataSmart('/DriProfile'),
-          getDataSmart('/Office'), getDataSmart('/StaffAndFacilities'), getDataSmart('/UpdateCar'),
-          getDataSmart('/TyreSuppliers'), getDataSmart('/Menu').catch(() => null)
+          getDataDomOnly('/Practice', buildLivePracticeDOM), getDataDomOnly('/TrackProfile'),
+          getDataDomOnly('/Testing', parseTestingDOM), getDataDomOnly('/DriProfile'),
+          getDataSmart('/Office'), getDataDomOnly('/StaffAndFacilities'), getDataDomOnly('/UpdateCar'),
+          getDataDomOnly('/TyreSuppliers'), getDataSmart('/Menu').catch(() => null)
         ]);
         const supplier = resolveActiveSupplier(office, supplierData);
         const staffTd = await buildStaffTdInfo(office, staff);
         renderRaceSetup(practice, track, testing, driver, supplier, mergeWithCachedCarData(car), staffTd, detectLeagueFromMenu(menu));
       } else if (page === 'updateCar') {
-        let carErr = null;
-        const [car, track, driver, menu] = await Promise.all([
-          apiGet('/UpdateCar').catch(e => { carErr = e.message; return null; }), getDataSmart('/TrackProfile'),
-          getDataSmart('/DriProfile'), getDataSmart('/Menu').catch(() => null)
+        // DOM-only for car data: UpdateCar.asp's own "Setup related parts" table already gives
+        // levels/wear/cash/upgrade-options, and renderUpdateCar's own parseUpdateCarDOM() merge
+        // always prefers DOM values anyway (see that function) - so starting from an empty/cached
+        // base and letting the merge populate it skips a real API call entirely for a page we're
+        // always physically on when this runs. getCachedCarData() (this project's separate
+        // long-lived DOM-fed car cache, populated by prior visits to this same page) is the base
+        // rather than {} purely for continuity if any single DOM field is momentarily unreadable.
+        const [track, driver, menu] = await Promise.all([
+          getDataDomOnly('/TrackProfile'), getDataDomOnly('/DriProfile'), getDataSmart('/Menu').catch(() => null)
         ]);
-        if (!car) {
-          body(mkRec(`Failed to load car data.${carErr ? ' ' + carErr : ' Server may be temporarily unavailable.'}`, 'warn') +
-            `<div style="margin-top:8px;"><button id="gpro-retry" style="background:#374151;color:#d1d5db;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;">Retry</button></div>`);
-          setTimeout(() => { document.getElementById('gpro-retry')?.addEventListener('click', () => location.reload()); }, 100);
-          return;
-        }
+        const car = getCachedCarData() || {};
         renderUpdateCar(car, track, driver, detectLeagueFromMenu(menu));
       } else if (page === 'staff') {
+        // Real bug fixed 2026-07-19: this branch was fetching /Office, but staff skills and
+        // facility levels live on /StaffAndFacilities (CLAUDE.md already documented this exact
+        // /Office-vs-/StaffAndFacilities mix-up once before for a different call site - this one
+        // had the same mistake, unnoticed because /Office's fields happened not to throw, they
+        // just silently produced an all-undefined staff object). Now DOM-only via the expanded
+        // parseStaffFacilitiesDOM (we're always physically on StaffAndFacilities.asp here).
         const [staff, menu] = await Promise.all([
-          apiGet('/Office').catch(() => null),
+          Promise.resolve(getDataDomOnly('/StaffAndFacilities', parseStaffFacilitiesDOM)),
           getDataSmart('/Menu').catch(() => null),
         ]);
         if (!staff) {
-          body(mkRec('Failed to load office data. Server may be temporarily unavailable.', 'warn') +
+          body(mkRec('No staff/facilities data found on this page yet. If this page just loaded, wait a moment and click Retry.', 'warn') +
             `<div style="margin-top:8px;"><button id="gpro-retry" style="background:#374151;color:#d1d5db;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;">Retry</button></div>`);
           setTimeout(() => { document.getElementById('gpro-retry')?.addEventListener('click', () => location.reload()); }, 100);
           return;
@@ -4278,7 +4427,10 @@
     createPanel('Season Overview');
     body(`<div style="${ST.loading}">Loading season data...</div>`);
     try {
-      const [practice, track] = await Promise.all([apiGet('/Practice'), apiGet('/TrackProfile')]);
+      // DOM-only here too (Season Overview only needs the current track's name) - same policy as
+      // the rest of the tool.
+      const practice = getDataDomOnly('/Practice', buildLivePracticeDOM);
+      const track = getDataDomOnly('/TrackProfile');
       const currentTrack = (practice && practice.trackName) || (track && track.trackName) || '?';
       const currentRaceIdx = SEASON_RACE_LIST.findIndex(t => currentTrack.includes(t.name.split(' ')[0]));
 
