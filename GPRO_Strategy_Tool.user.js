@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.4.9
+// @version 5.5.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -4960,7 +4960,7 @@
  h += mkDecisionBoard([{ id: 'gpro-sec-market-drivers', label: 'Drivers', verdict: `${drivers.length} listed`, tone: drivers.length ? 'info' : 'warn' }]);
  sel = D.driverSelection && D.driverSelection[league];
  h += mkSection(`Available Drivers (${drivers.length})`,
- drivers.length ? mkShortlistSection(drivers, 'driId', sel && sel.targetOA, marketCash, league, 'driver', 'drivers') : mkRec(emptyReason, 'warn'),
+ drivers.length ? mkShortlistSection(drivers, 'driId', sel && sel.targetOA, marketCash, league, 'driver', 'drivers', sel && Object.entries(sel.attributes)) : mkRec(emptyReason, 'warn'),
  'gpro-sec-market-drivers');
 
  // Driver selection criteria
@@ -4983,7 +4983,7 @@
  h += mkDecisionBoard([{ id: 'gpro-sec-market-tds', label: 'TDs', verdict: `${tds.length} listed`, tone: tds.length ? 'info' : 'warn' }]);
  tdSel = D.tdSelection && D.tdSelection[league];
  h += mkSection(`Available Technical Directors (${tds.length})`,
- tds.length ? mkShortlistSection(tds, 'tdId', tdSel && tdSel.targetOA, marketCash, league, 'TD', 'tds') : mkRec(emptyReason, 'warn'),
+ tds.length ? mkShortlistSection(tds, 'tdId', tdSel && tdSel.targetOA, marketCash, league, 'TD', 'tds', tdSel && Object.entries(tdSel.skills)) : mkRec(emptyReason, 'warn'),
  'gpro-sec-market-tds');
  if (tdSel) {
  let tdSelHtml = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Target OA: ${tdSel.targetOA.min}-${tdSel.targetOA.max}</div><div style="font-size:9px;color:#f59e0b;margin-bottom:4px;">⚠️ TD OA caps are wiki-sourced and NOT independently confirmed - this project's driver OA caps came from the same wiki and turned out to be wrong (corrected 2026-07-27 via live in-game confirmation). Verify against what the game actually lets you sign before relying on this.</div>`;
@@ -5002,9 +5002,9 @@
  body(h);
  wireDecisionBoard();
  if (type === 'drivers' && sel) {
- wireScanFullStatsButton('drivers', 'driId', filterShortlist(domRows || [], sel.targetOA, marketCash).shortlist, Object.entries(sel.attributes));
+ wireScanFullStatsButton('drivers', 'driId', domRows || [], Object.entries(sel.attributes));
  } else if (type === 'tds' && tdSel) {
- wireScanFullStatsButton('tds', 'tdId', filterShortlist(domRows || [], tdSel.targetOA, marketCash).shortlist, Object.entries(tdSel.skills));
+ wireScanFullStatsButton('tds', 'tdId', domRows || [], Object.entries(tdSel.skills));
  }
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad'));
@@ -5521,61 +5521,43 @@
  return t;
  }
 
- // Filters the raw market list down to what's actually relevant to THIS manager, per user request
- // ("give me what fits my league/cash, not the whole list"). Only OA-range and affordability are
- // usable filters, because the market list DOM only exposes OA/age/salary/signFee/offers - not
- // full attributes (concentration/talent/etc - see ARCHITECTURE.md TODO 0e for why per-row full
- // stats aren't scraped yet). targetOA comes from D.driverSelection/D.tdSelection (community/wiki-
- // sourced per league, see gpro-data.js), cash from the account's own cached car data.
- // "Affordable" = signFee (one-time cost to sign) <= current cash; salary (ongoing per-race cost)
- // is shown but not filtered on, since that's a budget trade-off call, not a hard blocker.
- function filterShortlist(rows, targetOA, cash) {
- const inRange = [];
- const rest = [];
- rows.forEach(r => {
- const oa = parseFloat(r.OA) || 0;
- const signFee = parseGproCash(r.signFee);
- const oaOk = targetOA ? (oa >= targetOA.min && oa <= targetOA.max) : true;
- const afford = cash != null ? (signFee > 0 ? signFee <= cash : true) : true;
- if (oaOk && afford) inRange.push(r); else rest.push(r);
- });
- // Best value (OA per $1M salary) first within the shortlist.
- inRange.sort((a, b) => {
- const va = (parseFloat(a.OA) || 0) / Math.max(1, parseGproCash(a.salary) / 1e6);
- const vb = (parseFloat(b.OA) || 0) / Math.max(1, parseGproCash(b.salary) / 1e6);
- return vb - va;
- });
- return { shortlist: inRange, rest };
+ // Extracts a numeric floor from a target string like '200+' -> 200, '150-200' -> 150,
+ // '0-49' -> 0 (a no-op floor - always passes). Qualitative strings ('as high as affordable',
+ // 'track-dependent') return null, meaning "no sourced numeric threshold to filter on".
+ function parseMinFromTarget(targetStr) {
+ if (typeof targetStr !== 'string') return null;
+ const m = targetStr.match(/^(\d+)/);
+ return m ? parseInt(m[1]) : null;
  }
 
- // Renders the shortlist-first view: recommended rows highlighted up top with the criteria used,
- // full unfiltered list collapsed below for anyone who wants to browse everything anyway.
- // sectionId ('drivers'/'tds') gives the scan button/results container unique DOM ids so both
- // sections can coexist on the same page without colliding.
- function mkShortlistSection(rows, idKey, targetOA, cash, league, cfgLabel, sectionId) {
+ // Real bug fixed 2026-07-27: GPRO's own default market page is ALREADY sorted descending and
+ // capped near the league's max OA ("A request with no query parameters will return... descending
+ // order, with an OA range which upper limit is the maximum OA of the Token's account league" -
+ // gpro-public-api.yml), so an OA-range filter alone barely narrows anything - almost every listed
+ // row is already near the top of the allowed range by construction. Per user request, minimum
+ // filtering now happens on REAL scraped attributes (concentration/talent/etc for drivers,
+ // leadership/etc for TDs) instead, via the numeric floors in D.driverSelection[league].attributes/
+ // D.tdSelection[league].skills where a numeric target exists (see parseMinFromTarget). The OA
+ // range and cash balance are still shown as context but no longer gate what's shown - they're not
+ // the real bottleneck once actual attributes are available.
+ function mkShortlistSection(rows, idKey, targetOA, cash, league, cfgLabel, sectionId, priorityEntries) {
  if (!rows.length) return '';
  if (!targetOA) {
  return mkMarketTable(rows, idKey) +
  `<div style="font-size:9px;color:#f59e0b;margin-top:4px;">No ${cfgLabel} guidance calibrated yet for ${league || 'your'} league - showing the full unfiltered list.</div>`;
  }
- const { shortlist, rest } = filterShortlist(rows, targetOA, cash);
- const cashNote = cash != null ? `, sign fee ≤ $${cash.toLocaleString()} cash on hand` : ' (cash balance unknown - visit UpdateCar.asp once to enable affordability filtering)';
- let h = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Shortlist criteria: OA ${targetOA.min}-${targetOA.max} for ${league}${cashNote}</div>`;
- if (shortlist.length) {
- h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(shortlist, idKey)}</div>`;
- // Scan Full Stats: only OA/salary are in the market list itself - real per-attribute
- // comparison (concentration/talent for drivers, leadership/mechanics/etc for TDs) needs each
- // candidate's own profile page. User-triggered (not automatic) since it's N extra real HTTP
- // requests (not API budget calls, but still real page loads against gpro.net) - capped to the
- // shortlist only (already filtered to relevant candidates), not the whole market.
- h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats for these ${shortlist.length} (fetches each candidate's profile page)</button>`;
+ // Politeness cap on real page fetches per scan - not an API budget concern, but still real
+ // traffic against gpro.net, so bounded regardless of how many rows the market lists.
+ const capped = rows.slice(0, 30);
+ const floors = (priorityEntries || []).map(([key, info]) => [key, parseMinFromTarget(info.target)]).filter(([, min]) => min != null && min > 0);
+ const floorNote = floors.length
+ ? `Will filter to candidates meeting: ${floors.map(([k, m]) => `${k} ≥ ${m}`).join(', ')} (${league}'s sourced priority attributes)`
+ : `No numeric minimum thresholds sourced for ${cfgLabel} at ${league} league yet - results will be ranked by Match Score instead of filtered to a hard cutoff.`;
+ let h = `<div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">Target OA ${targetOA.min}-${targetOA.max} for ${league}${cash != null ? `, cash on hand $${cash.toLocaleString()}` : ' (cash balance unknown - visit UpdateCar.asp once to see it here)'}</div>`;
+ h += `<div style="font-size:9px;color:#9ca3af;margin-bottom:6px;">${floorNote}</div>`;
+ h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(capped, idKey)}</div>`;
+ h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (${capped.length}${rows.length > capped.length ? ` of ${rows.length} listed` : ''} - fetches each candidate's profile page)</button>`;
  h += `<div id="gpro-scan-status-${sectionId}" style="font-size:9px;color:#6b7280;margin-top:4px;"></div>`;
- } else {
- h += mkRec(`No listings currently match OA ${targetOA.min}-${targetOA.max}${cash != null ? ' within your cash on hand' : ''} - see the full list below.`, 'warn');
- }
- if (rest.length) {
- h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#6b7280;font-size:10px;padding:4px 0;">Show ${rest.length} more outside these criteria</summary>${mkMarketTable(rest, idKey)}</details>`;
- }
  return h;
  }
 
@@ -5599,12 +5581,11 @@
  } catch (e) { logError(`full-stat fetch failed for ${kind} ${id}:`, e.message); return null; }
  }
 
- // Bounded to 15 real page fetches per scan (the shortlist is already filtered, so this is
- // realistically a handful in most leagues, but cap it regardless to avoid hammering gpro.net if
- // a shortlist is unusually large).
+ // Bounded to 30 real page fetches per scan (matches the cap already shown to the user in
+ // mkShortlistSection's button label - kept in sync so "scan these N" actually scans N).
  async function scanCandidatesFullStats(rows, idKey) {
  const kind = idKey === 'driId' ? 'driver' : 'td';
- const capped = rows.slice(0, 15);
+ const capped = rows.slice(0, 30);
  const results = await Promise.allSettled(capped.map(r => fetchCandidateFullStats(kind, r[idKey], r.profileHref)));
  return capped.map((r, i) => Object.assign({}, r, { fullStats: results[i].status === 'fulfilled' ? results[i].value : null }));
  }
@@ -5626,9 +5607,8 @@
  return counted ? Math.round(score) : null;
  }
 
- // Renders the enriched table once full stats have been scanned: adds a Match Score column, sorted
- // best-first (nulls - candidates whose profile page couldn't be parsed - sorted last, not hidden).
- function mkFullStatsTable(rows, idKey, priorityEntries) {
+ // Renders one scored table (used for both the "meets the floor" and "below the floor" groups).
+ function mkScoredTable(rows, idKey, priorityEntries) {
  const scored = rows.map(r => ({ row: r, score: scoreCandidate(r.fullStats, priorityEntries) }));
  scored.sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity));
  let t = `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:10px;">`;
@@ -5640,12 +5620,47 @@
  const scoreCell = score != null ? `<strong>${score}</strong>` : `<span style="color:#6b7280;">unavailable</span>`;
  t += `<tr><td style="padding:3px;color:#d1d5db;">${nameCell}</td><td style="text-align:center;color:#10b981;font-weight:700;">${r.OA}</td><td style="text-align:center;color:#9ca3af;">${r.salary}</td><td style="text-align:center;color:#60a5fa;">${scoreCell}</td></tr>`;
  });
- t += `</table></div><div style="font-size:9px;color:#6b7280;margin-top:4px;">Match Score = weighted sum of each candidate's real attributes (scraped from their profile page), weighted by this league's priority order. Relative ranking among these candidates only, not a percentage or verified formula.</div>`;
+ t += `</table></div>`;
  return t;
  }
 
+ // Splits scanned candidates into those meeting every numeric floor (D.driverSelection[league].
+ // attributes / D.tdSelection[league].skills, only entries with a parseable numeric target - see
+ // parseMinFromTarget) vs those that don't, then renders both: the ones that meet the criteria
+ // front and center, the rest collapsed but still visible (never hidden entirely - a candidate
+ // whose profile page failed to parse shows as "unavailable" and goes in the "below" group rather
+ // than silently vanishing).
+ function mkFullStatsTable(rows, idKey, priorityEntries) {
+ const floors = (priorityEntries || []).map(([key, info]) => [key, parseMinFromTarget(info.target)]).filter(([, min]) => min != null && min > 0);
+ let h = '';
+ if (!floors.length) {
+ h += mkScoredTable(rows, idKey, priorityEntries);
+ h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">No numeric minimum thresholds sourced for this league - ranked by Match Score only, not filtered to a hard cutoff.</div>`;
+ return h;
+ }
+ const meets = [], below = [];
+ rows.forEach(r => {
+ const stats = r.fullStats;
+ const ok = stats && floors.every(([key, min]) => typeof stats[key] === 'number' && stats[key] >= min);
+ (ok ? meets : below).push(r);
+ });
+ const floorStr = floors.map(([k, m]) => `${k} ≥ ${m}`).join(', ');
+ if (meets.length) {
+ h += `<div style="font-size:9px;color:#10b981;margin-bottom:4px;">Meets ${floorStr}: ${meets.length} of ${rows.length}</div>`;
+ h += mkScoredTable(meets, idKey, priorityEntries);
+ } else {
+ h += mkRec(`None of the ${rows.length} scanned candidates meet ${floorStr} - see below.`, 'warn');
+ }
+ if (below.length) {
+ h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#6b7280;font-size:10px;padding:4px 0;">Show ${below.length} that didn't meet the threshold</summary>${mkScoredTable(below, idKey, priorityEntries)}</details>`;
+ }
+ h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Match Score = weighted sum of each candidate's real attributes (scraped from their profile page), weighted by this league's priority order. Relative ranking only, not a percentage or verified formula.</div>`;
+ return h;
+ }
+
  // Wires the "Scan Full Stats" button for one market section (drivers or TDs) after body(h) has
- // rendered it. rows = the shortlist rows shown; priorityEntries = Object.entries of
+ // rendered it. rows = the FULL row list shown (mkShortlistSection/scanCandidatesFullStats apply
+ // their own 30-candidate cap); priorityEntries = Object.entries of
  // D.driverSelection[league].attributes or D.tdSelection[league].skills.
  function wireScanFullStatsButton(sectionId, idKey, rows, priorityEntries) {
  const btn = document.getElementById(`gpro-scan-${sectionId}`);
@@ -5693,10 +5708,10 @@
  { id: 'gpro-sec-market-tds', label: 'TDs', verdict: `${tds.length} listed`, tone: tds.length ? 'info' : 'warn' },
  ]);
  h += mkSection(`Available Drivers (${drivers.length})`,
-  drivers.length ? mkShortlistSection(drivers, 'driId', D.driverSelection && D.driverSelection[league] && D.driverSelection[league].targetOA, cash, league, 'driver', 'drivers') : mkRec(noDataMsg('AvailDrivers.asp'), 'warn'),
+  drivers.length ? mkShortlistSection(drivers, 'driId', D.driverSelection && D.driverSelection[league] && D.driverSelection[league].targetOA, cash, league, 'driver', 'drivers', D.driverSelection && D.driverSelection[league] && Object.entries(D.driverSelection[league].attributes)) : mkRec(noDataMsg('AvailDrivers.asp'), 'warn'),
  'gpro-sec-market-drivers');
  h += mkSection(`Available Technical Directors (${tds.length})`,
-  tds.length ? mkShortlistSection(tds, 'tdId', D.tdSelection && D.tdSelection[league] && D.tdSelection[league].targetOA, cash, league, 'TD', 'tds') : mkRec(noDataMsg('AvailTechDirectors.asp'), 'warn'),
+  tds.length ? mkShortlistSection(tds, 'tdId', D.tdSelection && D.tdSelection[league] && D.tdSelection[league].targetOA, cash, league, 'TD', 'tds', D.tdSelection && D.tdSelection[league] && Object.entries(D.tdSelection[league].skills)) : mkRec(noDataMsg('AvailTechDirectors.asp'), 'warn'),
  'gpro-sec-market-tds');
 
  // What-to-look-for reference (D.driverSelection, established attribute priorities per
@@ -5733,8 +5748,8 @@
 
  body(h);
  wireDecisionBoard();
- if (sel) wireScanFullStatsButton('drivers', 'driId', filterShortlist(drivers, sel.targetOA, cash).shortlist, Object.entries(sel.attributes));
- if (tdSel) wireScanFullStatsButton('tds', 'tdId', filterShortlist(tds, tdSel.targetOA, cash).shortlist, Object.entries(tdSel.skills));
+ if (sel) wireScanFullStatsButton('drivers', 'driId', drivers, Object.entries(sel.attributes));
+ if (tdSel) wireScanFullStatsButton('tds', 'tdId', tds, Object.entries(tdSel.skills));
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad'));
  }

@@ -179,6 +179,30 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-27 — Iteration 26 (shortlist filtering rebuilt around real scraped attributes, not OA)
+
+User reported the OA-band shortlist from iteration 25 still showed all ~50 listed drivers. Root
+cause understood properly this time: GPRO's own default market page is already sorted descending
+and capped near the league's max OA (confirmed in `gpro-public-api.yml`'s `/AvailDrivers`
+description), so an OA-range filter barely narrows anything - nearly every listed row is already
+near the top of the allowed range by construction. Asked the user how they wanted filtering to
+actually work; they chose real attributes via the Full Stats scan as the primary mechanism.
+
+- `mkShortlistSection` no longer pre-filters by OA/affordability. It now shows the full list
+ (capped to 30 for real-request politeness against gpro.net, not an API budget concern) with the
+ league's target OA and cash shown as context only, plus a "Scan Full Stats & Filter" button as
+ the primary action.
+- New `parseMinFromTarget` extracts a numeric floor from `D.driverSelection[league].attributes`/
+ `D.tdSelection[league].skills` target strings (`'200+'` → 200, `'150-200'` → 150) - qualitative
+ targets (`'as high as affordable'`) yield no floor and don't filter.
+- After a scan, `mkFullStatsTable` now splits results into "meets every sourced numeric floor"
+ (shown first) vs "below threshold" (collapsed but still visible, never hidden) - this is the
+ literal "minimum stats to filter for per league" the user asked for. Leagues/roles with no
+ numeric floor sourced (Pro/Master/Elite drivers, all TD tiers) fall back to ranked-by-Match-Score
+ with no hard cutoff, explicitly labelled as such rather than silently doing nothing.
+- Removed `filterShortlist` (dead code - the OA/affordability filter it implemented is no longer
+ used anywhere).
+
 ### 2026-07-27 — Iteration 25 (real bugs found in review: wrong wiki-sourced OA caps + an overly-strict filter)
 
 User reported the Driver Market shortlist said "No listings currently match OA 80-80" for Amateur
