@@ -2,11 +2,8 @@
   "name": "gpro-tool",
   "private": true,
   "version": "0.1.0",
-  "description": "GPRO companion platform monorepo. Root userscript (GPRO_Strategy_Tool.user.js + gpro-data.js) remains the shipping product; packages/* is the in-progress extraction target.",
-  "workspaces": [
-    "packages/*"
-  ],
+  "description": "GPRO Strategy Tool - Tampermonkey userscript for gpro.net. GPRO_Strategy_Tool.user.js + gpro-data.js at the repo root are the entire shipping product.",
   "scripts": {
-    "check:userscript": "node --check GPRO_Strategy_Tool.user.js"
+    "check:userscript": "node --check GPRO_Strategy_Tool.user.js && node --check gpro-data.js"
   }
 }

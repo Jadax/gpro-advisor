@@ -1,8 +1,0 @@
-{
-  "name": "@gpro/api",
-  "version": "0.1.0",
-  "private": true,
-  "description": "GPRO API client: auth, endpoint definitions, request budget enforcement, retry policy. Platform-agnostic (works via GM_xmlhttpRequest in the userscript or fetch in a web app).",
-  "main": "src/index.js",
-  "type": "commonjs"
-}

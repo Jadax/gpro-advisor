@@ -146,11 +146,13 @@ The tool mostly works out of the box. A few optional settings:
 
 ```
 GPRO Tool/
-├── GPRO_Strategy_Tool.user.js   # Main script — all logic, UI, and helpers (~4,760 lines)
-├── gpro-data.js                  # Season data, track profiles, formulas, calibration (~1,060 lines)
+├── GPRO_Strategy_Tool.user.js   # Main script — all logic, UI, and helpers
+├── gpro-data.js                  # Season data, track profiles, formulas, calibration
 ├── gpro-public-api.yml           # GPRO's official OpenAPI spec (reference only)
 ├── docs/
-│   └── page-structures.md        # DOM selectors for game pages (reference only)
+│   └── page-structures.md        # Confirmed DOM selectors for game pages (reference only)
+├── ARCHITECTURE.md               # Iteration log / roadmap for contributors
+├── CLAUDE.md                     # House rules for AI-assisted development on this repo
 └── README.md
 ```
 

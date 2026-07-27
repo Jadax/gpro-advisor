@@ -1,8 +1,0 @@
-{
-  "name": "@gpro/shared",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Cross-cutting utilities with zero dependencies: money parsing/formatting, date/time formatting, id/lookup helpers.",
-  "main": "src/index.js",
-  "type": "commonjs"
-}

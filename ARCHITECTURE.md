@@ -6,47 +6,17 @@ what the next pass should pick up.
 
 ## Current shipping product
 
-`GPRO_Strategy_Tool.user.js` + `gpro-data.js` at the repo root. This is what users actually
-install and what every change must keep working — see [CLAUDE.md](CLAUDE.md) for its house rules
-(API budget, caching layers, versioning, etc). **Nothing in `packages/` is wired into it yet.**
+`GPRO_Strategy_Tool.user.js` + `gpro-data.js` at the repo root — the entire shipping product, no
+build step, no other packages. Every change must keep this working — see [CLAUDE.md](CLAUDE.md)
+for its house rules (API budget, caching layers, versioning, etc).
 
-## packages/ (scaffold, not yet consumed)
+**2026-07-27**: removed the `packages/*` monorepo scaffold (11 empty-stub sub-packages, none ever
+consumed, none touched across any iteration below) - premature scaffolding for a migration that
+never started, against this project's own "don't design for hypothetical future needs" rule. If a
+real extraction is ever warranted (e.g. a second consumer of the calc functions besides the
+userscript actually shows up), start it then with real content, not stub folders in advance.
 
-| Package | Purpose | Status |
-|---|---|---|
-| `core` | Domain types/models (track/driver/car/session), no I/O | empty stub |
-| `calculations` | Pure deterministic engines: tyre strategy, car setup, parts wear, fuel, PHA | empty stub — target for extracting `.user.js`'s calc functions |
-| `prediction` | Forecasting: driver progress, race outcome, career trajectory | empty stub |
-| `ai` | LLM coaching/explanation layer over calculations+prediction, must degrade gracefully without a backend | empty stub |
-| `ui` | Framework-agnostic view-model/section builders shared by userscript panel + future web app | empty stub — target for `mkSection`/`mkRow`/`mkRec`/etc |
-| `api` | GPRO API client: auth, endpoints, budget enforcement, retry | empty stub — target for `apiGet`/`getDataSmart` |
-| `storage` | Cache + settings behind one interface (GM storage today, swappable later) | empty stub |
-| `simulation` | Monte Carlo race/season sim, financial/testing/car-dev simulators | empty stub |
-| `analytics` | Historical explorers, transfer market valuation, sponsor optimization | empty stub |
-| `userscript` | Tampermonkey entrypoint/adapters wiring the above into the live script | empty stub |
-| `shared` | Zero-dependency utilities (money parsing, formatting) | empty stub — target for `parseGproCash` etc |
-
-Each package has its own `package.json`/`README.md`; root `package.json` declares npm workspaces.
-No build step exists yet — the userscript continues to be hand-maintained at the root until a
-real extraction happens (see Migration strategy below).
-
-## Migration strategy (do not big-bang this)
-
-1. Extract pure, dependency-free logic first: `calculations` and `shared` (money parsing, wear/tyre/setup
- math) can be lifted out of `.user.js` verbatim with zero behavior change, since they take plain
- objects in and return plain objects out.
-2. The userscript then `@require`s a bundled build of these packages (or, short-term, keeps a
- generated single-file copy in sync) rather than reimplementing the math twice.
-3. `api`/`storage` extraction comes next, behind an interface the userscript backs with
- `GM_xmlhttpRequest`/`GM_getValue` and a future web app backs with `fetch`/IndexedDB.
-4. `ui` extraction (shared section/table builders) only after the render-layer duplication
- identified in the 2026-07-19 pass (weather section, tyre table, setup table, copy button) is
- consolidated *inside* `.user.js` first — no point sharing a package that's still internally
- duplicated.
-5. `ai`/`prediction`/`simulation`/`analytics` remain empty until `calculations`/`core` are real,
- since they all depend on having stable domain types to build against.
-
-## AI-first principles (apply once `ai`/`prediction` have real content)
+## AI-first principles (apply if/when AI-driven features grow beyond AI Coaching)
 
 Every recommendation must: explain its reasoning, show a confidence figure, state its
 assumptions, compare at least one alternative, stay deterministic wherever the underlying
@@ -934,11 +904,7 @@ constants, clearly labelled as such if found).
  `renderSponsorOverview`/`renderMarketOverview` all have one now. `renderUpdateCar`/`renderStaff`
  still don't - not yet, both still short enough to scan directly; add if they grow more sections.
 
-Priority 2 (packages/ — pick up once #1–2 above are done, per the migration strategy):
-
-- Start the actual extraction with `packages/shared` (money/date formatting) and
- `packages/calculations` (tyre/setup/wear/fuel math), since those are pure functions with no
- `GM_*`/DOM dependency and can be lifted with zero behavior change.
-- No build tooling exists yet (no bundler/tsconfig). Before extracting real code, decide: keep it
- CommonJS + a small bundler (esbuild) that emits the `@require`d file, or keep hand-syncing until
- there's enough package code to justify the tooling. Don't add the tooling speculatively.
+**Priority 2 (packages/ extraction) is closed, not just deprioritized** — the scaffold was removed
+2026-07-27 (see "Current shipping product" above) since nothing ever consumed it. If a real second
+consumer of the calc/shared functions shows up in the future, start the extraction then with real
+code, not speculative structure ahead of it.

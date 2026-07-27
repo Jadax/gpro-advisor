@@ -1,8 +1,0 @@
-{
-  "name": "@gpro/storage",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Cache and settings persistence abstraction (short-lived cache, long-lived stale fallback, user settings) behind one interface, backed by GM_getValue/GM_setValue today and swappable for IndexedDB/a backend later.",
-  "main": "src/index.js",
-  "type": "commonjs"
-}

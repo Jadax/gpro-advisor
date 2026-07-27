@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.4.4
+// @version 5.4.5
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -2537,16 +2537,6 @@
  // dead with the exact same per-track values the fallback had.
  const wearIntensity = data.wearIntensity != null ? data.wearIntensity : (D.trackWearIntensity && D.trackWearIntensity[key]);
  return { name: key, ...data, wearIntensity };
- }
- }
- return null;
- }
-
- function lookupTrackHistory(trackName) {
- if (!trackName || typeof GPRO_DATA === 'undefined' || !GPRO_DATA.trackHistory) return null;
- for (const [key, data] of Object.entries(GPRO_DATA.trackHistory)) {
- if (trackName.includes(key.split(' ')[0]) || key.includes(trackName.split(' ')[0])) {
- return data;
  }
  }
  return null;

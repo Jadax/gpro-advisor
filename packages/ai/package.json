@@ -1,8 +1,0 @@
-{
-  "name": "@gpro/ai",
-  "version": "0.1.0",
-  "private": true,
-  "description": "LLM-powered coaching and explanation layer. Wraps calculations/prediction output in natural-language reasoning; must degrade gracefully to calculations-only output when no AI backend is configured.",
-  "main": "src/index.js",
-  "type": "commonjs"
-}
