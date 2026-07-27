@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.4.3
+// @version 5.4.4
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -4847,21 +4847,21 @@
  createPanel(type === 'drivers' ? 'Driver Market Advisor' : 'TD Market Advisor');
  body(`<div style="${ST.loading}">Loading market data...</div>`);
  try {
- // Don't swallow the real failure reason (token expired/budget hit/network error) into a
- // generic "check your league" message - that message is only actually true when the API call
- // itself succeeded and GPRO genuinely returned zero drivers/TDs. A user reporting "nothing is
- // shortlisted" usually means the request failed silently, not that the market is empty.
- let apiErr = null;
- const [resp, menu] = await Promise.all([
- (type === 'drivers' ? apiGet('/AvailDrivers') : apiGet('/AvailTDs')).catch((e) => { apiErr = e; return null; }),
- getDataSmart('/Menu').catch(() => null),
- ]);
+ // DOM-only, per user request - never call /AvailDrivers or /AvailTDs. We're literally on
+ // AvailDrivers.asp/AvailTechDirectors.asp right now (this function only runs when @matched
+ // there), so the live page IS the data source. Cache the parsed list into the stale store too,
+ // so renderMarketOverview() (callable from any page via the Tampermonkey menu) has something
+ // to show without an API call even when not currently on the market page.
+ const idKey = type === 'drivers' ? 'driId' : 'tdId';
+ const domRows = parseAvailListDOM(document, idKey);
+ if (domRows) setStaleData(type === 'drivers' ? '/AvailDrivers' : '/AvailTDs', { [type === 'drivers' ? 'drivers' : 'tds']: domRows });
+ const menu = await getDataSmart('/Menu').catch(() => null);
  let h = '';
  const league = detectLeagueFromMenu(menu) || (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.currentLeague) || 'Amateur';
- const emptyReason = apiErr ? `Request failed: ${apiErr.message}` : 'GPRO returned no listings for your league right now — try again later or check AvailDrivers.asp/AvailTechDirectors.asp directly.';
+ const emptyReason = 'Could not read the market table on this page - if this just loaded, wait a moment and click Retry.';
 
  if (type === 'drivers') {
- const drivers = (resp && resp.drivers) || [];
+ const drivers = domRows || [];
  h += mkDecisionBoard([{ id: 'gpro-sec-market-drivers', label: 'Drivers', verdict: `${drivers.length} listed`, tone: drivers.length ? 'info' : 'warn' }]);
  h += mkSection(`Available Drivers (${drivers.length})`,
  drivers.length ? mkMarketTable(drivers, 'driId') : mkRec(emptyReason, 'warn'),
@@ -4884,7 +4884,7 @@
  h += `<div style="font-size:9px;color:#f59e0b;margin-top:8px;">No target-attribute guidance calibrated yet for ${league} league (only Rookie/Amateur so far) - the driver list above is still real, just without a "what to look for" checklist.</div>`;
  }
  } else {
- const tds = (resp && resp.tds) || [];
+ const tds = domRows || [];
  h += mkDecisionBoard([{ id: 'gpro-sec-market-tds', label: 'TDs', verdict: `${tds.length} listed`, tone: tds.length ? 'info' : 'warn' }]);
  h += mkSection(`Available Technical Directors (${tds.length})`,
  tds.length ? mkMarketTable(tds, 'tdId') : mkRec(emptyReason, 'warn'),
@@ -5350,6 +5350,47 @@
  // idKey ('driId'/'tdId') links each name to its profile page for closer inspection - safe to do
  // now that runPassiveCapture() (see 2026-07-19 fix) won't let visiting a scouted driver's profile
  // corrupt the account's own cached driver data anymore.
+ // DOM-only market list parser for AvailDrivers.asp/AvailTechDirectors.asp - per user request,
+ // these must never call the API. Per docs/page-structures.md the table row shape is: name link
+ // (`DriverProfile.asp?ID=N` for drivers - TD profile link pattern unconfirmed, so the id is
+ // pulled from whatever numeric ID param the row's link has, not a hardcoded href pattern),
+ // Overall, Age, Minimal signing fee, Minimal salary, Offers count. Column order/label wording
+ // hasn't been captured live for every league, so this matches by header text (multiple fallback
+ // spellings) rather than a fixed column index - UNVERIFIED against a live page, flag if wrong.
+ function parseAvailListDOM(root, idKey) {
+ root = root || document;
+ try {
+ const table = Array.from(root.querySelectorAll('table')).find(t => /Overall|OA/i.test(t.textContent) && t.querySelector('a[href*="ID="]'));
+ if (!table) return null;
+ const headerCells = Array.from(table.querySelectorAll('tr')[0] ? table.querySelectorAll('tr')[0].querySelectorAll('th,td') : []);
+ const colFor = (labels) => headerCells.findIndex(c => labels.some(l => c.textContent.trim().toLowerCase().replace(/[.:]/g, '') === l));
+ const idxOA = colFor(['overall', 'oa']);
+ const idxAge = colFor(['age']);
+ const idxSignFee = colFor(['minimal signing fee', 'signing fee', 'sign fee']);
+ const idxSalary = colFor(['minimal salary', 'salary']);
+ const idxOffers = colFor(['offers']);
+ const rows = [];
+ table.querySelectorAll('tr').forEach((tr, i) => {
+ if (i === 0) return; // header row
+ const link = tr.querySelector('a[href*="ID="]');
+ if (!link) return;
+ const idMatch = link.getAttribute('href').match(/ID=(\d+)/i);
+ if (!idMatch) return;
+ const cells = tr.querySelectorAll('td');
+ const cellText = (idx) => (idx >= 0 && cells[idx]) ? cells[idx].textContent.trim() : null;
+ const row = { name: link.textContent.trim() };
+ row[idKey] = parseInt(idMatch[1]);
+ row.OA = cellText(idxOA);
+ row.age = cellText(idxAge);
+ row.signFee = cellText(idxSignFee);
+ row.salary = cellText(idxSalary);
+ row.offers = cellText(idxOffers);
+ rows.push(row);
+ });
+ return rows.length ? rows : null;
+ } catch (e) { return null; }
+ }
+
  function mkMarketTable(rows, idKey) {
  let t = `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:10px;">`;
  t += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Name</td><td>Nat</td><td>OA</td><td>Age</td><td>Salary</td><td>Sign Fee</td><td>Offers</td><td>Value</td></tr>`;
@@ -5370,24 +5411,27 @@
  createPanel('Driver & TD Market');
  body(`<div style="${ST.loading}">Loading market data...</div>`);
  try {
- let driversErr = null, tdsErr = null;
- const [driversResp, tdsResp, menu] = await Promise.all([
- apiGet('/AvailDrivers').catch((e) => { driversErr = e; return null; }),
- apiGet('/AvailTDs').catch((e) => { tdsErr = e; return null; }),
- getDataSmart('/Menu').catch(() => null),
- ]);
+ // DOM-only, per user request - never call /AvailDrivers or /AvailTDs. This menu command can be
+ // invoked from any page, so unlike renderMarketPage() there's no live market table to parse -
+ // fall back to whatever parseAvailListDOM captured into the stale cache the last time the user
+ // (or backgroundCaptureAuxPages) visited AvailDrivers.asp/AvailTechDirectors.asp. No API call
+ // is ever made as a fallback; if nothing's cached yet, the section just says so.
+ const menu = await getDataSmart('/Menu').catch(() => null);
+ const staleDrivers = getStaleData('/AvailDrivers');
+ const staleTds = getStaleData('/AvailTDs');
  let h = '';
- const drivers = (driversResp && driversResp.drivers) || [];
- const tds = (tdsResp && tdsResp.tds) || [];
+ const drivers = (staleDrivers && staleDrivers.data && staleDrivers.data.drivers) || [];
+ const tds = (staleTds && staleTds.data && staleTds.data.tds) || [];
+ const noDataMsg = (page) => `No cached data yet - visit ${page} once to capture it (never fetched via API).`;
  h += mkDecisionBoard([
  { id: 'gpro-sec-market-drivers', label: 'Drivers', verdict: `${drivers.length} listed`, tone: drivers.length ? 'info' : 'warn' },
  { id: 'gpro-sec-market-tds', label: 'TDs', verdict: `${tds.length} listed`, tone: tds.length ? 'info' : 'warn' },
  ]);
  h += mkSection(`Available Drivers (${drivers.length})`,
-  drivers.length ? mkMarketTable(drivers, 'driId') : mkRec(driversErr ? `Request failed: ${driversErr.message}` : 'GPRO returned no listings for your league right now — try again later or check AvailDrivers.asp directly.', 'warn'),
+  drivers.length ? mkMarketTable(drivers, 'driId') : mkRec(noDataMsg('AvailDrivers.asp'), 'warn'),
  'gpro-sec-market-drivers');
  h += mkSection(`Available Technical Directors (${tds.length})`,
-  tds.length ? mkMarketTable(tds, 'tdId') : mkRec(tdsErr ? `Request failed: ${tdsErr.message}` : 'GPRO returned no listings for your league right now — try again later or check AvailTechDirectors.asp directly.', 'warn'),
+  tds.length ? mkMarketTable(tds, 'tdId') : mkRec(noDataMsg('AvailTechDirectors.asp'), 'warn'),
  'gpro-sec-market-tds');
 
  // What-to-look-for reference (D.driverSelection, established attribute priorities per

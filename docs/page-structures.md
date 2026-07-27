@@ -135,7 +135,7 @@ Parsed by `parseTrainingSessionDOM()`. Captured 2026-07-26:
 
 ## AvailDrivers.asp / AvailTechDirectors.asp
 
-Not DOM-parsed (data fetched via API `/AvailDrivers` and `/AvailTDs`). Pages are now `@match`ed and routed to `renderMarketPage()` which shows the same market table + selection criteria as the menu command.
+**DOM-only as of 2026-07-27 (user requirement - never call `/AvailDrivers`/`/AvailTDs`)**: `parseAvailListDOM()` reads the market table directly off the live page (matches by header text - Overall/OA, Age, Minimal signing fee, Minimal salary, Offers - not fixed column index, since the exact header wording hasn't been captured live for every league). Result is cached into the stale store so `renderMarketOverview()` (the menu command, callable from any page) can show the last-captured list without ever making an API call - if nothing's been captured yet it says so plainly instead of silently falling back to the API. **Still open**: per-driver/per-TD full attribute stats (concentration, talent, etc.) aren't on this list page at all - only OA/age/salary. Getting those would mean opening each listed player's own profile page. `DriverProfile.asp?ID=N` is confirmed and already scraped elsewhere in the tool; the equivalent TD profile page URL/structure has not been confirmed (not `DriverProfile.asp` - GPRO's TD API endpoint is `/TDProfile`, but the *page* URL is unverified), so per-TD stat scraping isn't implemented yet - don't guess the URL, capture it live first.
 
 ---
 

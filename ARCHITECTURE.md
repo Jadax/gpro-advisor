@@ -852,6 +852,15 @@ exist yet instead of silently omitting the section. **Still open**: actually cal
 Pro/Master/Elite driver targets and a full TD selection table needs a real source (GPRO wiki,
 gproanalyzer, or the user's own league experience), not a guess.
 
+**0e. Per-driver/per-TD full-stat scraping from the market list** (iteration 22) - `parseAvailListDOM`
+now reads the AvailDrivers.asp/AvailTechDirectors.asp table directly (zero API calls, per explicit
+user requirement), but that table only has OA/age/salary/offers, not full attributes. Driver full
+stats could be background-fetched per-row via `DriverProfile.asp?ID=N` (confirmed page, reuses
+`parseDriverProfileDOM`) the same way `backgroundCaptureAuxPages` already does for the account's own
+driver - not yet wired up for a whole market page of rows. TD full stats are blocked entirely: the TD
+profile *page* URL has never been captured live (only the API endpoint `/TDProfile` is confirmed) -
+don't guess the page URL, capture it first next time TD market data is being worked on.
+
 **0. Verify AI Coaching end-to-end with a real Anthropic API key** (iteration 14) - the request
 shape is written correctly against Anthropic's documented API but has never actually been clicked
 with a live key on live gpro.net from this environment. First priority next time a real browser
