@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.4.6
+// @version 5.4.7
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -26,7 +26,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=4.10.0
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=4.11.0
 // @run-at document-idle
 // ==/UserScript==
 
@@ -4907,16 +4907,18 @@
  let h = '';
  const league = detectLeagueFromMenu(menu) || (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.currentLeague) || 'Amateur';
  const emptyReason = 'Could not read the market table on this page - if this just loaded, wait a moment and click Retry.';
+ const cachedCarForMarket = getCachedCarData();
+ const marketCash = cachedCarForMarket && cachedCarForMarket.cash > 0 ? cachedCarForMarket.cash : null;
 
  if (type === 'drivers') {
  const drivers = domRows || [];
  h += mkDecisionBoard([{ id: 'gpro-sec-market-drivers', label: 'Drivers', verdict: `${drivers.length} listed`, tone: drivers.length ? 'info' : 'warn' }]);
+ const sel = D.driverSelection && D.driverSelection[league];
  h += mkSection(`Available Drivers (${drivers.length})`,
- drivers.length ? mkMarketTable(drivers, 'driId') : mkRec(emptyReason, 'warn'),
+ drivers.length ? mkShortlistSection(drivers, 'driId', sel && sel.targetOA, marketCash, league, 'driver') : mkRec(emptyReason, 'warn'),
  'gpro-sec-market-drivers');
 
  // Driver selection criteria
- const sel = D.driverSelection && D.driverSelection[league];
  if (sel) {
  let selHtml = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Target OA: ${sel.targetOA.min}-${sel.targetOA.max}</div>`;
  Object.entries(sel.attributes).sort((a, b) => a[1].priority - b[1].priority).forEach(([attr, info]) => {
@@ -4934,12 +4936,21 @@
  } else {
  const tds = domRows || [];
  h += mkDecisionBoard([{ id: 'gpro-sec-market-tds', label: 'TDs', verdict: `${tds.length} listed`, tone: tds.length ? 'info' : 'warn' }]);
+ const tdSel = D.tdSelection && D.tdSelection[league];
  h += mkSection(`Available Technical Directors (${tds.length})`,
- tds.length ? mkMarketTable(tds, 'tdId') : mkRec(emptyReason, 'warn'),
+ tds.length ? mkShortlistSection(tds, 'tdId', tdSel && tdSel.targetOA, marketCash, league, 'TD') : mkRec(emptyReason, 'warn'),
  'gpro-sec-market-tds');
- // No D.tdSelection table exists at all yet (unlike D.driverSelection for drivers) - say so
- // rather than leaving the gap unexplained, same reasoning as the driver-side league gap above.
- h += `<div style="font-size:9px;color:#f59e0b;margin-top:8px;">No target-attribute guidance calibrated yet for TD selection (any league) - the TD list above is still real, just without a "what to look for" checklist.</div>`;
+ if (tdSel) {
+ let tdSelHtml = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Target OA: ${tdSel.targetOA.min}-${tdSel.targetOA.max}</div>`;
+ Object.entries(tdSel.skills).sort((a, b) => a[1].priority - b[1].priority).forEach(([skill, info]) => {
+ tdSelHtml += mkRow(`${info.priority}. ${skill}`, '');
+ tdSelHtml += `<div style="font-size:9px;color:#6b7280;padding-left:8px;margin-bottom:2px;">${info.note}</div>`;
+ });
+ tdSelHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">${tdSel.budget}</div>`;
+ h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#60a5fa;font-size:11px;font-weight:700;padding:4px 0;">What to look for in a TD (${league} league)</summary>${tdSelHtml}</details>`;
+ } else if (league === 'Rookie' || league === 'Amateur') {
+ h += `<div style="font-size:9px;color:#6b7280;margin-top:8px;">TDs aren't available until Pro league.</div>`;
+ }
  }
 
  h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Value = OA per $1M salary. 🕐 = retiring soon. Skill/range filters are GPRO Supporters-only via the API.</div>`;
@@ -5456,6 +5467,55 @@
  return t;
  }
 
+ // Filters the raw market list down to what's actually relevant to THIS manager, per user request
+ // ("give me what fits my league/cash, not the whole list"). Only OA-range and affordability are
+ // usable filters, because the market list DOM only exposes OA/age/salary/signFee/offers - not
+ // full attributes (concentration/talent/etc - see ARCHITECTURE.md TODO 0e for why per-row full
+ // stats aren't scraped yet). targetOA comes from D.driverSelection/D.tdSelection (community/wiki-
+ // sourced per league, see gpro-data.js), cash from the account's own cached car data.
+ // "Affordable" = signFee (one-time cost to sign) <= current cash; salary (ongoing per-race cost)
+ // is shown but not filtered on, since that's a budget trade-off call, not a hard blocker.
+ function filterShortlist(rows, targetOA, cash) {
+ const inRange = [];
+ const rest = [];
+ rows.forEach(r => {
+ const oa = parseFloat(r.OA) || 0;
+ const signFee = parseGproCash(r.signFee);
+ const oaOk = targetOA ? (oa >= targetOA.min && oa <= targetOA.max) : true;
+ const afford = cash != null ? (signFee > 0 ? signFee <= cash : true) : true;
+ if (oaOk && afford) inRange.push(r); else rest.push(r);
+ });
+ // Best value (OA per $1M salary) first within the shortlist.
+ inRange.sort((a, b) => {
+ const va = (parseFloat(a.OA) || 0) / Math.max(1, parseGproCash(a.salary) / 1e6);
+ const vb = (parseFloat(b.OA) || 0) / Math.max(1, parseGproCash(b.salary) / 1e6);
+ return vb - va;
+ });
+ return { shortlist: inRange, rest };
+ }
+
+ // Renders the shortlist-first view: recommended rows highlighted up top with the criteria used,
+ // full unfiltered list collapsed below for anyone who wants to browse everything anyway.
+ function mkShortlistSection(rows, idKey, targetOA, cash, league, cfgLabel) {
+ if (!rows.length) return '';
+ if (!targetOA) {
+ return mkMarketTable(rows, idKey) +
+ `<div style="font-size:9px;color:#f59e0b;margin-top:4px;">No ${cfgLabel} guidance calibrated yet for ${league || 'your'} league - showing the full unfiltered list.</div>`;
+ }
+ const { shortlist, rest } = filterShortlist(rows, targetOA, cash);
+ const cashNote = cash != null ? `, sign fee ≤ $${cash.toLocaleString()} cash on hand` : ' (cash balance unknown - visit UpdateCar.asp once to enable affordability filtering)';
+ let h = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Shortlist criteria: OA ${targetOA.min}-${targetOA.max} for ${league}${cashNote}</div>`;
+ if (shortlist.length) {
+ h += mkMarketTable(shortlist, idKey);
+ } else {
+ h += mkRec(`No listings currently match OA ${targetOA.min}-${targetOA.max}${cash != null ? ' within your cash on hand' : ''} - see the full list below.`, 'warn');
+ }
+ if (rest.length) {
+ h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#6b7280;font-size:10px;padding:4px 0;">Show ${rest.length} more outside these criteria</summary>${mkMarketTable(rest, idKey)}</details>`;
+ }
+ return h;
+ }
+
  async function renderMarketOverview() {
  createPanel('Driver & TD Market');
  body(`<div style="${ST.loading}">Loading market data...</div>`);
@@ -5472,22 +5532,24 @@
  const drivers = (staleDrivers && staleDrivers.data && staleDrivers.data.drivers) || [];
  const tds = (staleTds && staleTds.data && staleTds.data.tds) || [];
  const noDataMsg = (page) => `No cached data yet - visit ${page} once to capture it (never fetched via API).`;
+ const league = detectLeagueFromMenu(menu) || (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.currentLeague) || 'Amateur';
+ const cachedCar = getCachedCarData();
+ const cash = cachedCar && cachedCar.cash > 0 ? cachedCar.cash : null;
  h += mkDecisionBoard([
  { id: 'gpro-sec-market-drivers', label: 'Drivers', verdict: `${drivers.length} listed`, tone: drivers.length ? 'info' : 'warn' },
  { id: 'gpro-sec-market-tds', label: 'TDs', verdict: `${tds.length} listed`, tone: tds.length ? 'info' : 'warn' },
  ]);
  h += mkSection(`Available Drivers (${drivers.length})`,
-  drivers.length ? mkMarketTable(drivers, 'driId') : mkRec(noDataMsg('AvailDrivers.asp'), 'warn'),
+  drivers.length ? mkShortlistSection(drivers, 'driId', D.driverSelection && D.driverSelection[league] && D.driverSelection[league].targetOA, cash, league, 'driver') : mkRec(noDataMsg('AvailDrivers.asp'), 'warn'),
  'gpro-sec-market-drivers');
  h += mkSection(`Available Technical Directors (${tds.length})`,
-  tds.length ? mkMarketTable(tds, 'tdId') : mkRec(noDataMsg('AvailTechDirectors.asp'), 'warn'),
+  tds.length ? mkShortlistSection(tds, 'tdId', D.tdSelection && D.tdSelection[league] && D.tdSelection[league].targetOA, cash, league, 'TD') : mkRec(noDataMsg('AvailTechDirectors.asp'), 'warn'),
  'gpro-sec-market-tds');
 
  // What-to-look-for reference (D.driverSelection, established attribute priorities per
  // league) - was sitting unused in gpro-data.js, found while auditing for dead data 2026-07-19.
  // /AvailDrivers' list view doesn't return per-driver attribute breakdowns (only OA/age/salary),
  // so this can't score individual market rows - shown as a manual-evaluation checklist instead.
- const league = detectLeagueFromMenu(menu) || (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.currentLeague) || 'Amateur';
  const sel = D.driverSelection && D.driverSelection[league];
  if (sel) {
  let selHtml = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Target OA: ${sel.targetOA.min}-${sel.targetOA.max}</div>`;
@@ -5497,6 +5559,21 @@
  });
  selHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">${sel.budget}</div>`;
  h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#60a5fa;font-size:11px;font-weight:700;padding:4px 0;">What to look for (${league} league)</summary>${selHtml}</details>`;
+ }
+
+ // TD selection guidance (D.tdSelection, sourced from the official GPRO wiki - see gpro-data.js)
+ // - Pro/Master/Elite only, TDs are unavailable below Pro.
+ const tdSel = D.tdSelection && D.tdSelection[league];
+ if (tdSel) {
+ let tdSelHtml = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Target OA: ${tdSel.targetOA.min}-${tdSel.targetOA.max}</div>`;
+ Object.entries(tdSel.skills).sort((a, b) => a[1].priority - b[1].priority).forEach(([skill, info]) => {
+ tdSelHtml += mkRow(`${info.priority}. ${skill}`, '');
+ tdSelHtml += `<div style="font-size:9px;color:#6b7280;padding-left:8px;margin-bottom:2px;">${info.note}</div>`;
+ });
+ tdSelHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">${tdSel.budget}</div>`;
+ h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#60a5fa;font-size:11px;font-weight:700;padding:4px 0;">What to look for in a TD (${league} league)</summary>${tdSelHtml}</details>`;
+ } else if (league === 'Rookie' || league === 'Amateur') {
+ h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">TDs aren't available until Pro league.</div>`;
  }
 
  h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">GPRO's default market page (OA-descending, capped at your league) - skill/range filters are GPRO Supporters-only via the API and aren't requested here. Value = OA per $1M salary, plain arithmetic, not a game-mechanic estimate. 🕐 = retiring soon.</div>`;

@@ -179,6 +179,29 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-27 — Iteration 23 (real driver/TD market shortlisting, sourced from the GPRO wiki)
+
+User request: Driver/TD Market advisors dump the whole market list; wanted it filtered to what's
+actually relevant given their league and cash balance, using community tips/recommendations rather
+than a guess.
+
+- Used `WebSearch`/`WebFetch` against the **official GPRO wiki** (not a guess, not a forum rumor)
+ to confirm driver OA caps (Pro 90/Master 100/Elite 110) and TD OA caps (Pro 90/Master 120 - higher
+ than the driver cap at Master, Elite uncapped in the sources checked). Extended `D.driverSelection`
+ to all 5 leagues and added `D.tdSelection` (Pro/Master/Elite) in gpro-data.js, both cited in-code
+ and in the UI.
+- Where a source gave a hard number (OA caps), used it. Where no source gave a number (attribute
+ targets beyond Rookie/Amateur, TD skill weights beyond "leadership is a multiplier"/"pit
+ coordination affects pit time directly"), left it qualitative ("as high as affordable", priority
+ order without a numeric target) instead of inventing precision - consistent with CLAUDE.md's
+ don't-guess rule.
+- Built real shortlist filtering (`filterShortlist`/`mkShortlistSection`, GPRO_Strategy_Tool.user.js):
+ rows are filtered to the league's target OA range AND affordability (sign fee vs. cached cash
+ balance from `getCachedCarData()`), sorted by value (OA/$1M salary), with the full unfiltered list
+ still one click away in a collapsed `<details>` rather than being hidden entirely.
+- Still can't score by actual attributes (concentration/talent/etc) - the market list DOM only
+ exposes OA/age/salary, not full stats. Unchanged from TODO 0e: would need per-row profile scraping.
+
 ### 2026-07-27 — Iteration 22 (Data Freshness redesign, real parsing bugs, community-sourced training/staff advice)
 
 User-reported: Data Freshness dashboard calling event-driven data "stale" when nothing had actually
@@ -863,9 +886,22 @@ the real error message; (b) `D.driverSelection` in gpro-data.js only has calibra
 guidance for Rookie/Amateur, nothing for Pro/Master/Elite, and there is no `D.tdSelection` table at
 all for TDs in any league — rather than inventing numbers for leagues we have no calibrated source
 for (against CLAUDE.md's "don't guess" rule), the UI now says plainly when that guidance doesn't
-exist yet instead of silently omitting the section. **Still open**: actually calibrating
-Pro/Master/Elite driver targets and a full TD selection table needs a real source (GPRO wiki,
-gproanalyzer, or the user's own league experience), not a guess.
+exist yet instead of silently omitting the section.
+
+**Resolved (iteration 23, 2026-07-27)**: filled the gap with a real source instead of a guess -
+`WebSearch`/`WebFetch` against the official GPRO wiki confirmed driver OA caps (Pro 90/Master
+100/Elite 110, wiki.gpro.net/index.php/Driver_Contract) and TD OA caps (Pro 90/Master 120,
+wiki.gpro.net/index.php/Technical_Director - note Master's TD cap is HIGHER than its driver cap).
+`D.driverSelection` extended to Pro/Master/Elite (OA targets are sourced/real; attribute numeric
+targets beyond Rookie/Amateur are left as "as high as affordable" rather than inventing precision
+no source gave). New `D.tdSelection` (Pro/Master/Elite, TDs unavailable below Pro) with skill
+priority backed by direct wiki quotes ("leadership... lifts everything", "Pit Coordination affects
+... pit stop service time"). Also built actual shortlist filtering (`filterShortlist`/
+`mkShortlistSection`) on both Market advisors: rows are filtered to the league's target OA range
+AND affordability (sign fee ≤ cached cash balance from `getCachedCarData()`), sorted by value, with
+the full unfiltered list still available in a collapsed `<details>`. **Still open**: real per-
+attribute scoring (concentration/talent/etc, not just OA) needs per-row profile scraping - see TODO
+0e below, unchanged.
 
 **0e. Per-driver/per-TD full-stat scraping from the market list** (iteration 22) - `parseAvailListDOM`
 now reads the AvailDrivers.asp/AvailTechDirectors.asp table directly (zero API calls, per explicit

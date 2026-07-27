@@ -664,7 +664,7 @@ var GPRO_DATA = {
  },
  Amateur: {
  // Amateur: Car carries over. Invest in driver + car balance.
- // Target OA: 80 (cap)
+ // Target OA: 80 (cap, confirmed official GPRO wiki - wiki.gpro.net/index.php/Driver_Contract)
  // Priority: Concentration > Experience > Tech Insight > Talent
  targetOA: { min: 80, max: 80 },
  attributes: {
@@ -678,6 +678,106 @@ var GPRO_DATA = {
  motivation: { target: '100-200', priority: 8, note: 'Training speed' },
  },
  budget: 'Balance car upgrades (L5-7) with driver development. Never go into debt.',
+ },
+ // Pro/Master/Elite added 2026-07-27. OA caps are confirmed (official GPRO wiki,
+ // wiki.gpro.net/index.php/Driver_Contract: Pro 90, Master 100, Elite 110) - these are real, not
+ // guessed. Attribute PRIORITY ORDER is the same logical extension of Rookie/Amateur's established
+ // order (concentration/consistency stays the top lever at every level), but no community source
+ // was found giving precise numeric attribute targets this far up the ladder, unlike Rookie/Amateur
+ // - so those are left as "as high as affordable" rather than inventing specific thresholds.
+ Pro: {
+ targetOA: { min: 85, max: 90 },
+ attributes: {
+ concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
+ experience: { target: 'as high as affordable', priority: 2, note: 'Strategy/tyre management/setup precision' },
+ techInsight: { target: 'as high as affordable', priority: 3, note: 'Setup precision, margin of acceptance' },
+ talent: { target: 'as high as affordable', priority: 4, note: 'Raw speed - TD (available from Pro) can partly compensate for setup gaps' },
+ aggressiveness:{ target: 'track-dependent', priority: 5, note: 'Higher risk tolerance viable with a stronger car/TD' },
+ stamina: { target: 'as high as affordable', priority: 6, note: 'Race distance/fatigue matters more as pace closes up' },
+ charisma: { target: 'as high as affordable', priority: 7, note: 'Sponsor income boost' },
+ motivation: { target: 'as high as affordable', priority: 8, note: 'Training speed' },
+ },
+ budget: 'TD becomes available (max OA 90 per wiki) - budget for both driver and TD, don\'t overspend on either alone.',
+ },
+ Master: {
+ targetOA: { min: 90, max: 100 },
+ attributes: {
+ concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
+ experience: { target: 'as high as affordable', priority: 2, note: 'Strategy/tyre management/setup precision' },
+ techInsight: { target: 'as high as affordable', priority: 3, note: 'Setup precision, margin of acceptance' },
+ talent: { target: 'as high as affordable', priority: 4, note: 'Raw speed - increasingly decisive as fields tighten' },
+ aggressiveness:{ target: 'track-dependent', priority: 5, note: 'Higher risk tolerance viable with a stronger car/TD' },
+ stamina: { target: 'as high as affordable', priority: 6, note: 'Race distance/fatigue matters more as pace closes up' },
+ charisma: { target: 'as high as affordable', priority: 7, note: 'Sponsor income boost' },
+ motivation: { target: 'as high as affordable', priority: 8, note: 'Training speed' },
+ },
+ budget: 'Facility level cap 80 (wiki-confirmed) - push facilities alongside driver quality, TD OA cap here is 120 (higher than driver cap).',
+ },
+ Elite: {
+ targetOA: { min: 95, max: 110 },
+ attributes: {
+ concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
+ experience: { target: 'as high as affordable', priority: 2, note: 'Strategy/tyre management/setup precision' },
+ techInsight: { target: 'as high as affordable', priority: 3, note: 'Setup precision, margin of acceptance' },
+ talent: { target: 'as high as affordable', priority: 4, note: 'Raw speed - decisive at the top end' },
+ aggressiveness:{ target: 'track-dependent', priority: 5, note: 'Higher risk tolerance viable with a stronger car/TD' },
+ stamina: { target: 'as high as affordable', priority: 6, note: 'Race distance/fatigue matters more as pace closes up' },
+ charisma: { target: 'as high as affordable', priority: 7, note: 'Sponsor income boost' },
+ motivation: { target: 'as high as affordable', priority: 8, note: 'Training speed' },
+ },
+ budget: 'Endgame - maximize everything affordable. No practical facility cap.',
+ },
+ },
+
+ // ============================================================
+ // TD SELECTION ADVICE (Pro/Master/Elite only - TDs unavailable below Pro)
+ // ============================================================
+ // Added 2026-07-27, sourced from the official GPRO wiki (wiki.gpro.net/index.php/
+ // Technical_Director): TD OA caps per league are explicitly confirmed there (Pro 90, Master 120 -
+ // note this is HIGHER than the Master driver cap of 100, Elite has no stated cap in that source).
+ // Skill priority order is based on the wiki's own direct quotes: "leadership skill lifts
+ // everything" (multiplier over all other skills) and "Pit Coordination affects the time it takes
+ // for your pit staff to service your car" (direct, measurable pit-time effect) - both explicitly
+ // described, so ranked above the R&D skills (Aerodynamics/Mechanical/Electronics), which the wiki
+ // only says "affect the setup of your car" without specifying relative importance. TDs are not
+ // trainable and don't decay with age (also wiki-confirmed) - unlike drivers, signing is a one-time
+ // decision for the life of the contract (no renewal allowed either, per the wiki).
+ tdSelection: {
+ Pro: {
+ targetOA: { min: 80, max: 90 },
+ skills: {
+ leadership: { priority: 1, note: 'Wiki: "acts as a multiplier, the leadership skill lifts everything" - highest-leverage single skill' },
+ pitCoordination: { priority: 2, note: 'Wiki: directly speeds up pit stop service time - measurable, direct effect' },
+ aerodynamics: { priority: 3, note: 'R&D skill affecting car setup - wiki doesn\'t rank relative R&D skill importance' },
+ mechanical: { priority: 3, note: 'R&D skill affecting car setup - wiki doesn\'t rank relative R&D skill importance' },
+ electronics: { priority: 3, note: 'R&D skill affecting car setup - wiki doesn\'t rank relative R&D skill importance' },
+ motivation: { priority: 4, note: 'Lowest-documented-impact TD skill' },
+ },
+ budget: 'TD OA capped at 90 in Pro (wiki-confirmed) - going over risks losing the TD on relegation. No renewal possible, so budget for a full-contract commitment.',
+ },
+ Master: {
+ targetOA: { min: 90, max: 120 },
+ skills: {
+ leadership: { priority: 1, note: 'Wiki: "acts as a multiplier, the leadership skill lifts everything" - highest-leverage single skill' },
+ pitCoordination: { priority: 2, note: 'Wiki: directly speeds up pit stop service time - measurable, direct effect' },
+ aerodynamics: { priority: 3, note: 'R&D skill affecting car setup - wiki doesn\'t rank relative R&D skill importance' },
+ mechanical: { priority: 3, note: 'R&D skill affecting car setup - wiki doesn\'t rank relative R&D skill importance' },
+ electronics: { priority: 3, note: 'R&D skill affecting car setup - wiki doesn\'t rank relative R&D skill importance' },
+ motivation: { priority: 4, note: 'Lowest-documented-impact TD skill' },
+ },
+ budget: 'TD OA capped at 120 in Master (wiki-confirmed, higher than the driver cap of 100) - a strong TD is comparatively more affordable headroom here than a strong driver.',
+ },
+ Elite: {
+ targetOA: { min: 100, max: 999 },
+ skills: {
+ leadership: { priority: 1, note: 'Wiki: "acts as a multiplier, the leadership skill lifts everything" - highest-leverage single skill' },
+ pitCoordination: { priority: 2, note: 'Wiki: directly speeds up pit stop service time - measurable, direct effect' },
+ aerodynamics: { priority: 3, note: 'R&D skill affecting car setup - wiki doesn\'t rank relative R&D skill importance' },
+ mechanical: { priority: 3, note: 'R&D skill affecting car setup - wiki doesn\'t rank relative R&D skill importance' },
+ electronics: { priority: 3, note: 'R&D skill affecting car setup - wiki doesn\'t rank relative R&D skill importance' },
+ motivation: { priority: 4, note: 'Lowest-documented-impact TD skill' },
+ },
+ budget: 'No TD OA cap found for Elite in the sources checked - maximize everything affordable.',
  },
  },
 
