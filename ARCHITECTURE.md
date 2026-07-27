@@ -179,6 +179,16 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-27 — Iteration 27 (fixed: advisor panel missing on paginated market pages)
+
+Real bug: `@match https://www.gpro.net/gb/AvailDrivers.asp`/`AvailTechDirectors.asp` had no `*`
+wildcard, unlike `DriverProfile.asp*`/`TrackDetails.asp*` elsewhere in the same header - so
+Tampermonkey only ever injected the script on page 1 (`AvailDrivers.asp` with no query string).
+Any paginated URL (`AvailDrivers.asp?Page=2&MinOA=&...`) didn't match at all, so the panel simply
+never appeared - not a rendering bug, the script wasn't running there. Fixed both `@match` lines to
+use the wildcard suffix; `detectPage()` already used `.includes()` so no other code needed to
+change.
+
 ### 2026-07-27 — Iteration 26 (shortlist filtering rebuilt around real scraped attributes, not OA)
 
 User reported the OA-band shortlist from iteration 25 still showed all ~50 listed drivers. Root

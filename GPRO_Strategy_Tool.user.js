@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.5.0
+// @version 5.5.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -15,8 +15,8 @@
 // @match https://www.gpro.net/gb/Suppliers.asp
 // @match https://www.gpro.net/gb/Testing.asp
 // @match https://www.gpro.net/gb/TrainingSession.asp
-// @match https://www.gpro.net/gb/AvailDrivers.asp
-// @match https://www.gpro.net/gb/AvailTechDirectors.asp
+// @match https://www.gpro.net/gb/AvailDrivers.asp*
+// @match https://www.gpro.net/gb/AvailTechDirectors.asp*
 // @match https://app.gpro.net/*
 // @grant GM_xmlhttpRequest
 // @grant GM_getValue
