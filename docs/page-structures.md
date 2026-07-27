@@ -86,6 +86,12 @@ Same track/weather block as Qualify.asp. Additional:
 - Costs per race: `<th class="center">Staff salary: $115.730 ... Facilities maintenance: $152.650</th>`.
 - Max training level: `<p class="orange center">Your maximum level of training is currently 6</p>`.
 - Upgrade dropdowns: `<select name="slWindtunnel"|"slPitStop"|"slRDWorkshop"|"slRDDesignCenter"|"slEngineering"|"slLab"|"slCommercial">`, options carry cost in text.
+- **Only 3 of the 6 staff skills are actually trainable** (confirmed against the official GPRO wiki, wiki.gpro.net/index.php?title=Staff_and_Facilities, 2026-07-27): Concentration ($750k/session), Stress Handling ($1.2M/session), Efficiency ($1M/session). Technical Skill, Experience, and Motivation are real displayed attributes but have no purchasable training option at all - a past version of `D.staffSkills`/`D.staffPriority` incorrectly ranked all 6 as trainable, see ARCHITECTURE.md Iteration 22.
+- Facility level caps per league per the same wiki page: Rookie 20, Amateur 40, Pro 60, Master 80 (matches `gpro-data.js` `leagues[league].facilityMax` already).
+
+## TrainingSession.asp — training effect sourcing
+
+`sessionSkills`/now `D.trainingSessionEffects` (gpro-data.js) is community-sourced, not a verified GPRO formula. GPRO's own wiki (wiki.gpro.net/index.php/Driver_Training) explicitly states: "it may be that the same training will not always affect your drivers statistics in exactly the same way every time" - so a deterministic mapping was never available to source. Current up/down effects sourced from gproracers.forumotion.com/t65-driver-stats (2026-07-27): Fitness ↑Stamina ↓Motivation; Yoga ↑Concentration ↓Aggressiveness/Stamina; PR ↑Charisma ↓Concentration; Tech ↑Technical Insight; Sports Psychologist ↑Motivation; Ninja ↑Aggressiveness. Spa Resort has no community-confirmed effect found anywhere searched - left empty/unconfirmed rather than guessed at.
 
 ## Suppliers.asp
 

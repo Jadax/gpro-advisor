@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.4.5
+// @version 5.4.6
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -26,7 +26,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=4.9.0
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=4.10.0
 // @run-at document-idle
 // ==/UserScript==
 
@@ -283,7 +283,13 @@
  if (domParseFn) {
  let domData = null;
  try { domData = domParseFn(); } catch (e) { /* ignore, fall through */ }
- if (domData) return domData;
+ // Real bug: a successful live parse was returned to the caller but never persisted, so
+ // e.g. visiting Qualify.asp (which live-parses car data via parseQualifyCarDOM) never
+ // updated the stale cache the Home dashboard's freshness table reads - the dashboard kept
+ // showing "Missing"/old data even right after a page that visibly had fresh data on it.
+ // Persist every successful live parse here, same as passive capture does, so any page with
+ // a working domParseFn also doubles as a capture point for the dashboard/other pages.
+ if (domData) { setStaleData(endpoint, domData); return domData; }
  }
  const stale = getStaleData(endpoint);
  if (stale) {
@@ -671,7 +677,16 @@
  try {
  const suppliers = [];
  let active = null;
- root.querySelectorAll('#tyresuppliers .column').forEach((col) => {
+ // #tyresuppliers .column was confirmed live 2026-07-19; fall back to any .column that has
+ // both an <h2> and a "Dry performance" row if that container id ever changes, rather than
+ // silently returning null with no diagnostic - a live-markup mismatch here previously had no
+ // visible symptom other than the Home dashboard quietly saying "Missing" forever.
+ let cols = root.querySelectorAll('#tyresuppliers .column');
+ if (!cols.length) {
+ cols = Array.from(root.querySelectorAll('.column')).filter(c => c.querySelector('h2') && /Dry performance/i.test(c.textContent));
+ }
+ if (!cols.length) { console.log('[GPRO][parseTyreSuppliersDOM] no supplier columns found - page markup may have changed'); return null; }
+ cols.forEach((col) => {
  const h2 = col.querySelector('h2');
  if (!h2) return;
  const name = h2.textContent.trim();
@@ -4158,6 +4173,12 @@
  cachedCar.carAccel = car.carAccel || 0;
  cachedCar.cash = car.cash || 0;
  try { GM_setValue('gpro_cached_car', JSON.stringify(cachedCar)); } catch(e) {}
+ // Real bug: this GM key (read by getCachedCarData()/mergeWithCachedCarData()) was the ONLY
+ // place car data ever got cached - nothing ever wrote to the generic '/UpdateCar' stale slot
+ // that getDataDomOnly('/UpdateCar') and the Home dashboard's freshness table read. So "Car Data"
+ // showed Missing forever no matter how many times UpdateCar.asp/Qualify.asp were visited. Write
+ // both so the two systems agree.
+ setStaleData('/UpdateCar', cachedCar);
  }
 
  const ctrUpdateCar = getCtr();
@@ -4378,15 +4399,24 @@
  async function renderHome(forceBackground) {
  body(`<div style="${ST.loading}">Fetching all data...</div>`);
 
+ // volatility: 'session' = genuinely time-sensitive (weather forecasts drift day to day, testing
+ // stints happen repeatedly) - age-based "Stale" still means something real here.
+ // 'event' = only ever changes when a specific in-game action happens (driver/staff training,
+ // facility upgrade, car part purchase, signing a new driver/TD/supplier, wear accumulating over
+ // a completed race) - elapsed time alone tells you nothing, since nothing changes between races
+ // just by waiting. Age-decaying these to "Stale" was actively misleading: a driver profile
+ // captured 3 days ago is exactly as correct as one captured 3 minutes ago, right up until the
+ // user actually trains that driver - at which point it's revisiting the source page (which
+ // recaptures automatically) that matters, not the clock.
  const endpoints = {
- practice: { ep: '/Practice', label: 'Practice / Weather', icon: '🌤️', visit: 'Qualify.asp, Qualify2.asp, or RaceSetup.asp' },
- track: { ep: '/TrackProfile', label: 'Track Profile', icon: '🏁', visit: 'TrackDetails.asp' },
- driver: { ep: '/DriProfile', label: 'Driver Profile', icon: '👤', visit: 'DriverProfile.asp' },
- office: { ep: '/Office', label: 'Office / Tyre Supplier', icon: '🏢' },
- car: { ep: '/UpdateCar', label: 'Car Data (Wear/Levels)', icon: '🏎️', visit: 'Qualify.asp, Qualify2.asp, or UpdateCar.asp' },
- testing: { ep: '/Testing', label: 'Testing / Fuel Data', icon: '🧪', visit: 'Testing.asp' },
- suppliers: { ep: '/TyreSuppliers', label: 'Tyre Suppliers', icon: '🛞', visit: 'Suppliers.asp' },
- staff: { ep: '/StaffAndFacilities', label: 'Staff / Facilities', icon: '👷', visit: 'StaffAndFacilities.asp' },
+ practice: { ep: '/Practice', label: 'Practice / Weather', icon: '🌤️', visit: 'Qualify.asp, Qualify2.asp, or RaceSetup.asp', volatility: 'session' },
+ track: { ep: '/TrackProfile', label: 'Track Profile', icon: '🏁', visit: 'TrackDetails.asp', volatility: 'event' },
+ driver: { ep: '/DriProfile', label: 'Driver Profile', icon: '👤', visit: 'DriverProfile.asp', volatility: 'event' },
+ office: { ep: '/Office', label: 'Office / Tyre Supplier', icon: '🏢', volatility: 'event' },
+ car: { ep: '/UpdateCar', label: 'Car Data (Wear/Levels)', icon: '🏎️', visit: 'Qualify.asp, Qualify2.asp, or UpdateCar.asp', volatility: 'event' },
+ testing: { ep: '/Testing', label: 'Testing / Fuel Data', icon: '🧪', visit: 'Testing.asp', volatility: 'session' },
+ suppliers: { ep: '/TyreSuppliers', label: 'Tyre Suppliers', icon: '🛞', visit: 'Suppliers.asp', volatility: 'event' },
+ staff: { ep: '/StaffAndFacilities', label: 'Staff / Facilities', icon: '👷', visit: 'StaffAndFacilities.asp', volatility: 'event' },
  };
 
  let data = {};
@@ -4426,9 +4456,12 @@
  // data or a total miss gets flagged.
  let statusLabel, statusColor, statusBg;
  if (!ok) { statusLabel = 'Missing'; statusColor = '#ef4444'; statusBg = 'rgba(239,68,68,0.12)'; }
- else if (ageMs <= 2 * 3600 * 1000) { statusLabel = 'Fresh'; statusColor = '#10b981'; statusBg = 'rgba(16,185,129,0.12)'; }
+ else if (cfg.volatility === 'event') {
+ // No age decay - this only changes on a real in-game action, not by the clock ticking.
+ statusLabel = 'Captured'; statusColor = '#10b981'; statusBg = 'rgba(16,185,129,0.12)';
+ } else if (ageMs <= 2 * 3600 * 1000) { statusLabel = 'Fresh'; statusColor = '#10b981'; statusBg = 'rgba(16,185,129,0.12)'; }
  else { statusLabel = 'Stale'; statusColor = '#f59e0b'; statusBg = 'rgba(245,158,11,0.12)'; }
- const reason = !ok ? (errors[key] || (cfg.visit ? `No data captured yet - visit ${cfg.visit} once` : null)) : (stale ? d.__staleReason : null);
+ const reason = !ok ? (errors[key] || (cfg.visit ? `No data captured yet - visit ${cfg.visit} once` : null)) : (stale && cfg.volatility !== 'event' ? d.__staleReason : null);
  return `<tr>
  <td style="padding:6px 4px;color:#d1d5db;font-size:11px;white-space:nowrap;">${cfg.icon} ${cfg.label}</td>
  <td style="padding:6px 4px;color:#6b7280;font-size:10px;white-space:nowrap;">${time ? formatRelativeTime(time) : '—'}</td>
@@ -4437,6 +4470,7 @@
  }).join('');
  h += mkSection('Data Freshness',
  `<div style="font-size:10px;color:#9ca3af;margin-bottom:8px;">Fetched ${Object.keys(data).length}/${Object.keys(endpoints).length} endpoints in ${Date.now() - startTime}ms</div>` +
+ `<div style="font-size:9px;color:#6b7280;margin-bottom:6px;">"Captured" rows (Track/Driver/Office/Car/Suppliers/Staff) don't age by the clock - they only change when you train, upgrade, sign, or the wear from a race lands, not by waiting. "Fresh"/"Stale" (Weather, Testing) are genuinely time-sensitive and do decay.</div>` +
  `<table style="width:100%;border-collapse:collapse;">
  <thead><tr style="border-bottom:1px solid #1f2937;">
  <th style="text-align:left;padding:4px;font-size:9px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Data</th>
@@ -4532,12 +4566,12 @@
  // STAFF & FACILITIES IDEAL LEVELS
  // Canonical data lives in gpro-data.js (staffSkills/facilityTargetsData/carIdealLevels) - not duplicated here.
  const STAFF_SKILLS = D.staffSkills || [
- { key: 'technicalSkill', label: 'Technical Skill', priority: 1, weight: 'High' },
- { key: 'concentration', label: 'Concentration', priority: 2, weight: 'High' },
- { key: 'efficiency', label: 'Efficiency', priority: 3, weight: 'Medium' },
- { key: 'experience', label: 'Experience', priority: 4, weight: 'Medium' },
- { key: 'stressHandling', label: 'Stress Handling', priority: 5, weight: 'Low' },
- { key: 'motivation', label: 'Motivation', priority: 6, weight: 'Low' },
+ { key: 'concentration', label: 'Concentration', priority: 1, trainable: true, weight: 'High' },
+ { key: 'stressHandling', label: 'Stress Handling', priority: 2, trainable: true, weight: 'High' },
+ { key: 'efficiency', label: 'Efficiency', priority: 3, trainable: true, weight: 'Medium' },
+ { key: 'technicalSkill', label: 'Technical Skill', priority: 4, trainable: false, weight: 'Not purchasable via training' },
+ { key: 'experience', label: 'Experience', priority: 5, trainable: false, weight: 'Not purchasable via training' },
+ { key: 'motivation', label: 'Motivation', priority: 6, trainable: false, weight: 'Not purchasable via training' },
  ];
  const FACILITY_TARGETS = D.facilityTargetsData || [
  { key: 'pitstopTrainingCenter', label: 'Pitstop Training Center', targetLvl: 20, priority: 1, note: 'Reduces pitstop time' },
@@ -4653,26 +4687,32 @@
  const avgFacLevel = facilities.reduce((a, f) => a + (parseInt(staff[f.key]) || 0), 0) / facilities.length;
  const maxTraining = Math.floor(avgFacLevel);
 
- // Training recommendations - order by the league's real priority list when we have one
- // (matters mainly for Rookie, which trains fewer skills than the rest; Amateur/Pro/Master/Elite
- // all share the same 6-skill priority order as STAFF_SKILLS already had).
- const orderedStaffSkills = leaguePriorityList
+ // Training recommendations - order by the league's real priority list when we have one.
+ // Real bug fixed 2026-07-27 (confirmed against the official GPRO wiki,
+ // wiki.gpro.net/index.php?title=Staff_and_Facilities): only Concentration/Stress Handling/
+ // Efficiency are actually purchasable training - Technical Skill/Experience/Motivation have no
+ // training-session option at all, so they're filtered out here instead of being recommended as
+ // if trainable. Same priority order across every league (training is capped by average facility
+ // level, not by league directly) - Concentration first per community consensus on pit/strategy
+ // error impact, Stress Handling second, Efficiency third.
+ const orderedStaffSkills = (leaguePriorityList
  ? leaguePriorityList.map(label => STAFF_SKILLS.find(sk => sk.label === label)).filter(Boolean)
- : STAFF_SKILLS;
+ : STAFF_SKILLS).filter(s => s.trainable !== false);
  let trainHtml = '';
  orderedStaffSkills.forEach(s => {
  const val = parseInt(staff[s.key]) || 0;
  const isMaxed = val >= maxTraining;
  const status = isMaxed ? '✅ MAXED' : `Training to ${maxTraining}... (${maxTraining - val} more)`;
  const color = isMaxed ? '#10b981' : '#f59e0b';
+ const costStr = s.cost ? ` — $${s.cost.toLocaleString()}/session` : '';
  trainHtml += `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid #1f2937;font-size:11px;">
  <span style="width:4px;height:4px;border-radius:50%;background:${color};flex-shrink:0;"></span>
- <span style="width:110px;color:#d1d5db;">${s.label}</span>
+ <span style="width:110px;color:#d1d5db;">${s.label}${costStr}</span>
  <span style="color:${color};flex:1;font-weight:600;">${status}</span>
  </div>`;
  });
  h += mkSection('Training Priority', trainHtml +
- `<span style="font-size:9px;color:#6b7280;">Train in priority order. Max training level = average of facility levels (currently ${maxTraining}).</span>`);
+ `<span style="font-size:9px;color:#6b7280;">Only Concentration/Stress Handling/Efficiency are actually purchasable training (source: <a href="https://wiki.gpro.net/index.php?title=Staff_and_Facilities" target="_blank" style="color:#60a5fa;">GPRO Wiki</a>) - Technical Skill/Experience/Motivation aren't trainable at all, shown in Staff Skills above for reference only. Max training level = average of facility levels (currently ${maxTraining}).</span>`);
 
  // D.facilityTargets[league] is real per-league data (flat label->targetLevel), matched via
  // each facility's own `label` since that table has no `key` field. Falls back to
@@ -4710,7 +4750,7 @@
  // RENDER: TRAINING SESSION (TrainingSession.asp)
  // ============================================================
  // Parses driver skills, contract, training sessions from DOM and shows training advice.
- function renderTraining() {
+ function renderTraining(league) {
  const data = parseTrainingSessionDOM(document);
  if (!data) {
  body(mkRec('No training data found. Make sure you are on TrainingSession.asp.', 'warn') +
@@ -4769,52 +4809,70 @@
  });
  if (skillsHtml) h += mkSection('Skills', skillsHtml);
 
+ // Session-to-skill mapping - was previously this project's own unsourced guess. Replaced
+ // 2026-07-27 with D.trainingSessionEffects (gpro-data.js), sourced from a community reference
+ // (gproracers.forumotion.com/t65-driver-stats) with up/down directions instead of a flat list -
+ // GPRO's own wiki says the exact effect isn't perfectly deterministic session-to-session, so this
+ // is presented as community consensus, not a verified formula, and cited as such below.
+ const sessionEffects = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.trainingSessionEffects) || {};
+
  // Training sessions + recommendations
  if (data.sessions.length) {
- // Session-to-skill mapping (known GPRO training effects)
- const sessionSkills = {
- 'fitness': ['stamina', 'aggressiveness'],
- 'yoga': ['concentration', 'stamina'],
- 'pr': ['charisma', 'motivation'],
- 'tech': ['techInsight', 'experience'],
- 'sportspsychologist': ['concentration', 'motivation', 'talent'],
- 'ninja': ['aggressiveness', 'experience'],
- 'spa': ['stamina', 'charisma', 'motivation'],
- };
  let sessHtml = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:10px;">';
- sessHtml += '<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Session</td><td style="text-align:center;">Cost</td><td style="padding:3px;">Affects</td></tr>';
+ sessHtml += '<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Session</td><td style="text-align:center;">Cost</td><td style="padding:3px;">Reported effect</td></tr>';
  data.sessions.forEach(s => {
- const affects = sessionSkills[s.id] || [];
- const affectsStr = affects.map(a => skillLabels[a] || a).join(', ') || '—';
- sessHtml += `<tr><td style="padding:3px;color:#d1d5db;">${s.label}</td><td style="text-align:center;color:#9ca3af;">$${s.cost.toLocaleString()}</td><td style="padding:3px;color:#6b7280;font-size:9px;">${affectsStr}</td></tr>`;
+ const eff = sessionEffects[s.id];
+ let effectStr = 'Unconfirmed';
+ if (eff) {
+ const upStr = eff.up.map(a => skillLabels[a] || a).join(', ');
+ const downStr = eff.down.map(a => skillLabels[a] || a).join(', ');
+ effectStr = [upStr ? `↑ ${upStr}` : '', downStr ? `↓ ${downStr}` : ''].filter(Boolean).join(', ') || 'Unconfirmed';
+ }
+ sessHtml += `<tr><td style="padding:3px;color:#d1d5db;">${s.label}</td><td style="text-align:center;color:#9ca3af;">$${s.cost.toLocaleString()}</td><td style="padding:3px;color:#6b7280;font-size:9px;">${effectStr}</td></tr>`;
  });
  sessHtml += '</table></div>';
- h += mkSection('Available Training', sessHtml);
+ h += mkSection('Available Training',
+ sessHtml + `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Community-reported effects (source: <a href="https://gproracers.forumotion.com/t65-driver-stats" target="_blank" style="color:#60a5fa;">gproracers.forumotion.com</a>), not a verified formula - GPRO's own wiki says the exact effect isn't perfectly consistent session to session.</div>`);
  }
 
- // Training recommendations — map weakest skills to best session
+ // Training recommendations — map weakest skills to best session, weighted by which attributes
+ // actually matter at this driver's league (D.driverAttributeLeaguePriority) instead of pure
+ // raw-lowest-value, per the same community guide - e.g. Talent is untrainable and mostly
+ // irrelevant to flag for a Rookie driver even if it's numerically their lowest stat.
+ const leagueAttrPriority = league && typeof GPRO_DATA !== 'undefined' && GPRO_DATA.driverAttributeLeaguePriority
+ && GPRO_DATA.driverAttributeLeaguePriority[league];
  const skillValues = skillOrder.map(sk => ({ key: sk, label: skillLabels[sk], val: data.skills[sk] || 0 })).filter(s => s.val > 0);
  if (skillValues.length) {
- const sorted = [...skillValues].sort((a, b) => a.val - b.val);
+ const sorted = [...skillValues].sort((a, b) => {
+ if (leagueAttrPriority) {
+ const pa = leagueAttrPriority.indexOf(a.key), pb = leagueAttrPriority.indexOf(b.key);
+ // League-relevant attributes sort first (by relevance rank), then by raw value within
+ // that group; anything not in the league's priority list falls back after, by raw value.
+ if (pa !== -1 || pb !== -1) return (pa === -1 ? 99 : pa) - (pb === -1 ? 99 : pb);
+ }
+ return a.val - b.val;
+ });
  const weakest = sorted.slice(0, 3);
  let recHtml = '<div style="font-size:10px;color:#d1d5db;">';
- recHtml += '<div style="color:#f59e0b;font-weight:600;margin-bottom:4px;">Weakest skills (biggest training impact):</div>';
+ recHtml += `<div style="color:#f59e0b;font-weight:600;margin-bottom:4px;">${leagueAttrPriority ? `Priority skills for ${league} league` : 'Weakest skills (biggest training impact)'}:</div>`;
  weakest.forEach((s, i) => {
- // Find best session for this skill
+ // Find best (cheapest) session that reports increasing this skill
  let bestSession = null;
  let bestCost = Infinity;
  data.sessions.forEach(sess => {
- const affects = sessionSkills[sess.id] || [];
- if (affects.includes(s.key) && sess.cost < bestCost) {
+ const eff = sessionEffects[sess.id];
+ if (eff && eff.up.includes(s.key) && sess.cost < bestCost) {
  bestSession = sess;
  bestCost = sess.cost;
  }
  });
- const rec = bestSession ? ` → ${bestSession.label} ($${bestSession.cost.toLocaleString()})` : '';
+ const tradeoffSess = bestSession && sessionEffects[bestSession.id];
+ const tradeoff = tradeoffSess && tradeoffSess.down.length ? ` (trade-off: ↓ ${tradeoffSess.down.map(a => skillLabels[a] || a).join(', ')})` : '';
+ const rec = bestSession ? ` → ${bestSession.label} ($${bestSession.cost.toLocaleString()})${tradeoff}` : ' → no session with a confirmed effect on this skill';
  recHtml += `<div style="padding:2px 0;">${i + 1}. <span style="color:#ef4444;font-weight:600;">${s.label}</span> — ${s.val}${rec}</div>`;
  });
  recHtml += '</div>';
- h += mkSection('Training Recommendation', recHtml);
+ h += mkSection(leagueAttrPriority ? `Training Recommendation (${league})` : 'Training Recommendation', recHtml);
  }
 
  // Budget check
@@ -4823,7 +4881,7 @@
  h += mkRec(`Salary: $${data.contract.salary.toLocaleString()} — can theoretically fund ~${canAffordSessions} most expensive sessions. Only 1 session per race.`, 'info');
  }
 
- h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Training advice is a heuristic based on weakest-first prioritization. Each training session affects skills differently — test and observe.</div>`;
+ h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Training advice is community consensus (see sources above), weighted by your league's priority attributes when your league is detected${league ? ` (currently ${league})` : ''} - not a verified GPRO formula. Each training session may not affect skills identically every time.</div>`;
 
  body(h);
  }
@@ -5044,7 +5102,8 @@
  }
  renderStaff(staff, detectLeagueFromMenu(menu));
  } else if (page === 'training') {
- renderTraining();
+ const menu = await getDataSmart('/Menu').catch(() => null);
+ renderTraining(detectLeagueFromMenu(menu));
  } else if (page === 'marketDrivers' || page === 'marketTDs') {
  renderMarketPage(page === 'marketDrivers' ? 'drivers' : 'tds');
  }

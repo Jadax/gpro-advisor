@@ -186,12 +186,18 @@ var GPRO_DATA = {
  // ============================================================
  // STAFF TRAINING PRIORITY PER LEAGUE
  // ============================================================
+ // Only the 3 actually-trainable skills belong here (see staffSkills' trainable flag above) -
+ // Technical Skill/Experience/Motivation were removed 2026-07-27, they were never purchasable.
+ // Same order for every league: Concentration first (biggest game-community-consensus impact on
+ // pitstop/strategy error reduction), Stress Handling second (pit-time consistency), Efficiency
+ // third (wear reduction) - training level is capped by average facility level regardless of
+ // league, so a lower league just hits that cap sooner, not a different priority order.
  staffPriority: {
- Rookie: ['Concentration', 'Efficiency', 'Stress Handling'],
- Amateur: ['Technical Skill', 'Concentration', 'Efficiency', 'Experience', 'Stress Handling', 'Motivation'],
- Pro: ['Technical Skill', 'Concentration', 'Efficiency', 'Experience', 'Stress Handling', 'Motivation'],
- Master: ['Technical Skill', 'Concentration', 'Efficiency', 'Experience', 'Stress Handling', 'Motivation'],
- Elite: ['Technical Skill', 'Concentration', 'Efficiency', 'Experience', 'Stress Handling', 'Motivation'],
+ Rookie: ['Concentration', 'Stress Handling', 'Efficiency'],
+ Amateur: ['Concentration', 'Stress Handling', 'Efficiency'],
+ Pro: ['Concentration', 'Stress Handling', 'Efficiency'],
+ Master: ['Concentration', 'Stress Handling', 'Efficiency'],
+ Elite: ['Concentration', 'Stress Handling', 'Efficiency'],
  },
 
  // ============================================================
@@ -1034,14 +1040,55 @@ var GPRO_DATA = {
  // ============================================================
  // STAFF SKILLS (rendering data)
  // ============================================================
+ // Real bug fixed 2026-07-27: this used to rank all 6 attributes as if all were trainable
+ // "priorities". Confirmed against the official GPRO wiki (wiki.gpro.net/index.php?title=
+ // Staff_and_Facilities) that only Concentration, Stress Handling, and Efficiency are actually
+ // purchasable training - Technical Skill/Experience/Motivation are real attributes shown on the
+ // page but have no training-session purchase option at all, so recommending "train Technical
+ // Skill first" was advice for something the player literally cannot buy. `trainable: true/false`
+ // added so the UI can separate "here's your staff overview" from "here's what you can actually
+ // train, in order". Cost figures are the wiki's confirmed per-session prices.
  staffSkills: [
- { key: 'technicalSkill', label: 'Technical Skill', priority: 1, weight: 'High - affects car setup quality' },
- { key: 'concentration', label: 'Concentration', priority: 2, weight: 'High - reduces errors in pitstops & strategy' },
- { key: 'efficiency', label: 'Efficiency', priority: 3, weight: 'Medium - affects wear reduction effectiveness' },
- { key: 'experience', label: 'Experience', priority: 4, weight: 'Medium - affects pitstop speed & strategy' },
- { key: 'stressHandling', label: 'Stress Handling', priority: 5, weight: 'Low - minor effect under pressure' },
- { key: 'motivation', label: 'Motivation', priority: 6, weight: 'Low - minor performance boost' },
+ { key: 'concentration', label: 'Concentration', priority: 1, trainable: true, cost: 750000, weight: 'High - reduces errors in pitstops & strategy' },
+ { key: 'stressHandling', label: 'Stress Handling', priority: 2, trainable: true, cost: 1200000, weight: 'High - affects pit-time consistency under pressure' },
+ { key: 'efficiency', label: 'Efficiency', priority: 3, trainable: true, cost: 1000000, weight: 'Medium - affects wear reduction effectiveness' },
+ { key: 'technicalSkill', label: 'Technical Skill', priority: 4, trainable: false, weight: 'Not purchasable via training - shown for reference only' },
+ { key: 'experience', label: 'Experience', priority: 5, trainable: false, weight: 'Not purchasable via training - shown for reference only' },
+ { key: 'motivation', label: 'Motivation', priority: 6, trainable: false, weight: 'Not purchasable via training - shown for reference only' },
  ],
+
+ // ============================================================
+ // DRIVER TRAINING SESSION EFFECTS (community-sourced, not a GPRO formula)
+ // ============================================================
+ // GPRO's own wiki (wiki.gpro.net/index.php/Driver_Training) explicitly states training effects
+ // are NOT perfectly deterministic ("the same training will not always affect your drivers
+ // statistics in exactly the same way every time") - so this can never be a verified formula, only
+ // a community-consensus direction. Sourced from gproracers.forumotion.com/t65-driver-stats
+ // (2026-07-27) - each entry lists the attribute(s) that session is reported to move and which
+ // direction. `spa` has no community source found for its effects (our old table guessed
+ // stamina/charisma/motivation with no citation) - left with an empty effects list and flagged
+ // unconfirmed rather than keeping the unsourced guess.
+ trainingSessionEffects: {
+ fitness: { up: ['stamina'], down: ['motivation'], source: 'gproracers.forumotion.com/t65-driver-stats' },
+ yoga: { up: ['concentration'], down: ['aggressiveness', 'stamina'], source: 'gproracers.forumotion.com/t65-driver-stats' },
+ pr: { up: ['charisma'], down: ['concentration'], source: 'gproracers.forumotion.com/t65-driver-stats' },
+ tech: { up: ['techInsight'], down: [], source: 'gproracers.forumotion.com/t65-driver-stats' },
+ sportspsychologist: { up: ['motivation'], down: [], source: 'gproracers.forumotion.com/t65-driver-stats' },
+ ninja: { up: ['aggressiveness'], down: [], source: 'gproracers.forumotion.com/t65-driver-stats' },
+ spa: { up: [], down: [], source: null, note: 'No community-confirmed effects found - unconfirmed, not guessed at' },
+ },
+
+ // Which driver attribute matters most per league, per the same community guide - used to weight
+ // "weakest skill" training recommendations toward what's actually relevant at that league instead
+ // of just the raw-lowest number (e.g. Talent is untrainable and only matters starting Master/Elite,
+ // so flagging it as the #1 "weakest skill" for a Rookie driver is not useful advice).
+ driverAttributeLeaguePriority: {
+ Rookie: ['concentration', 'stamina', 'experience'],
+ Amateur: ['concentration', 'stamina', 'techInsight'],
+ Pro: ['concentration', 'stamina', 'aggressiveness'],
+ Master: ['concentration', 'talent', 'stamina'],
+ Elite: ['talent', 'concentration', 'stamina'],
+ },
 
  // ============================================================
  // FACILITY TARGETS DATA (for rendering)

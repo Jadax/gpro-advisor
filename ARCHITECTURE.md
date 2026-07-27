@@ -179,6 +179,51 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-27 — Iteration 22 (Data Freshness redesign, real parsing bugs, community-sourced training/staff advice)
+
+User-reported: Data Freshness dashboard calling event-driven data "stale" when nothing had actually
+changed, tyre supplier/car data never showing as captured, a Training Advisor crash, and a request
+to base driver/staff training advice on community consensus per league rather than an internal guess.
+
+- **Data Freshness redesign**: added a `volatility` tag (`session` vs `event`) to each dashboard
+ row. Weather/Testing genuinely decay with time and keep the old Fresh/Stale age-based logic.
+ Track/Driver/Office/Car/Suppliers/Staff only change on a specific in-game action (train, upgrade,
+ sign, race wear landing) - these now show "Captured" with no age decay, plus one explanatory note
+ instead of implying the data goes bad by sitting there.
+- **Real bug: Car Data always "Missing"**: `gpro_cached_car` (written by `renderUpdateCar`) and the
+ generic `stale_api_/UpdateCar` slot (read by `getDataDomOnly`/the dashboard) were two disconnected
+ systems - nothing ever wrote to the second one. Bridged by writing both from the same place.
+- **Real bug (broader): `getDataDomOnly` threw away successful live parses.** A live DOM parse
+ (e.g. `parseQualifyCarDOM` on Qualify.asp) was returned to its caller but never persisted, so
+ visiting a page that *did* have working live data still left the dashboard showing stale/missing
+ afterward. Fixed to persist every successful live parse into the stale store, same as passive
+ capture - this was a general fix, not just a car-specific patch.
+- **Tyre supplier parsing**: `parseTyreSuppliersDOM`'s `#tyresuppliers .column` selector (confirmed
+ live 2026-07-19) couldn't be re-verified without a live session - added a fallback selector plus a
+ console warning if it ever finds zero columns, so a future markup drift is diagnosable instead of
+ silently returning null forever.
+- **Real bug: `sessionSkills is not defined` crash on the Training Advisor.** `const sessionSkills`
+ was block-scoped inside `if (data.sessions.length) {...}` but referenced again in a separate,
+ unguarded block below - a driver with real skill data but zero available sessions hit a
+ ReferenceError. Fixed by hoisting the declaration (now replaced entirely, see below).
+- **Real bug: Staff Training Priority recommended training un-trainable attributes.** Confirmed
+ against the official GPRO wiki (wiki.gpro.net/index.php?title=Staff_and_Facilities) that only
+ Concentration/Stress Handling/Efficiency are purchasable training - Technical Skill/Experience/
+ Motivation have no training-session option at all. `D.staffSkills`/`D.staffPriority` previously
+ ranked all 6 as if trainable. Fixed: `trainable: true/false` flag added, `staffPriority` per league
+ now only lists the 3 real options (same order across leagues - training is capped by average
+ facility level, not by league directly), UI shows the wiki citation.
+- **Driver training advice replaced with community-sourced data.** The old `sessionSkills` mapping
+ was this project's own unverified guess. GPRO's own wiki explicitly says training effects aren't
+ perfectly deterministic session-to-session, so a verified formula was never possible - replaced
+ with `D.trainingSessionEffects` (up/down per session, sourced from
+ gproracers.forumotion.com/t65-driver-stats, cited in the UI) and `D.driverAttributeLeaguePriority`
+ (which attribute matters most per league, same source) so the "weakest skill" recommendation is
+ now weighted by league relevance instead of pure raw-lowest-value (e.g. Talent is untrainable and
+ barely relevant below Master/Elite, so flagging it as priority #1 for a Rookie was bad advice even
+ when numerically true). Spa Resort's effects had no community source found - left unconfirmed
+ rather than keeping the old unsourced guess.
+
 ### 2026-07-19 — Iteration 21 (DOM-only architecture push + real tyre/fuel conflict bug fixed)
 
 User-reported, screenshot-illustrated bug plus an explicit architecture request, both real and both
