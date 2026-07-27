@@ -179,6 +179,30 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-27 — Iteration 25 (real bugs found in review: wrong wiki-sourced OA caps + an overly-strict filter)
+
+User reported the Driver Market shortlist said "No listings currently match OA 80-80" for Amateur
+and knew from live gameplay that Amateur's actual cap is 110, not 80 - two real bugs, not one:
+
+1. **The wiki-sourced driver OA caps from iteration 23 were wrong.** Re-checked the source: the
+ GPRO wiki's `Driver_Contract` page states its 80/90/100/110 figures apply only under a *negative
+ cash balance* penalty scenario, not as the normal league caps - a nuance missed the first time.
+ A second wiki excerpt gave the same numbers with no such caveat, and a forum thread title
+ ("New Season Maximum Driver Overall Levels for groups") implies these caps are revised
+ seasonally anyway, so the wiki page may simply be stale. Rather than guess a third time, asked
+ the user directly (they're actively playing right now) - real current caps confirmed: **Rookie
+ 85, Amateur 110, Pro 135, Master 160, Elite uncapped**. Updated `D.leagues[league].driverMaxOA`
+ and `D.driverSelection[league].targetOA` for all 5 leagues. TD OA caps (Pro 90/Master 120) came
+ from the same wiki and were NOT re-verified - flagged with a caution comment in gpro-data.js and
+ a visible UI warning on the TD "what to look for" section, since the driver-cap mistake is direct
+ evidence this wiki can't be trusted blindly for numeric caps.
+2. **Separate, structural bug**: `targetOA` for Amateur (and originally the same pattern would have
+ applied to any league) was a single point (`min: 80, max: 80`) rather than a real band, so
+ `filterShortlist`'s `oa >= min && oa <= max` check required an EXACT OA match against a ~20-row
+ market listing - which will rarely happen regardless of whether the cap number itself was
+ correct. Every league's `targetOA` is now a real band (a reasonable width below the real cap,
+ disclosed as this tool's own heuristic, not sourced) so the shortlist can actually return results.
+
 ### 2026-07-27 — Iteration 24 (per-candidate full-stat scraping for the Driver/TD Market shortlist)
 
 User request: complete TODO 0e - the shortlist from iteration 23 could only filter on OA/salary

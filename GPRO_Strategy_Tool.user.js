@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.4.8
+// @version 5.4.9
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -26,7 +26,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=4.12.0
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=4.13.0
 // @run-at document-idle
 // ==/UserScript==
 
@@ -4986,7 +4986,7 @@
  tds.length ? mkShortlistSection(tds, 'tdId', tdSel && tdSel.targetOA, marketCash, league, 'TD', 'tds') : mkRec(emptyReason, 'warn'),
  'gpro-sec-market-tds');
  if (tdSel) {
- let tdSelHtml = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Target OA: ${tdSel.targetOA.min}-${tdSel.targetOA.max}</div>`;
+ let tdSelHtml = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Target OA: ${tdSel.targetOA.min}-${tdSel.targetOA.max}</div><div style="font-size:9px;color:#f59e0b;margin-bottom:4px;">⚠️ TD OA caps are wiki-sourced and NOT independently confirmed - this project's driver OA caps came from the same wiki and turned out to be wrong (corrected 2026-07-27 via live in-game confirmation). Verify against what the game actually lets you sign before relying on this.</div>`;
  Object.entries(tdSel.skills).sort((a, b) => a[1].priority - b[1].priority).forEach(([skill, info]) => {
  tdSelHtml += mkRow(`${info.priority}. ${skill}`, '');
  tdSelHtml += `<div style="font-size:9px;color:#6b7280;padding-left:8px;margin-bottom:2px;">${info.note}</div>`;
@@ -5718,7 +5718,7 @@
  // - Pro/Master/Elite only, TDs are unavailable below Pro.
  const tdSel = D.tdSelection && D.tdSelection[league];
  if (tdSel) {
- let tdSelHtml = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Target OA: ${tdSel.targetOA.min}-${tdSel.targetOA.max}</div>`;
+ let tdSelHtml = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Target OA: ${tdSel.targetOA.min}-${tdSel.targetOA.max}</div><div style="font-size:9px;color:#f59e0b;margin-bottom:4px;">⚠️ TD OA caps are wiki-sourced and NOT independently confirmed - this project's driver OA caps came from the same wiki and turned out to be wrong (corrected 2026-07-27 via live in-game confirmation). Verify against what the game actually lets you sign before relying on this.</div>`;
  Object.entries(tdSel.skills).sort((a, b) => a[1].priority - b[1].priority).forEach(([skill, info]) => {
  tdSelHtml += mkRow(`${info.priority}. ${skill}`, '');
  tdSelHtml += `<div style="font-size:9px;color:#6b7280;padding-left:8px;margin-bottom:2px;">${info.note}</div>`;

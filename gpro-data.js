@@ -6,6 +6,12 @@ var GPRO_DATA = {
  // ============================================================
  // LEAGUE STRUCTURE & LIMITS
  // ============================================================
+ // driverMaxOA corrected 2026-07-27 - a prior pass sourced these from the GPRO wiki
+ // (wiki.gpro.net/index.php/Driver_Contract), but that page's numbers turned out to be wrong
+ // (likely stale - GPRO revises these ~seasonally per an official forum thread titled "New Season
+ // Maximum Driver Overall Levels for groups", which is login-gated and couldn't be fetched here).
+ // User caught the error live in-game (Amateur showed 80, actual current cap is 110) and provided
+ // the real current values directly - these are now the authoritative source, not a wiki guess.
  leagues: {
  Rookie: {
  driverMaxOA: 85,
@@ -17,7 +23,7 @@ var GPRO_DATA = {
  description: 'Don\'t spend money unless you have to. Save for promotion.',
  },
  Amateur: {
- driverMaxOA: 80,
+ driverMaxOA: 110,
  facilityMax: 40,
  carPartMax: 9,
  startMoney: null, // carries over
@@ -26,7 +32,7 @@ var GPRO_DATA = {
  description: 'Balanced car build. Start investing in facilities and testing.',
  },
  Pro: {
- driverMaxOA: 90,
+ driverMaxOA: 135,
  facilityMax: 60,
  carPartMax: 9,
  startMoney: null,
@@ -35,7 +41,7 @@ var GPRO_DATA = {
  description: 'TD becomes available. Higher driver OA cap.',
  },
  Master: {
- driverMaxOA: 100,
+ driverMaxOA: 160,
  facilityMax: 80,
  carPartMax: 9,
  startMoney: null,
@@ -44,7 +50,7 @@ var GPRO_DATA = {
  description: 'Push facilities higher. Maximize CCP conversion.',
  },
  Elite: {
- driverMaxOA: 110,
+ driverMaxOA: 999, // no cap, per user confirmation
  facilityMax: 999, // no practical cap
  carPartMax: 9,
  startMoney: null,
@@ -644,12 +650,17 @@ var GPRO_DATA = {
  // ============================================================
  // From established analysis
  // Target driver attributes for Rookie/Amateur:
+ // targetOA bands corrected 2026-07-27 - see the driverMaxOA comment above `leagues:` for why
+ // (wiki-sourced caps were wrong, user provided real current values: Rookie 85/Amateur 110/
+ // Pro 135/Master 160/Elite uncapped). Each band's min is this tool's own "worth shortlisting"
+ // heuristic width below the real cap (not sourced) - deliberately a RANGE, not a single point
+ // equal to the cap, since requiring an exact-OA match against a ~20-row market listing was too
+ // strict to ever return results (the original bug report: "No listings match OA 80-80").
  driverSelection: {
  Rookie: {
  // Rookie: Car resets each season. Focus on cheap, balanced driver.
- // Target OA: 80-85 (max allowed)
  // Priority: Concentration > Talent > Experience > Tech Insight
- targetOA: { min: 80, max: 85 },
+ targetOA: { min: 75, max: 85 },
  attributes: {
  concentration: { target: '200+', priority: 1, note: 'Most impactful for race consistency and error reduction' },
  talent: { target: '60-150', priority: 2, note: 'Affects raw speed; 150+ is ideal but expensive' },
@@ -664,9 +675,8 @@ var GPRO_DATA = {
  },
  Amateur: {
  // Amateur: Car carries over. Invest in driver + car balance.
- // Target OA: 80 (cap, confirmed official GPRO wiki - wiki.gpro.net/index.php/Driver_Contract)
  // Priority: Concentration > Experience > Tech Insight > Talent
- targetOA: { min: 80, max: 80 },
+ targetOA: { min: 90, max: 110 },
  attributes: {
  concentration: { target: '200+', priority: 1, note: 'Reduces errors, affects tyre wear and fuel consumption' },
  experience: { target: '150-200', priority: 2, note: 'Affects strategy, tyre management, and setup precision' },
@@ -679,14 +689,13 @@ var GPRO_DATA = {
  },
  budget: 'Balance car upgrades (L5-7) with driver development. Never go into debt.',
  },
- // Pro/Master/Elite added 2026-07-27. OA caps are confirmed (official GPRO wiki,
- // wiki.gpro.net/index.php/Driver_Contract: Pro 90, Master 100, Elite 110) - these are real, not
- // guessed. Attribute PRIORITY ORDER is the same logical extension of Rookie/Amateur's established
- // order (concentration/consistency stays the top lever at every level), but no community source
- // was found giving precise numeric attribute targets this far up the ladder, unlike Rookie/Amateur
- // - so those are left as "as high as affordable" rather than inventing specific thresholds.
+ // Pro/Master/Elite added 2026-07-27, OA bands corrected same date (see note above). Attribute
+ // PRIORITY ORDER is the same logical extension of Rookie/Amateur's established order
+ // (concentration/consistency stays the top lever at every level), but no community source was
+ // found giving precise numeric attribute targets this far up the ladder, unlike Rookie/Amateur -
+ // so those are left as "as high as affordable" rather than inventing specific thresholds.
  Pro: {
- targetOA: { min: 85, max: 90 },
+ targetOA: { min: 110, max: 135 },
  attributes: {
  concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
  experience: { target: 'as high as affordable', priority: 2, note: 'Strategy/tyre management/setup precision' },
@@ -697,10 +706,10 @@ var GPRO_DATA = {
  charisma: { target: 'as high as affordable', priority: 7, note: 'Sponsor income boost' },
  motivation: { target: 'as high as affordable', priority: 8, note: 'Training speed' },
  },
- budget: 'TD becomes available (max OA 90 per wiki) - budget for both driver and TD, don\'t overspend on either alone.',
+ budget: 'TD becomes available - budget for both driver and TD, don\'t overspend on either alone.',
  },
  Master: {
- targetOA: { min: 90, max: 100 },
+ targetOA: { min: 130, max: 160 },
  attributes: {
  concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
  experience: { target: 'as high as affordable', priority: 2, note: 'Strategy/tyre management/setup precision' },
@@ -711,10 +720,10 @@ var GPRO_DATA = {
  charisma: { target: 'as high as affordable', priority: 7, note: 'Sponsor income boost' },
  motivation: { target: 'as high as affordable', priority: 8, note: 'Training speed' },
  },
- budget: 'Facility level cap 80 (wiki-confirmed) - push facilities alongside driver quality, TD OA cap here is 120 (higher than driver cap).',
+ budget: 'Facility level cap 80 - push facilities alongside driver quality.',
  },
  Elite: {
- targetOA: { min: 95, max: 110 },
+ targetOA: { min: 150, max: 999 },
  attributes: {
  concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
  experience: { target: 'as high as affordable', priority: 2, note: 'Strategy/tyre management/setup precision' },
@@ -725,7 +734,7 @@ var GPRO_DATA = {
  charisma: { target: 'as high as affordable', priority: 7, note: 'Sponsor income boost' },
  motivation: { target: 'as high as affordable', priority: 8, note: 'Training speed' },
  },
- budget: 'Endgame - maximize everything affordable. No practical facility cap.',
+ budget: 'Endgame - maximize everything affordable. No practical facility cap, no driver OA cap.',
  },
  },
 
@@ -733,15 +742,19 @@ var GPRO_DATA = {
  // TD SELECTION ADVICE (Pro/Master/Elite only - TDs unavailable below Pro)
  // ============================================================
  // Added 2026-07-27, sourced from the official GPRO wiki (wiki.gpro.net/index.php/
- // Technical_Director): TD OA caps per league are explicitly confirmed there (Pro 90, Master 120 -
- // note this is HIGHER than the Master driver cap of 100, Elite has no stated cap in that source).
- // Skill priority order is based on the wiki's own direct quotes: "leadership skill lifts
- // everything" (multiplier over all other skills) and "Pit Coordination affects the time it takes
- // for your pit staff to service your car" (direct, measurable pit-time effect) - both explicitly
- // described, so ranked above the R&D skills (Aerodynamics/Mechanical/Electronics), which the wiki
- // only says "affect the setup of your car" without specifying relative importance. TDs are not
- // trainable and don't decay with age (also wiki-confirmed) - unlike drivers, signing is a one-time
- // decision for the life of the contract (no renewal allowed either, per the wiki).
+ // Technical_Director): TD OA caps per league as stated there (Pro 90, Master 120, Elite no stated
+ // cap). **CAUTION - NOT independently confirmed**: this project's driver OA caps came from the
+ // same wiki and turned out to be wrong/stale (real Amateur driver cap is 110, not the wiki's 80 -
+ // corrected 2026-07-27 from live user confirmation). The wiki may revise these numbers seasonally
+ // (see the driverMaxOA comment above `leagues:`), so treat these TD figures as unverified against
+ // the current season until confirmed the same way the driver caps were. Skill priority order is
+ // based on the wiki's own direct quotes: "leadership skill lifts everything" (multiplier over all
+ // other skills) and "Pit Coordination affects the time it takes for your pit staff to service your
+ // car" (direct, measurable pit-time effect) - both explicitly described, so ranked above the R&D
+ // skills (Aerodynamics/Mechanics/Electronics), which the wiki only says "affect the setup of your
+ // car" without specifying relative importance. TDs are not trainable and don't decay with age
+ // (also wiki-confirmed) - unlike drivers, signing is a one-time decision for the life of the
+ // contract (no renewal allowed either, per the wiki).
  tdSelection: {
  Pro: {
  targetOA: { min: 80, max: 90 },
