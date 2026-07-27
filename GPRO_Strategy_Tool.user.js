@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.4.7
+// @version 5.4.8
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -26,7 +26,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=4.11.0
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=4.12.0
 // @run-at document-idle
 // ==/UserScript==
 
@@ -636,6 +636,48 @@
  const h1 = root.querySelector('h1.block');
  const driverName = h1 ? h1.textContent.replace(/Driver profile:/i, '').trim() : '';
  return { concentration: conc, talent, aggressiveness: aggr, experience, techInsight: techI, stamina, charisma, motivation, weight, driverName };
+ } catch (e) { return null; }
+ }
+
+ // TD profile page parser - UNVERIFIED against a real live page (no TD profile page has ever been
+ // captured in this project, unlike DriverProfile.asp). The exact page URL isn't guessed either -
+ // callers must pass the real href captured from the TD market table's own link
+ // (parseAvailListDOM's row.profileHref) rather than a hardcoded path. Field names/labels here
+ // (Leadership, Mechanics, Electronics, Aerodynamics, Pit Coordination, Motivation, Experience,
+ // Overall, Age) are the exact API field names confirmed in gpro-public-api.yml's
+ // TDProfileResponse/SortTD enum, tried as both th/td label text AND element ids (mirroring
+ // parseDriverProfileDOM's id-based lookup) since we don't know which pattern the real page uses.
+ function parseTdProfileDOM(root) {
+ root = root || document;
+ try {
+ const out = {};
+ const labelMap = {
+ 'overall': 'overall', 'leadership': 'leadership', 'mechanics': 'mechanics', 'mechanical': 'mechanics',
+ 'electronics': 'electronics', 'aerodynamics': 'aerodynamics', 'experience': 'experience', 'exp': 'experience',
+ 'pitcoordination': 'pitCoord', 'pitcoord': 'pitCoord', 'pitstop': 'pitCoord',
+ 'motivation': 'motivation', 'age': 'age',
+ };
+ root.querySelectorAll('th').forEach((th) => {
+ const label = th.textContent.replace(/:/g, '').replace(/\s+/g, '').toLowerCase();
+ const td = th.parentElement.querySelector('td');
+ if (!td || !labelMap[label]) return;
+ const v = parseInt((td.textContent || '').replace(/[^\d]/g, ''));
+ if (!isNaN(v)) out[labelMap[label]] = v;
+ });
+ if (Object.keys(out).length === 0) {
+ // Fallback: try element ids the same shape as parseDriverProfileDOM's (Conc/Talent/etc)
+ const idMap = { Leadership: 'leadership', Mechanics: 'mechanics', Electronics: 'electronics', Aero: 'aerodynamics', Experience: 'experience', PitCoord: 'pitCoord', Motivation: 'motivation' };
+ Object.entries(idMap).forEach(([id, key]) => {
+ const el = root.getElementById(id);
+ if (!el) return;
+ const v = parseInt((el.textContent || '').replace(/[^\d]/g, ''));
+ if (!isNaN(v)) out[key] = v;
+ });
+ }
+ if (Object.keys(out).length === 0) { console.log('[GPRO][parseTdProfileDOM] no recognizable fields found - page markup unconfirmed'); return null; }
+ const h1 = root.querySelector('h1.block');
+ out.tdName = h1 ? h1.textContent.replace(/technical director profile:/i, '').trim() : '';
+ return out;
  } catch (e) { return null; }
  }
 
@@ -4909,13 +4951,16 @@
  const emptyReason = 'Could not read the market table on this page - if this just loaded, wait a moment and click Retry.';
  const cachedCarForMarket = getCachedCarData();
  const marketCash = cachedCarForMarket && cachedCarForMarket.cash > 0 ? cachedCarForMarket.cash : null;
+ // Hoisted out of the if/else below so the post-body() wiring section can reference whichever
+ // one applies without a ReferenceError (const inside each branch would go out of scope).
+ let sel = null, tdSel = null;
 
  if (type === 'drivers') {
  const drivers = domRows || [];
  h += mkDecisionBoard([{ id: 'gpro-sec-market-drivers', label: 'Drivers', verdict: `${drivers.length} listed`, tone: drivers.length ? 'info' : 'warn' }]);
- const sel = D.driverSelection && D.driverSelection[league];
+ sel = D.driverSelection && D.driverSelection[league];
  h += mkSection(`Available Drivers (${drivers.length})`,
- drivers.length ? mkShortlistSection(drivers, 'driId', sel && sel.targetOA, marketCash, league, 'driver') : mkRec(emptyReason, 'warn'),
+ drivers.length ? mkShortlistSection(drivers, 'driId', sel && sel.targetOA, marketCash, league, 'driver', 'drivers') : mkRec(emptyReason, 'warn'),
  'gpro-sec-market-drivers');
 
  // Driver selection criteria
@@ -4936,9 +4981,9 @@
  } else {
  const tds = domRows || [];
  h += mkDecisionBoard([{ id: 'gpro-sec-market-tds', label: 'TDs', verdict: `${tds.length} listed`, tone: tds.length ? 'info' : 'warn' }]);
- const tdSel = D.tdSelection && D.tdSelection[league];
+ tdSel = D.tdSelection && D.tdSelection[league];
  h += mkSection(`Available Technical Directors (${tds.length})`,
- tds.length ? mkShortlistSection(tds, 'tdId', tdSel && tdSel.targetOA, marketCash, league, 'TD') : mkRec(emptyReason, 'warn'),
+ tds.length ? mkShortlistSection(tds, 'tdId', tdSel && tdSel.targetOA, marketCash, league, 'TD', 'tds') : mkRec(emptyReason, 'warn'),
  'gpro-sec-market-tds');
  if (tdSel) {
  let tdSelHtml = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Target OA: ${tdSel.targetOA.min}-${tdSel.targetOA.max}</div>`;
@@ -4956,6 +5001,11 @@
  h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Value = OA per $1M salary. 🕐 = retiring soon. Skill/range filters are GPRO Supporters-only via the API.</div>`;
  body(h);
  wireDecisionBoard();
+ if (type === 'drivers' && sel) {
+ wireScanFullStatsButton('drivers', 'driId', filterShortlist(domRows || [], sel.targetOA, marketCash).shortlist, Object.entries(sel.attributes));
+ } else if (type === 'tds' && tdSel) {
+ wireScanFullStatsButton('tds', 'tdId', filterShortlist(domRows || [], tdSel.targetOA, marketCash).shortlist, Object.entries(tdSel.skills));
+ }
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad'));
  }
@@ -5445,6 +5495,10 @@
  row.signFee = cellText(idxSignFee);
  row.salary = cellText(idxSalary);
  row.offers = cellText(idxOffers);
+ // Captured so full-stat scraping can discover the real TD profile page URL from the live
+ // link itself instead of guessing it (driver profile URL - DriverProfile.asp - is already
+ // confirmed elsewhere in this file; TD's was not, until now).
+ row.profileHref = link.getAttribute('href');
  rows.push(row);
  });
  return rows.length ? rows : null;
@@ -5496,7 +5550,9 @@
 
  // Renders the shortlist-first view: recommended rows highlighted up top with the criteria used,
  // full unfiltered list collapsed below for anyone who wants to browse everything anyway.
- function mkShortlistSection(rows, idKey, targetOA, cash, league, cfgLabel) {
+ // sectionId ('drivers'/'tds') gives the scan button/results container unique DOM ids so both
+ // sections can coexist on the same page without colliding.
+ function mkShortlistSection(rows, idKey, targetOA, cash, league, cfgLabel, sectionId) {
  if (!rows.length) return '';
  if (!targetOA) {
  return mkMarketTable(rows, idKey) +
@@ -5506,7 +5562,14 @@
  const cashNote = cash != null ? `, sign fee ≤ $${cash.toLocaleString()} cash on hand` : ' (cash balance unknown - visit UpdateCar.asp once to enable affordability filtering)';
  let h = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Shortlist criteria: OA ${targetOA.min}-${targetOA.max} for ${league}${cashNote}</div>`;
  if (shortlist.length) {
- h += mkMarketTable(shortlist, idKey);
+ h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(shortlist, idKey)}</div>`;
+ // Scan Full Stats: only OA/salary are in the market list itself - real per-attribute
+ // comparison (concentration/talent for drivers, leadership/mechanics/etc for TDs) needs each
+ // candidate's own profile page. User-triggered (not automatic) since it's N extra real HTTP
+ // requests (not API budget calls, but still real page loads against gpro.net) - capped to the
+ // shortlist only (already filtered to relevant candidates), not the whole market.
+ h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats for these ${shortlist.length} (fetches each candidate's profile page)</button>`;
+ h += `<div id="gpro-scan-status-${sectionId}" style="font-size:9px;color:#6b7280;margin-top:4px;"></div>`;
  } else {
  h += mkRec(`No listings currently match OA ${targetOA.min}-${targetOA.max}${cash != null ? ' within your cash on hand' : ''} - see the full list below.`, 'warn');
  }
@@ -5514,6 +5577,96 @@
  h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#6b7280;font-size:10px;padding:4px 0;">Show ${rest.length} more outside these criteria</summary>${mkMarketTable(rest, idKey)}</details>`;
  }
  return h;
+ }
+
+ // Fetches ONE candidate's full profile page (real HTTP page load, never /backend/api/v2 - doesn't
+ // touch the API budget) and parses their real attributes. Cached indefinitely per candidate ID
+ // (same "event data doesn't decay by time" reasoning as the rest of this project - a driver's
+ // concentration doesn't change by waiting, only by training) under a scout-specific endpoint key
+ // so it never collides with the account's own cached '/DriProfile'/'/TDProfile'.
+ async function fetchCandidateFullStats(kind, id, profileHref) {
+ const endpoint = kind === 'driver' ? `/DriProfileScout/${id}` : `/TDProfileScout/${id}`;
+ const cached = getStaleData(endpoint);
+ if (cached) return cached.data;
+ try {
+ const path = kind === 'driver' ? `DriverProfile.asp?ID=${id}` : profileHref;
+ if (!path) return null;
+ const html = await fetchPageHTML(path);
+ const doc = new DOMParser().parseFromString(html, 'text/html');
+ const stats = kind === 'driver' ? parseDriverProfileDOM(doc) : parseTdProfileDOM(doc);
+ if (stats) setStaleData(endpoint, stats);
+ return stats;
+ } catch (e) { logError(`full-stat fetch failed for ${kind} ${id}:`, e.message); return null; }
+ }
+
+ // Bounded to 15 real page fetches per scan (the shortlist is already filtered, so this is
+ // realistically a handful in most leagues, but cap it regardless to avoid hammering gpro.net if
+ // a shortlist is unusually large).
+ async function scanCandidatesFullStats(rows, idKey) {
+ const kind = idKey === 'driId' ? 'driver' : 'td';
+ const capped = rows.slice(0, 15);
+ const results = await Promise.allSettled(capped.map(r => fetchCandidateFullStats(kind, r[idKey], r.profileHref)));
+ return capped.map((r, i) => Object.assign({}, r, { fullStats: results[i].status === 'fulfilled' ? results[i].value : null }));
+ }
+
+ // Weighted-sum match score from real scraped attributes, weighted by the league's own priority
+ // order (D.driverSelection[league].attributes / D.tdSelection[league].skills - both sourced, see
+ // gpro-data.js). This is a RELATIVE ranking tool only (higher = better fit among these specific
+ // candidates), not a normalized percentage or a verified game formula - attribute scales differ
+ // (concentration can run past 300, some TD skills much lower), so the raw number has no absolute
+ // meaning by itself.
+ function scoreCandidate(stats, priorityEntries) {
+ if (!stats || !priorityEntries.length) return null;
+ const maxP = Math.max(...priorityEntries.map(([, info]) => info.priority));
+ let score = 0, counted = 0;
+ priorityEntries.forEach(([key, info]) => {
+ const v = stats[key];
+ if (typeof v === 'number') { score += v * (maxP - info.priority + 1); counted++; }
+ });
+ return counted ? Math.round(score) : null;
+ }
+
+ // Renders the enriched table once full stats have been scanned: adds a Match Score column, sorted
+ // best-first (nulls - candidates whose profile page couldn't be parsed - sorted last, not hidden).
+ function mkFullStatsTable(rows, idKey, priorityEntries) {
+ const scored = rows.map(r => ({ row: r, score: scoreCandidate(r.fullStats, priorityEntries) }));
+ scored.sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity));
+ let t = `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:10px;">`;
+ t += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Name</td><td>OA</td><td>Salary</td><td>Match Score</td></tr>`;
+ scored.forEach(({ row: r, score }) => {
+ const nameCell = (idKey === 'driId' && r.driId)
+ ? `<a href="DriverProfile.asp?ID=${r.driId}" style="color:#d1d5db;text-decoration:underline;">${r.name}</a>`
+ : r.name;
+ const scoreCell = score != null ? `<strong>${score}</strong>` : `<span style="color:#6b7280;">unavailable</span>`;
+ t += `<tr><td style="padding:3px;color:#d1d5db;">${nameCell}</td><td style="text-align:center;color:#10b981;font-weight:700;">${r.OA}</td><td style="text-align:center;color:#9ca3af;">${r.salary}</td><td style="text-align:center;color:#60a5fa;">${scoreCell}</td></tr>`;
+ });
+ t += `</table></div><div style="font-size:9px;color:#6b7280;margin-top:4px;">Match Score = weighted sum of each candidate's real attributes (scraped from their profile page), weighted by this league's priority order. Relative ranking among these candidates only, not a percentage or verified formula.</div>`;
+ return t;
+ }
+
+ // Wires the "Scan Full Stats" button for one market section (drivers or TDs) after body(h) has
+ // rendered it. rows = the shortlist rows shown; priorityEntries = Object.entries of
+ // D.driverSelection[league].attributes or D.tdSelection[league].skills.
+ function wireScanFullStatsButton(sectionId, idKey, rows, priorityEntries) {
+ const btn = document.getElementById(`gpro-scan-${sectionId}`);
+ if (!btn) return;
+ btn.addEventListener('click', async () => {
+ btn.disabled = true;
+ btn.textContent = '⏳ Fetching candidate profiles...';
+ const statusEl = document.getElementById(`gpro-scan-status-${sectionId}`);
+ try {
+ const enriched = await scanCandidatesFullStats(rows, idKey);
+ const container = document.getElementById(`gpro-shortlist-${sectionId}`);
+ if (container) container.innerHTML = mkFullStatsTable(enriched, idKey, priorityEntries);
+ const gotStats = enriched.filter(r => r.fullStats).length;
+ if (statusEl) statusEl.textContent = `Scanned ${enriched.length} candidates - got real stats for ${gotStats}.` + (gotStats < enriched.length ? ' Some profile pages could not be read (parser may need verifying against real markup).' : '');
+ btn.remove();
+ } catch (e) {
+ if (statusEl) statusEl.textContent = `Scan failed: ${e.message}`;
+ btn.disabled = false;
+ btn.textContent = '🔍 Retry scan';
+ }
+ });
  }
 
  async function renderMarketOverview() {
@@ -5540,10 +5693,10 @@
  { id: 'gpro-sec-market-tds', label: 'TDs', verdict: `${tds.length} listed`, tone: tds.length ? 'info' : 'warn' },
  ]);
  h += mkSection(`Available Drivers (${drivers.length})`,
-  drivers.length ? mkShortlistSection(drivers, 'driId', D.driverSelection && D.driverSelection[league] && D.driverSelection[league].targetOA, cash, league, 'driver') : mkRec(noDataMsg('AvailDrivers.asp'), 'warn'),
+  drivers.length ? mkShortlistSection(drivers, 'driId', D.driverSelection && D.driverSelection[league] && D.driverSelection[league].targetOA, cash, league, 'driver', 'drivers') : mkRec(noDataMsg('AvailDrivers.asp'), 'warn'),
  'gpro-sec-market-drivers');
  h += mkSection(`Available Technical Directors (${tds.length})`,
-  tds.length ? mkShortlistSection(tds, 'tdId', D.tdSelection && D.tdSelection[league] && D.tdSelection[league].targetOA, cash, league, 'TD') : mkRec(noDataMsg('AvailTechDirectors.asp'), 'warn'),
+  tds.length ? mkShortlistSection(tds, 'tdId', D.tdSelection && D.tdSelection[league] && D.tdSelection[league].targetOA, cash, league, 'TD', 'tds') : mkRec(noDataMsg('AvailTechDirectors.asp'), 'warn'),
  'gpro-sec-market-tds');
 
  // What-to-look-for reference (D.driverSelection, established attribute priorities per
@@ -5580,6 +5733,8 @@
 
  body(h);
  wireDecisionBoard();
+ if (sel) wireScanFullStatsButton('drivers', 'driId', filterShortlist(drivers, sel.targetOA, cash).shortlist, Object.entries(sel.attributes));
+ if (tdSel) wireScanFullStatsButton('tds', 'tdId', filterShortlist(tds, tdSel.targetOA, cash).shortlist, Object.entries(tdSel.skills));
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad'));
  }

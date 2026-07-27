@@ -179,6 +179,33 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-27 — Iteration 24 (per-candidate full-stat scraping for the Driver/TD Market shortlist)
+
+User request: complete TODO 0e - the shortlist from iteration 23 could only filter on OA/salary
+(all the market list DOM exposes), not real attributes. Wanted actual per-candidate stats.
+
+- `parseAvailListDOM` now captures each row's raw link `href` as `row.profileHref` - this is how
+ the (previously unconfirmed) TD profile page URL got discovered: it was sitting right there in
+ the market table's own link the whole time, no need to guess it.
+- New `parseTdProfileDOM` (GPRO_Strategy_Tool.user.js) - **explicitly flagged unverified**, no TD
+ profile page has ever been captured in this project. Tries label-text and element-id patterns,
+ logs to console on total failure instead of silently returning null forever. Field names
+ (`leadership`/`mechanics`/`electronics`/`aerodynamics`/`pitCoord`/`motivation`/`experience`) are
+ the real API field names from `gpro-public-api.yml`'s `TDProfileResponse` - not guessed.
+- New `fetchCandidateFullStats`/`scanCandidatesFullStats`: a user-triggered "🔍 Scan Full Stats"
+ button (not automatic - these are real HTTP page loads against gpro.net, capped to the already-
+ filtered shortlist and to 15 candidates max per scan) fetches each candidate's own profile page
+ and caches the result indefinitely per candidate ID under a scout-specific stale-cache key
+ (`/DriProfileScout/{id}`, `/TDProfileScout/{id}`), separate from the account's own driver/TD cache.
+- New `scoreCandidate`/`mkFullStatsTable`: once scanned, candidates get a weighted "Match Score"
+ from their real attributes, weighted by the league's own priority order
+ (`D.driverSelection[league].attributes` / `D.tdSelection[league].skills`, both wiki-sourced from
+ iteration 23). Explicitly labelled as a **relative ranking tool only**, not a normalized
+ percentage or verified formula - attribute scales differ too much across skills for the raw
+ number to mean anything in isolation.
+- `D.tdSelection` keys renamed `pitCoordination`→`pitCoord`, `mechanical`→`mechanics` to match the
+ real API/DOM field names now that `parseTdProfileDOM` needs to key off them directly.
+
 ### 2026-07-27 — Iteration 23 (real driver/TD market shortlisting, sourced from the GPRO wiki)
 
 User request: Driver/TD Market advisors dump the whole market list; wanted it filtered to what's
@@ -903,14 +930,15 @@ the full unfiltered list still available in a collapsed `<details>`. **Still ope
 attribute scoring (concentration/talent/etc, not just OA) needs per-row profile scraping - see TODO
 0e below, unchanged.
 
-**0e. Per-driver/per-TD full-stat scraping from the market list** (iteration 22) - `parseAvailListDOM`
-now reads the AvailDrivers.asp/AvailTechDirectors.asp table directly (zero API calls, per explicit
-user requirement), but that table only has OA/age/salary/offers, not full attributes. Driver full
-stats could be background-fetched per-row via `DriverProfile.asp?ID=N` (confirmed page, reuses
-`parseDriverProfileDOM`) the same way `backgroundCaptureAuxPages` already does for the account's own
-driver - not yet wired up for a whole market page of rows. TD full stats are blocked entirely: the TD
-profile *page* URL has never been captured live (only the API endpoint `/TDProfile` is confirmed) -
-don't guess the page URL, capture it first next time TD market data is being worked on.
+**0e. Per-driver/per-TD full-stat scraping from the market list - DONE (iteration 24)**, with one
+caveat: driver-side scraping (`DriverProfile.asp?ID=N` via `parseDriverProfileDOM`) is confirmed and
+solid. TD-side scraping now discovers the real profile URL from the market table's own link
+(`row.profileHref`) instead of guessing it, but `parseTdProfileDOM` itself is still **unverified
+against a real TD profile page** - written defensively (label-text + element-id fallback, console
+warning on total failure) exactly like `parseTestingDOM` was when it shipped unverified. Next time a
+real TD market scan runs, check the console for the "[GPRO][parseTdProfileDOM] no recognizable
+fields found" warning - if it fires, capture the real TD profile page markup into
+docs/page-structures.md and fix the parser's label list to match.
 
 **0. Verify AI Coaching end-to-end with a real Anthropic API key** (iteration 14) - the request
 shape is written correctly against Anthropic's documented API but has never actually been clicked
