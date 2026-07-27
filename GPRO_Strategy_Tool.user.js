@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.5.1
+// @version 5.5.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -26,7 +26,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=4.13.0
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=4.14.0
 // @run-at document-idle
 // ==/UserScript==
 
@@ -5549,9 +5549,13 @@
  // Politeness cap on real page fetches per scan - not an API budget concern, but still real
  // traffic against gpro.net, so bounded regardless of how many rows the market lists.
  const capped = rows.slice(0, 30);
- const floors = (priorityEntries || []).map(([key, info]) => [key, parseMinFromTarget(info.target)]).filter(([, min]) => min != null && min > 0);
- const floorNote = floors.length
- ? `Will filter to candidates meeting: ${floors.map(([k, m]) => `${k} ≥ ${m}`).join(', ')} (${league}'s sourced priority attributes)`
+ const floors = (priorityEntries || []).map(([key, info]) => [key, info.priority, parseMinFromTarget(info.target)]).filter(([, , min]) => min != null && min > 0);
+ // Only the single top-priority floor gates the post-scan split (see mkFullStatsTable) - per
+ // GPRO's own official Newbie Guide, expecting every attribute to clear its floor simultaneously
+ // isn't realistic ("a driver with one or two skills will suffice").
+ const topFloor = floors.length ? floors.reduce((a, b) => a[1] <= b[1] ? a : b) : null;
+ const floorNote = topFloor
+ ? `Will filter to candidates meeting ${topFloor[0]} ≥ ${topFloor[2]} (${league}'s top-priority attribute - not every attribute at once, per GPRO's own guide on realistic driver expectations)`
  : `No numeric minimum thresholds sourced for ${cfgLabel} at ${league} league yet - results will be ranked by Match Score instead of filtered to a hard cutoff.`;
  let h = `<div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">Target OA ${targetOA.min}-${targetOA.max} for ${league}${cash != null ? `, cash on hand $${cash.toLocaleString()}` : ' (cash balance unknown - visit UpdateCar.asp once to see it here)'}</div>`;
  h += `<div style="font-size:9px;color:#9ca3af;margin-bottom:6px;">${floorNote}</div>`;
@@ -5624,35 +5628,41 @@
  return t;
  }
 
- // Splits scanned candidates into those meeting every numeric floor (D.driverSelection[league].
- // attributes / D.tdSelection[league].skills, only entries with a parseable numeric target - see
- // parseMinFromTarget) vs those that don't, then renders both: the ones that meet the criteria
- // front and center, the rest collapsed but still visible (never hidden entirely - a candidate
- // whose profile page failed to parse shows as "unavailable" and goes in the "below" group rather
- // than silently vanishing).
+ // Real bug fixed 2026-07-27: this used to require EVERY numeric floor simultaneously
+ // (Concentration 200+ AND Talent 60+ AND Experience 90+ AND TechInsight 80+ all at once), which
+ // directly contradicts GPRO's own official Newbie Guide (gpro.net/gb/GPRONoobGuide.asp): "You
+ // will not find a driver who has a good rating for all his skills whilst in Rookie, but a driver
+ // with one or two skills will suffice and provide you with a promotion-worthy driver." Requiring
+ // all floors at once meant zero candidates could ever pass, regardless of the threshold numbers
+ // being right. Now requires meeting the floor for the SINGLE highest-priority attribute only
+ // (Concentration, in every league's data) - matching "one or two skills will suffice" without
+ // being so loose it stops meaning anything.
  function mkFullStatsTable(rows, idKey, priorityEntries) {
- const floors = (priorityEntries || []).map(([key, info]) => [key, parseMinFromTarget(info.target)]).filter(([, min]) => min != null && min > 0);
+ const floors = (priorityEntries || []).map(([key, info]) => [key, info.priority, parseMinFromTarget(info.target)]).filter(([, , min]) => min != null && min > 0);
  let h = '';
  if (!floors.length) {
  h += mkScoredTable(rows, idKey, priorityEntries);
  h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">No numeric minimum thresholds sourced for this league - ranked by Match Score only, not filtered to a hard cutoff.</div>`;
  return h;
  }
+ // Only the single highest-priority (lowest priority number) floor gates the split - per GPRO's
+ // own guide, expecting every attribute to clear its floor at once isn't realistic.
+ const [topKey, , topMin] = floors.reduce((a, b) => a[1] <= b[1] ? a : b);
  const meets = [], below = [];
  rows.forEach(r => {
  const stats = r.fullStats;
- const ok = stats && floors.every(([key, min]) => typeof stats[key] === 'number' && stats[key] >= min);
+ const ok = stats && typeof stats[topKey] === 'number' && stats[topKey] >= topMin;
  (ok ? meets : below).push(r);
  });
- const floorStr = floors.map(([k, m]) => `${k} ≥ ${m}`).join(', ');
+ const floorStr = `${topKey} ≥ ${topMin}`;
  if (meets.length) {
- h += `<div style="font-size:9px;color:#10b981;margin-bottom:4px;">Meets ${floorStr}: ${meets.length} of ${rows.length}</div>`;
+ h += `<div style="font-size:9px;color:#10b981;margin-bottom:4px;">Meets ${floorStr} (this league's top-priority attribute): ${meets.length} of ${rows.length}</div>`;
  h += mkScoredTable(meets, idKey, priorityEntries);
  } else {
- h += mkRec(`None of the ${rows.length} scanned candidates meet ${floorStr} - see below.`, 'warn');
+ h += mkRec(`None of the ${rows.length} scanned candidates meet ${floorStr} - see below. Per GPRO's own Newbie Guide, don't expect every attribute to clear its floor at once; this only gates on the single top-priority one.`, 'warn');
  }
  if (below.length) {
- h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#6b7280;font-size:10px;padding:4px 0;">Show ${below.length} that didn't meet the threshold</summary>${mkScoredTable(below, idKey, priorityEntries)}</details>`;
+ h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#6b7280;font-size:10px;padding:4px 0;">Show ${below.length} that didn't meet ${floorStr}</summary>${mkScoredTable(below, idKey, priorityEntries)}</details>`;
  }
  h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Match Score = weighted sum of each candidate's real attributes (scraped from their profile page), weighted by this league's priority order. Relative ranking only, not a percentage or verified formula.</div>`;
  return h;

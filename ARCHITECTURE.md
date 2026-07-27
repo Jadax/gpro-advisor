@@ -179,6 +179,24 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-27 — Iteration 28 (fix overly-strict shortlist filter, sourced from the official GPRO Newbie Guide)
+
+User reported the Full Stats filter found zero drivers even with reasonable-looking thresholds.
+Root cause: `mkFullStatsTable` required EVERY numeric floor at once (Concentration 200+ AND
+Talent 60+ AND Experience 90+ AND TechInsight 80+ simultaneously). Fetched GPRO's own official
+Newbie Guide (gpro.net/gb/GPRONoobGuide.asp) directly, which states plainly: "You will not find a
+driver who has a good rating for all his skills whilst in Rookie, but a driver with one or two
+skills will suffice and provide you with a promotion-worthy driver." Requiring all floors at once
+was structurally guaranteed to return nothing, independent of whether the threshold numbers
+themselves were reasonable.
+
+- `mkFullStatsTable`/`mkShortlistSection` now gate only on the SINGLE top-priority attribute
+ (priority 1 - concentration in every league's `driverSelection`/`tdSelection` data), matching
+ "one or two skills will suffice" without being so loose the filter stops meaning anything.
+ Other attributes remain visible as priority-ordered reference for manual judgement.
+- Added an explicit warning comment in `gpro-data.js` above `driverSelection` so a future editor
+ doesn't reintroduce the all-floors-at-once bug when extending this data.
+
 ### 2026-07-27 — Iteration 27 (fixed: advisor panel missing on paginated market pages)
 
 Real bug: `@match https://www.gpro.net/gb/AvailDrivers.asp`/`AvailTechDirectors.asp` had no `*`

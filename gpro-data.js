@@ -656,6 +656,16 @@ var GPRO_DATA = {
  // heuristic width below the real cap (not sourced) - deliberately a RANGE, not a single point
  // equal to the cap, since requiring an exact-OA match against a ~20-row market listing was too
  // strict to ever return results (the original bug report: "No listings match OA 80-80").
+ //
+ // IMPORTANT (2026-07-27): the numeric `target` values below (e.g. concentration '200+') are
+ // NOT meant to all be required simultaneously when shortlisting. GPRO's own official Newbie
+ // Guide (gpro.net/gb/GPRONoobGuide.asp) says directly: "You will not find a driver who has a
+ // good rating for all his skills whilst in Rookie, but a driver with one or two skills will
+ // suffice and provide you with a promotion-worthy driver." The shortlist logic in
+ // GPRO_Strategy_Tool.user.js (`mkFullStatsTable`) only gates on the single top-priority
+ // attribute (priority 1, concentration in every league here) for exactly this reason - treat
+ // the rest of each league's `attributes` block as a priority-ordered reference for manual
+ // judgement, not a checklist every candidate must fully clear.
  driverSelection: {
  Rookie: {
  // Rookie: Car resets each season. Focus on cheap, balanced driver.
