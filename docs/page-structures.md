@@ -114,6 +114,7 @@ Same track/weather block as Qualify.asp. Additional:
 - Race list table: `#`, Nat flag, `<a href="TrackDetails.asp?id=N">Track GP (Country)</a>`, Date, Winner.
 - Current/next race row highlighted with `class="yellow"` on the `<td>`s, `<font color="yellow"><b>Today</b></font>` for date.
 - **This is the authoritative source for "which 17 tracks this season, in what order"** — better than the hardcoded `SEASON_RACE_LIST` in the script, which will drift every season. Confirms current season (S111) order: Barcelona, Ahvenisto, Magny Cours, Poznan, Al-Ring (labelled "A1-Ring" here), Jyllands-Ringen, Silverstone, Buenos Aires, Austin, Montreal, Spa, Kaunas, Hungaroring, Losail, New Delhi, Yas Marina, Baku City — matches `gpro-data.js` `seasons.S111.tracks` exactly.
+- **Now background-fetched (2026-07-27) via `backgroundCacheSeasonTrackSpecs`** (`parseCalendarDOM`), once per season, to pre-cache `avgSpeed`/`lapDistance` for every track via `TrackDetails.asp?id=N` — feeds `estimateLapsPerWeatherPeriod()` so the weather rain-stop-window calc has real per-track data for whichever race comes up next, not just whichever track the narrow "next race" link on gpro.asp happened to point at recently. `Group` param is the raw `/Menu` `group` field (e.g. `Amateur - 3`), not just the league name.
 
 ## Standings.asp?Group=X
 

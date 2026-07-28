@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.5.6
+// @version 5.5.7
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -723,6 +723,25 @@
  } catch (e) { return null; }
  }
 
+ // Calendar.asp?Group=X - season's 17 races in order, each a link to TrackDetails.asp?id=N (per
+ // docs/page-structures.md). Added 2026-07-27 as the season-wide track-specs pre-cache source (see
+ // backgroundCacheSeasonTrackSpecs) - lets estimateLapsPerWeatherPeriod() have real per-track
+ // avgSpeed/lapDistance data for EVERY race in the season, not just whichever one the existing
+ // "next race" link on gpro.asp happened to point at recently.
+ function parseCalendarDOM(root) {
+ root = root || document;
+ try {
+ const races = [];
+ root.querySelectorAll('a[href*="TrackDetails.asp?id="]').forEach((a) => {
+ const idMatch = a.getAttribute('href').match(/id=(\d+)/i);
+ if (!idMatch) return;
+ const name = a.textContent.trim();
+ if (name) races.push({ id: parseInt(idMatch[1]), name });
+ });
+ return races.length ? races : null;
+ } catch (e) { return null; }
+ }
+
  function parseTyreSuppliersDOM(root) {
  root = root || document;
  try {
@@ -1130,6 +1149,47 @@
  return results;
  }
 
+ // Pre-caches avgSpeed/lapDistance (etc) for every track in the season, via Calendar.asp - so
+ // estimateLapsPerWeatherPeriod() has real per-track data for WHICHEVER race comes up next,
+ // instead of depending on the narrow "next race" link on gpro.asp having been background-
+ // captured recently (backgroundCaptureAuxPages only ever knows about the single upcoming race).
+ // Added 2026-07-27 per explicit user request: "this track information is there for every race,
+ // which we pull from calendar... before every race we pull the actual race info". Runs at most
+ // once per season (tracked via gpro_season_specs_cached_season) - track physical specs (lap
+ // distance, corners, etc.) don't change race to race, so there's no reason to ever refetch a
+ // track that's already cached. groupStr is the raw `/Menu` `group` field (e.g. "Amateur - 3")
+ // needed for Calendar.asp's own Group query param.
+ async function backgroundCacheSeasonTrackSpecs(groupStr) {
+ if (!groupStr) return { attempted: 0, cached: 0 };
+ const seasonKey = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.currentSeason) || 'unknown';
+ const doneFor = GM_getValue('gpro_season_specs_cached_season', '');
+ if (doneFor === `${seasonKey}|${groupStr}`) return { attempted: 0, cached: 0 };
+ try {
+ const calHtml = await fetchPageHTML(`Calendar.asp?Group=${encodeURIComponent(groupStr)}`);
+ const calDoc = new DOMParser().parseFromString(calHtml, 'text/html');
+ const races = parseCalendarDOM(calDoc);
+ if (!races) return { attempted: 0, cached: 0 };
+ const missing = races.filter(r => {
+ const cached = getStaleData(`/TrackSpecs/${encodeURIComponent(r.name)}`);
+ return !cached || !cached.data || cached.data.avgSpeed == null || cached.data.lapDistance == null;
+ });
+ let cachedCount = races.length - missing.length;
+ if (missing.length) {
+ const results = await Promise.allSettled(missing.map(r =>
+ fetchPageHTML(`TrackDetails.asp?id=${r.id}`).then((html) => {
+ const doc = new DOMParser().parseFromString(html, 'text/html');
+ const t = parseTrackDetailsDOM(doc);
+ if (t) { setStaleData(`/TrackSpecs/${encodeURIComponent(r.name)}`, t); return true; }
+ return false;
+ })
+ ));
+ cachedCount += results.filter(r => r.status === 'fulfilled' && r.value).length;
+ }
+ if (cachedCount >= races.length) GM_setValue('gpro_season_specs_cached_season', `${seasonKey}|${groupStr}`);
+ return { attempted: missing.length, cached: cachedCount, total: races.length };
+ } catch (e) { logError('background season track-specs fetch failed:', e.message); return { attempted: 0, cached: 0 }; }
+ }
+
  // Resolves the effective wet/dry flag for a session dropdown (Q1/Q2). Auto-detects from the
  // weather widget (DOM rain icon first, forecast rain% as fallback) and keeps following that
  // detection on every page load UNTIL the user manually touches the dropdown at least once -
@@ -1166,8 +1226,19 @@
  const LAPS_PER_PERIOD_FALLBACK = 20;
  const LAPS_PER_PERIOD_CALIBRATION = 20 / ((1800 / (5.381 / 239.08 * 3600)));
  function estimateLapsPerWeatherPeriod(track) {
- const avgSpeed = track && parseFloat(track.avgSpeed);
- const lapDistance = track && parseFloat(track.lapDistance);
+ let avgSpeed = track && parseFloat(track.avgSpeed);
+ let lapDistance = track && parseFloat(track.lapDistance);
+ // The currently-resolved `track` object (getDataDomOnly('/TrackProfile')) might be a stale
+ // cache captured before avgSpeed/lapDistance were added to the parser, or might be API-sourced
+ // (no DOM fallback for those two fields via the API path). Fall back to the season-wide
+ // per-track cache (backgroundCacheSeasonTrackSpecs, keyed by track name) before giving up.
+ if ((!avgSpeed || !lapDistance) && track && (track.trackName || track.name)) {
+ const specs = getStaleData(`/TrackSpecs/${encodeURIComponent(track.trackName || track.name)}`);
+ if (specs && specs.data) {
+ avgSpeed = avgSpeed || parseFloat(specs.data.avgSpeed);
+ lapDistance = lapDistance || parseFloat(specs.data.lapDistance);
+ }
+ }
  if (!avgSpeed || !lapDistance) return LAPS_PER_PERIOD_FALLBACK;
  const lapTimeSeconds = (lapDistance / avgSpeed) * 3600;
  if (!lapTimeSeconds || !isFinite(lapTimeSeconds)) return LAPS_PER_PERIOD_FALLBACK;
@@ -4646,6 +4717,13 @@
  ];
  el.textContent = `Background capture: ${parts.join(' | ')}`;
  });
+ // Season track-specs pre-cache (Calendar.asp -> every track's avgSpeed/lapDistance) - see
+ // backgroundCacheSeasonTrackSpecs. Independent of the per-race capture above; no-ops instantly
+ // once the season's already fully cached (tracked via GM value), so this is cheap on every
+ // subsequent call despite living inside the same 30-min-throttled block.
+ getDataSmart('/Menu').catch(() => null).then((menu) => {
+ if (menu && menu.group) backgroundCacheSeasonTrackSpecs(menu.group);
+ });
  } else if (bgStatusEl) {
  bgStatusEl.textContent = `Background capture skipped (ran ${formatRelativeTime(lastBgCapture)} - throttled to every 30 min, click Update All Data to force).`;
  }
@@ -5848,6 +5926,10 @@
  try { GM_setValue('cache_api_' + ep, null); } catch(e) {}
  try { GM_setValue('stale_api_' + ep, null); } catch(e) {}
  });
+ // Also reset the season track-specs pre-cache flag so backgroundCacheSeasonTrackSpecs
+ // re-fetches Calendar.asp + every track on the next gpro.asp visit, rather than staying
+ // permanently skipped for a season it thinks is already done.
+ try { GM_setValue('gpro_season_specs_cached_season', ''); } catch(e) {}
  alert('Cache cleared (including stale fallback data). Data will be fetched fresh on next page load.');
  location.reload();
  });

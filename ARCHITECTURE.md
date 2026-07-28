@@ -179,6 +179,28 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-27 — Iteration 33 (season-wide track-specs pre-cache via Calendar.asp)
+
+User asked for the exact pipeline described in iteration 32's TODO: pull the season's track list
+from Calendar.asp, then pre-fetch each track's TrackDetails.asp so `estimateLapsPerWeatherPeriod`
+always has real avgSpeed/lapDistance data before a race, not just whichever track the existing
+"next race" link on gpro.asp happened to point the background-capture job at recently.
+
+- New `parseCalendarDOM` - reads Calendar.asp's race list (`{id, name}` per row via the existing
+ `TrackDetails.asp?id=N` links, already documented in docs/page-structures.md).
+- New `backgroundCacheSeasonTrackSpecs(groupStr)` - fetches Calendar.asp?Group=<raw /Menu group
+ field, e.g. "Amateur - 3">, then background-fetches TrackDetails.asp for every track not already
+ cached under a new `/TrackSpecs/{trackName}` stale-cache key. Runs at most ONCE per season
+ (tracked via `gpro_season_specs_cached_season`) - track physical specs don't change race to
+ race, so there's no reason to ever refetch a track once it's cached. Wired into `renderHome`'s
+ existing 30-min-throttled background-capture block; no-ops instantly once done.
+- `estimateLapsPerWeatherPeriod` now falls back to this season-wide cache (keyed by track name)
+ when the currently-resolved track object lacks avgSpeed/lapDistance (e.g. a stale cache
+ captured before those fields existed, or an API-sourced track object with no DOM equivalent for
+ those two fields).
+- `Clear Cache` now also resets the season-pre-cache flag, so a manual cache clear properly
+ re-triggers the full Calendar.asp + 17-track refetch instead of staying permanently skipped.
+
 ### 2026-07-27 — Iteration 32 (weather-period lap conversion generalized beyond one track)
 
 Iteration 31 fixed the mechanic but left `ELITE_LAPS_PER_PERIOD = 20` as a single flat constant
