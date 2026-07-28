@@ -179,6 +179,37 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-27 — Iteration 29 (Car Advisor budget-allocation bug + rain-stop lap range, not a sharp guess)
+
+User reported two real problems from a live Car Advisor screenshot and a rain-forecast comment:
+
+**1. Car Advisor budget allocation bug.** The screenshot showed the Engine (the tool's own
+"most impactful for Power PHA", `UPGRADE_PRIORITY.Engine = 1`) getting "No affordable option"
+while Rear Wing/Gearbox (lower priority) got funded first, spending most of the budget before
+Engine was even evaluated. Root cause: `analyzeCar`'s allocation sort chained `willFail`/
+`critical`/`flagged` as independent tie-breaks ahead of the static `priority`, so a part that was
+willFail-AND-critical (very low remaining wear right now) could jump ahead of a willFail-but-not-
+yet-critical Engine purely on current wear buffer, not actual importance. Fixed: each part now
+gets exactly one tier (0=willFail/1=critical/2=flagged/3=belowTarget), and `priority` is the ONLY
+tie-breaker within a tier - the most important part in the worst tier always gets first claim on
+the budget. Also improved the "no affordable option" fallback message: instead of a bare dead-end,
+it now shows the cheapest real fix's cost and the exact shortfall, states the actual consequence
+(mid-race failure = DNF/retirement risk, not just a stat), and suggests concrete alternatives
+(downgrade something lower-priority to free cash, or knowingly accept the risk this race).
+
+**2. Rain-stop lap estimate overstated its own precision.** User referenced GPRO's own weather
+mechanics (and linked wiki.gpro.net/index.php/Weather) - fetched it directly and confirmed: a
+low/0% rain-probability segment right after a wet one only guarantees rain stops SOMEWHERE WITHIN
+that segment, not at its exact start. The Rain Strategy Plan was asserting a single sharp lap
+("auto-pit around lap ~29") when the forecast itself can't support that precision. Fixed:
+`dryingFuelData` now carries `earliestStopLap`/`latestStopLap` (segment start/end) instead of one
+point, all "auto-pit around lap ~X" UI strings now show the range, and the wet-stint fuel load is
+biased toward the LATER bound (safer to carry a bit more wet-stint fuel than run dry if rain
+persists longer than the earliest possible stop). **Not implemented**: the user also referenced
+using a track's historical wet-race record (TrackDetails.asp) to narrow the window further with
+real data - that's a legitimate future improvement but needs that historical data actually scraped
+first, which isn't wired up yet. Don't guess at a narrower window without it.
+
 ### 2026-07-27 — Iteration 28 (fix overly-strict shortlist filter, sourced from the official GPRO Newbie Guide)
 
 User reported the Full Stats filter found zero drivers even with reasonable-looking thresholds.

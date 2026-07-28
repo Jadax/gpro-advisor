@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.5.2
+// @version 5.5.3
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -2709,14 +2709,23 @@
  let runCash = cash;
  const recs = [];
 
+ // Real bug fixed 2026-07-27: budget is spent on `actionable` parts strictly in array order, so
+ // whichever part sorts first claims cash first and can starve out everything after it. The old
+ // comparator chained willFail/critical/flagged as INDEPENDENT tie-breaks ahead of the static
+ // `priority` (UPGRADE_PRIORITY - Engine is explicitly priority 1, "most impactful for Power
+ // PHA"), so a willFail-AND-critical part (very low remaining wear right now, e.g. 7%) could
+ // jump ahead of a willFail-but-not-yet-critical Engine (e.g. 13% remaining) purely because of
+ // its current wear buffer, not its actual importance - the reported symptom was exactly this:
+ // Rear Wing/Gearbox got funded first, leaving the Engine ("No affordable option") unfunded even
+ // though fixing the Engine matters far more for finishing the race. Each part now gets exactly
+ // one tier (0=willFail, 1=critical, 2=flagged, 3=belowTarget only) and static `priority` is the
+ // ONLY tie-breaker within a tier, so the most important part in the worst tier always gets first
+ // claim on the budget.
+ const tierOf = (p) => p.willFail ? 0 : p.critical ? 1 : p.flagged ? 2 : 3;
  const actionable = parts.filter(p => p.willFail || p.critical || p.flagged || p.belowTarget)
  .sort((a, b) => {
- if (a.willFail && !b.willFail) return -1;
- if (!a.willFail && b.willFail) return 1;
- if (a.critical && !b.critical) return -1;
- if (!a.critical && b.critical) return 1;
- if (a.flagged && !b.flagged) return -1;
- if (!a.flagged && b.flagged) return 1;
+ const ta = tierOf(a), tb = tierOf(b);
+ if (ta !== tb) return ta - tb;
  return a.priority - b.priority;
  });
 
@@ -2786,8 +2795,17 @@
  detail: `FAIL at ~${Math.round(p.endWear)}%! FREE downgrade to L${best.newLvl} (Wear: ${best.wear ?? '?'}%) — best available option`,
  cost: 0, newLvl: best.newLvl, newWear: best.wear, remainingCash: runCash, color: '#f59e0b' });
  } else {
+ // Nothing affordable at any level, including a same-level wear-reset. Rather than a bare
+ // "no affordable option" (which tells the user nothing they can act on), show what the
+ // cheapest real fix would actually cost so they know the size of the gap, and be explicit
+ // about the consequence (part failure mid-race is a DNF/retirement risk, not just a stat).
+ const cheapestOverall = p.opts.filter(o => (o.isUpgrade || o.isSameLevel) && o.cost > 0)
+ .sort((a, b) => (a.cost || 0) - (b.cost || 0))[0];
+ const gapNote = cheapestOverall
+ ? ` Cheapest real fix (L${cheapestOverall.newLvl}) costs $${cheapestOverall.cost.toLocaleString()} - $${(cheapestOverall.cost - runCash).toLocaleString()} short of your $${runCash.toLocaleString()} budget.`
+ : ` No fix option was readable from this page at all.`;
  recs.push({ part: p, verdict: 'CRITICAL',
- detail: `FAIL at ~${Math.round(p.endWear)}%! No affordable option. Budget: $${runCash.toLocaleString()}`,
+ detail: `FAIL at ~${Math.round(p.endWear)}%! This part is projected to break mid-race (real DNF/retirement risk), not just lose performance.${gapNote} Consider: sell/downgrade a lower-priority part instead to free up cash, or accept the failure risk this race and prioritize fixing it before the next.`,
  cost: 0, remainingCash: runCash, color: '#ef4444' });
  }
  } else if (p.critical) {
@@ -3426,13 +3444,24 @@
   const segs = analyze.segs;
   let drySegIdx = segs.findIndex(s => s.rainMax < 20);
   if (drySegIdx === -1) drySegIdx = segs.length;
-  const rainLaps = drySegIdx > 0 ? Math.round(laps * (drySegIdx / segs.length)) : 0;
+  // Real fix 2026-07-27: confirmed via the official GPRO wiki (wiki.gpro.net/index.php/Weather)
+  // that a low/0% rain-probability segment right after a wet one only guarantees rain stops
+  // SOMEWHERE WITHIN that segment - not at its exact start. Treating the segment boundary as a
+  // sharp cutoff overstated precision the forecast doesn't actually give. Now modelled as a
+  // range (segment start to segment end) and the wet-fuel load is biased toward the LATER bound -
+  // safer to carry slightly more wet-stint fuel than to run dry mid-race if rain persists longer
+  // than the earliest possible stop. Historical per-track "how long does it usually take after a
+  // 0% reading" data (from TrackDetails.asp's wet-race record) could narrow this window further
+  // in the future, but isn't scraped/available yet - don't guess at that narrowing without it.
+  const earliestStopLap = drySegIdx > 0 ? Math.round(laps * (drySegIdx / segs.length)) : 0;
+  const latestStopLap = drySegIdx > 0 ? Math.round(laps * (Math.min(drySegIdx + 1, segs.length) / segs.length)) : 0;
+  const rainLaps = latestStopLap;
   const dryLaps = laps - rainLaps;
   const wetPerLap = tyre.bestWet.fuelPerStint / Math.max(1, tyre.bestWet.lapsPerStint);
   const dryPerLap = tyre.bestDry.fuelPerStint / Math.max(1, tyre.bestDry.lapsPerStint);
   const wetFuel = Math.ceil(wetPerLap * rainLaps);
   const dryFuel = Math.ceil(dryPerLap * dryLaps);
-  dryingFuelData = { rainLaps, dryLaps, wetFuel, dryFuel, totalFuel: wetFuel + dryFuel, dryCompoundName: tyre.bestDry.name };
+  dryingFuelData = { rainLaps, dryLaps, earliestStopLap, latestStopLap, wetFuel, dryFuel, totalFuel: wetFuel + dryFuel, dryCompoundName: tyre.bestDry.name };
   }
 
   let strategyHtml = '';
@@ -3490,7 +3519,8 @@
   const df = dryingFuelData;
   strategyHtml += `<div style="margin-bottom:6px;">`;
   strategyHtml += mkRow('Total Fuel', `<strong>${df.totalFuel}L</strong> (wet+dry combined)`);
-  strategyHtml += mkRow('Start Fuel (Q2)', `<strong>${df.wetFuel}L</strong> — Rain tyres, ${df.rainLaps} wet laps`);
+  strategyHtml += mkRow('Rain Stop Window', `Lap ${df.earliestStopLap}-${df.latestStopLap} (forecast can't pin an exact lap - see GPRO's own weather rules)`);
+  strategyHtml += mkRow('Start Fuel (Q2)', `<strong>${df.wetFuel}L</strong> — Rain tyres, ${df.rainLaps} wet laps (fuelled for the later/safer end of the window)`);
   strategyHtml += mkRow('Stop 1 Fuel', `<strong>${df.dryFuel}L</strong> — ${df.dryCompoundName} tyres, ${df.dryLaps} dry laps`);
   strategyHtml += mkRow('Wet Fuel/Lap', `${(df.wetFuel / df.rainLaps).toFixed(2)}L`);
   strategyHtml += mkRow('Dry Fuel/Lap', `${(df.dryFuel / df.dryLaps).toFixed(2)}L`);
@@ -3540,7 +3570,7 @@
 
    // 4. Recommendation banner
   if (dryingFuelData) {
-  strategyHtml += mkRec(`Load <strong>${dryingFuelData.wetFuel}L</strong> for Q2 start (Rain), then <strong>${dryingFuelData.dryFuel}L</strong> at the stop (${dryingFuelData.dryCompoundName}). GPRO pits you automatically around lap ~${dryingFuelData.rainLaps}.`, 'good');
+  strategyHtml += mkRec(`Load <strong>${dryingFuelData.wetFuel}L</strong> for Q2 start (Rain), then <strong>${dryingFuelData.dryFuel}L</strong> at the stop (${dryingFuelData.dryCompoundName}). GPRO pits you automatically somewhere between lap ${dryingFuelData.earliestStopLap}-${dryingFuelData.latestStopLap} - the forecast can't pin an exact lap, only that rain stops sometime within that window.`, 'good');
   } else if (fuel) {
   strategyHtml += mkRec(
   (fuel.fromDomFuelStart
@@ -3623,7 +3653,7 @@
   strategyHtml += `<div style="margin-top:8px;padding:6px;background:#1e293b;border-radius:4px;font-size:10px;">`;
   strategyHtml += `<div style="color:#60a5fa;font-weight:700;margin-bottom:4px;">🌧️ Rain → Dry Transition:</div>`;
   strategyHtml += `<div style="color:#d1d5db;">1. <strong>Start on Rain tyres</strong> (rain ${analyze.segs[0].rainMin}-${analyze.segs[0].rainMax}%)</div>`;
-  strategyHtml += `<div style="color:#d1d5db;">2. <strong>Stop 1 fuel: ${df.dryFuel}L</strong> — auto-pit around lap ~${df.rainLaps}</div>`;
+  strategyHtml += `<div style="color:#d1d5db;">2. <strong>Stop 1 fuel: ${df.dryFuel}L</strong> — auto-pit somewhere between lap ${df.earliestStopLap}-${df.latestStopLap}</div>`;
   strategyHtml += `<div style="color:#d1d5db;">3. <strong>Switch to ${df.dryCompoundName}</strong> for remaining ~${df.dryLaps} laps</div>`;
   strategyHtml += `<div style="color:#9ca3af;margin-top:4px;">⚡ Pit loss: ${pitLoss}s</div>`;
   strategyHtml += `</div>`;
