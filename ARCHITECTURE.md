@@ -179,6 +179,39 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-27 — Iteration 34 (Car Advisor: ultra-urgent wear carve-out + cheapest-fix bias)
+
+User reported a real car where the advisor's recommendations, if followed, would have left the
+Gearbox (already at 100% wear / 0% remaining, BEFORE the race even starts) with "no affordable
+option" while Engine/Brakes/Rear Wing (all with real double-digit % wear buffer still left) got
+funded first purely on static priority - the exact opposite failure mode of the original iteration-
+29 bug, but just as real. The user's own manual fix (same-level replaces on Engine/Rear Wing/
+Gearbox instead of the advisor's suggested upgrades, plus the free downgrades already recommended)
+successfully raced with $1.08M left over - proving a correct, affordable allocation existed that the
+advisor's logic wasn't finding.
+
+Two real bugs, both in `analyzeCar`:
+
+1. **Priority-only ordering over-corrected.** Static `priority` as the sole tie-breaker (iteration
+ 29's fix) correctly stopped a merely-somewhat-worn part from starving the Engine, but had no
+ way to represent "this part is already essentially failed, not just going to fail later" -
+ Gearbox's true wear state (0% remaining) is categorically more urgent than Engine's 13%, but
+ priority-only ordering couldn't see that gap at all. Added a narrow ultra-urgent tier
+ (`ULTRA_URGENT_WEAR = 5`, remaining ≤ 5%) that always gets first claim on budget regardless of
+ static priority - narrow enough that iteration 29's real case (remaining=7%) still correctly
+ defers to Engine, but catches genuinely-already-exhausted parts like this one.
+2. **Upgrade was always preferred over a cheaper same-level replace.** The FAIL-tier fix logic
+ tried `upgrades` first, `replacements` only as a fallback - even when the cheapest replace cost
+ less than the cheapest upgrade, which wastes budget other flagged parts need when multiple
+ parts are competing for a tight budget (exactly this user's situation: $4.1M upgrade vs $3.31M
+ replace for the same "survives the race" outcome). Now picks whichever of the two is cheaper.
+
+Not independently re-verified: the resulting Q1/Q2/Race setup numbers and fuel strategy for the
+user's specific updated car state (screenshot-provided) - `calcCarSetupSmart`/`calcTyreStrategySmart`
+are already fully data-driven off whatever `parseUpdateCarDOM`/`parseQualifyCarDOM` scrape live, so
+no separate code path needed fixing there, but pixel-exact verification against a screenshot isn't
+something this environment can execute live.
+
 ### 2026-07-27 — Iteration 33 (season-wide track-specs pre-cache via Calendar.asp)
 
 User asked for the exact pipeline described in iteration 32's TODO: pull the season's track list

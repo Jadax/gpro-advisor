@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.5.7
+// @version 5.5.8
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -2817,19 +2817,34 @@
  let runCash = cash;
  const recs = [];
 
- // Real bug fixed 2026-07-27: budget is spent on `actionable` parts strictly in array order, so
- // whichever part sorts first claims cash first and can starve out everything after it. The old
- // comparator chained willFail/critical/flagged as INDEPENDENT tie-breaks ahead of the static
- // `priority` (UPGRADE_PRIORITY - Engine is explicitly priority 1, "most impactful for Power
- // PHA"), so a willFail-AND-critical part (very low remaining wear right now, e.g. 7%) could
- // jump ahead of a willFail-but-not-yet-critical Engine (e.g. 13% remaining) purely because of
- // its current wear buffer, not its actual importance - the reported symptom was exactly this:
- // Rear Wing/Gearbox got funded first, leaving the Engine ("No affordable option") unfunded even
- // though fixing the Engine matters far more for finishing the race. Each part now gets exactly
- // one tier (0=willFail, 1=critical, 2=flagged, 3=belowTarget only) and static `priority` is the
- // ONLY tie-breaker within a tier, so the most important part in the worst tier always gets first
- // claim on the budget.
- const tierOf = (p) => p.willFail ? 0 : p.critical ? 1 : p.flagged ? 2 : 3;
+ // Real bug fixed 2026-07-27 (part 1): budget is spent on `actionable` parts strictly in array
+ // order, so whichever part sorts first claims cash first and can starve out everything after
+ // it. The old comparator chained willFail/critical/flagged as INDEPENDENT tie-breaks ahead of
+ // the static `priority` (UPGRADE_PRIORITY - Engine is explicitly priority 1, "most impactful
+ // for Power PHA"), so a willFail-AND-critical part (very low remaining wear right now, e.g. 7%)
+ // could jump ahead of a willFail-but-not-yet-critical Engine (e.g. 13% remaining) purely because
+ // of its current wear buffer, not its actual importance. First fix: static `priority` became the
+ // sole tie-breaker within a tier.
+ //
+ // Real bug fixed 2026-07-27 (part 2, found in a follow-up report): that first fix over-corrected.
+ // A user's actual car had Gearbox already at 0% remaining wear (100% wear used, BEFORE the race
+ // even starts - not just "projected to fail mid-race" like every other flagged part, but already
+ // at maximum failure risk from lap 1). Priority-only ordering let Engine/Brakes/Rear Wing (all
+ // with real double-digit % wear buffer still left) claim the whole budget first purely on static
+ // importance, leaving the objectively most urgent part on the car ("no affordable option")
+ // unfunded. Neither pure static-priority-first nor pure current-wear-first is correct alone - an
+ // ultra-urgent carve-out is needed for parts that are essentially ALREADY failed (not merely
+ // "critical" at <=10% remaining, but at or near true exhaustion), which should always be
+ // addressed before anything else regardless of its static importance rank. Below that extreme,
+ // priority still governs (this doesn't reopen part 1's bug: the earlier real-world case had
+ // remaining=7%, above this narrower ultra-urgent cutoff, so it still correctly defers to Engine).
+ const ULTRA_URGENT_WEAR = 5; // remaining % - essentially already fully worn, not just "will wear out later"
+ const tierOf = (p) => {
+ if (p.willFail) return p.remaining <= ULTRA_URGENT_WEAR ? 0 : 1;
+ if (p.critical) return 2;
+ if (p.flagged) return 3;
+ return 4;
+ };
  const actionable = parts.filter(p => p.willFail || p.critical || p.flagged || p.belowTarget)
  .sort((a, b) => {
  const ta = tierOf(a), tb = tierOf(b);
@@ -2877,21 +2892,30 @@
 
  // === DECISION LOGIC ===
  if (p.willFail) {
- // Part WILL FAIL this race — must fix
- if (upgrades.length > 0) {
- const best = upgrades[0];
- const cost = best.cost || 0;
- runCash -= cost;
- recs.push({ part: p, verdict: 'UPGRADE',
- detail: `FAIL at ~${Math.round(p.endWear)}%! Upgrade to L${best.newLvl} — $${cost.toLocaleString()} (resets wear)`,
- cost, newLvl: best.newLvl, newWear: best.wear, remainingCash: runCash, color: '#ef4444' });
- } else if (replacements.length > 0) {
- const best = replacements[0];
- const cost = best.cost || 0;
+ // Part WILL FAIL this race — must fix.
+ // Real bug fixed 2026-07-27: this always preferred ANY affordable upgrade over a same-level
+ // replace, even when the replace was cheaper - a same-level replace resets wear just as
+ // effectively as an upgrade for the purpose of "does it survive the race", so defaulting to
+ // upgrade wasted budget that mattered when multiple parts are competing for a tight budget
+ // (a real user's manual choice - same-level Engine replace at $3.31M instead of the $4.1M
+ // upgrade this logic would have picked - was the objectively better call given three other
+ // parts also needed funding that race). Now picks whichever of the cheapest upgrade or
+ // cheapest same-level replace actually costs less.
+ const bestUpgrade = upgrades[0] || null;
+ const bestReplace = replacements[0] || null;
+ const useReplace = bestReplace && (!bestUpgrade || bestReplace.cost <= bestUpgrade.cost);
+ if (useReplace) {
+ const cost = bestReplace.cost || 0;
  runCash -= cost;
  recs.push({ part: p, verdict: 'REPLACE',
- detail: `FAIL at ~${Math.round(p.endWear)}%! Replace L${p.lvl} — $${cost.toLocaleString()} (resets wear)`,
- cost, newLvl: best.newLvl, newWear: best.wear, remainingCash: runCash, color: '#ef4444' });
+ detail: `FAIL at ~${Math.round(p.endWear)}%! Replace L${p.lvl} — $${cost.toLocaleString()} (resets wear, cheaper than upgrading)`,
+ cost, newLvl: bestReplace.newLvl, newWear: bestReplace.wear, remainingCash: runCash, color: '#ef4444' });
+ } else if (bestUpgrade) {
+ const cost = bestUpgrade.cost || 0;
+ runCash -= cost;
+ recs.push({ part: p, verdict: 'UPGRADE',
+ detail: `FAIL at ~${Math.round(p.endWear)}%! Upgrade to L${bestUpgrade.newLvl} — $${cost.toLocaleString()} (resets wear)`,
+ cost, newLvl: bestUpgrade.newLvl, newWear: bestUpgrade.wear, remainingCash: runCash, color: '#ef4444' });
  } else if (surviveDowngrades.length > 0) {
  const best = surviveDowngrades[0];
  recs.push({ part: p, verdict: 'DOWNGRADE',
