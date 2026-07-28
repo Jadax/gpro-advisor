@@ -179,6 +179,19 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-27 — Iteration 30 (rain-stop window narrowed with real user-supplied race data)
+
+Follow-up to iteration 29's segment-width rain-stop window. User supplied their own real-race data
+point and methodology: "laps/period 20+20 + 0-6 laps for the 3 periods = rain stopping around lap
+40-46" - full wet forecast periods count in full, but the TRANSITIONING period only contributes a
+0-6 lap uncertainty window, not its whole width. Their actual result that race: fuelled for 44
+laps, rain stopped on lap 45 - inside their 40-46 estimate and far tighter than iteration 29's
+full-segment-width window would have given (~40-60 for a 20-lap period). Adopted the 6-lap
+transition window (`TRANSITION_WINDOW_LAPS`) in place of the full segment width, capped to the
+segment's own width for unusually short periods. Explicitly logged as empirical calibration from
+one real result, not an official formula or a large sample - if a future real result falls outside
+this window, revisit and widen rather than assuming the constant is exactly right.
+
 ### 2026-07-27 — Iteration 29 (Car Advisor budget-allocation bug + rain-stop lap range, not a sharp guess)
 
 User reported two real problems from a live Car Advisor screenshot and a rain-forecast comment:

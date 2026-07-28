@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.5.3
+// @version 5.5.4
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -3446,15 +3446,21 @@
   if (drySegIdx === -1) drySegIdx = segs.length;
   // Real fix 2026-07-27: confirmed via the official GPRO wiki (wiki.gpro.net/index.php/Weather)
   // that a low/0% rain-probability segment right after a wet one only guarantees rain stops
-  // SOMEWHERE WITHIN that segment - not at its exact start. Treating the segment boundary as a
-  // sharp cutoff overstated precision the forecast doesn't actually give. Now modelled as a
-  // range (segment start to segment end) and the wet-fuel load is biased toward the LATER bound -
-  // safer to carry slightly more wet-stint fuel than to run dry mid-race if rain persists longer
-  // than the earliest possible stop. Historical per-track "how long does it usually take after a
-  // 0% reading" data (from TrackDetails.asp's wet-race record) could narrow this window further
-  // in the future, but isn't scraped/available yet - don't guess at that narrowing without it.
+  // SOMEWHERE WITHIN that segment - not at its exact start. A first pass modelled this as the
+  // segment's full width (start to end), but the user then supplied their own real-race data
+  // point that narrows it a lot further: "laps/period 20+20 + 0-6 laps for the 3 periods = rain
+  // stopping around lap 40-46" (full wet periods count in full, but the TRANSITIONING period only
+  // adds a 0-6 lap window, not its whole width) - actual result that race: fuelled for 44 laps,
+  // rain stopped on lap 45, squarely inside their 40-46 estimate and far tighter than a full-
+  // segment-width window would give (would say ~40-60 for a 20-lap period, far less useful).
+  // Adopting the user's empirically-calibrated 6-lap window (capped to the segment's own width
+  // for unusually short periods, so it never claims a wider window than the segment spans). This
+  // is empirical calibration from one real result, not an official GPRO formula or a large
+  // sample - revisit/widen again if a real result ever falls outside this window.
+  const segLenLaps = laps / segs.length;
+  const TRANSITION_WINDOW_LAPS = 6;
   const earliestStopLap = drySegIdx > 0 ? Math.round(laps * (drySegIdx / segs.length)) : 0;
-  const latestStopLap = drySegIdx > 0 ? Math.round(laps * (Math.min(drySegIdx + 1, segs.length) / segs.length)) : 0;
+  const latestStopLap = drySegIdx > 0 ? earliestStopLap + Math.round(Math.min(TRANSITION_WINDOW_LAPS, segLenLaps)) : 0;
   const rainLaps = latestStopLap;
   const dryLaps = laps - rainLaps;
   const wetPerLap = tyre.bestWet.fuelPerStint / Math.max(1, tyre.bestWet.lapsPerStint);
