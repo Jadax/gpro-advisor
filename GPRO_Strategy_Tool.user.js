@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.5.4
+// @version 5.5.5
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -3444,23 +3444,29 @@
   const segs = analyze.segs;
   let drySegIdx = segs.findIndex(s => s.rainMax < 20);
   if (drySegIdx === -1) drySegIdx = segs.length;
-  // Real fix 2026-07-27: confirmed via the official GPRO wiki (wiki.gpro.net/index.php/Weather)
-  // that a low/0% rain-probability segment right after a wet one only guarantees rain stops
-  // SOMEWHERE WITHIN that segment - not at its exact start. A first pass modelled this as the
-  // segment's full width (start to end), but the user then supplied their own real-race data
-  // point that narrows it a lot further: "laps/period 20+20 + 0-6 laps for the 3 periods = rain
-  // stopping around lap 40-46" (full wet periods count in full, but the TRANSITIONING period only
-  // adds a 0-6 lap window, not its whole width) - actual result that race: fuelled for 44 laps,
-  // rain stopped on lap 45, squarely inside their 40-46 estimate and far tighter than a full-
-  // segment-width window would give (would say ~40-60 for a 20-lap period, far less useful).
-  // Adopting the user's empirically-calibrated 6-lap window (capped to the segment's own width
-  // for unusually short periods, so it never claims a wider window than the segment spans). This
-  // is empirical calibration from one real result, not an official GPRO formula or a large
-  // sample - revisit/widen again if a real result ever falls outside this window.
-  const segLenLaps = laps / segs.length;
+  // Real fix 2026-07-27 (superseding the previous same-day fix, which was still wrong): the
+  // official GPRO wiki states explicitly, verbatim: "All weather changes (temperature, humidity,
+  // rain) happen on the same lap in all races, not dependent on time." Confirmed directly: an
+  // 80-lap race and a 57-lap race on the same track/week see a weather transition at the SAME
+  // ABSOLUTE LAP NUMBER, tied to the Elite race's pace - NOT at the same FRACTION of each race's
+  // own distance. Dividing THIS race's own total laps by 4 (the previous version of this code)
+  // was therefore never correct, regardless of how the transition-window width was handled -
+  // it produced 29 for a real Losail (57-lap) race whose actual, user-confirmed correct window
+  // was 40-46 (rain stopped on lap 45). The user's own worked example ("laps/period 20+20 +
+  // 0-6 laps for the 3 periods") gives the real per-period lap count directly: 20 elite-paced
+  // laps per 30-minute forecast period, for Losail specifically. We have no data source yet to
+  // derive this per-track (would need Elite's own lap time that race week), so ELITE_LAPS_PER_PERIOD
+  // is used as a single-point-calibrated constant, capped to this race's own total laps (a race
+  // can't run longer than its own distance even if the elite-lap arithmetic would suggest
+  // otherwise). This is empirical calibration from ONE real result on ONE track - very likely
+  // needs to vary by track (shorter-lap tracks probably have a different elite laps/period than
+  // longer-lap ones), but a single-track constant is still far more accurate than the previous
+  // formula's proportional-to-my-own-race assumption, which the wiki directly contradicts. Revisit
+  // if a result on a different track falls outside the resulting window.
+  const ELITE_LAPS_PER_PERIOD = 20;
   const TRANSITION_WINDOW_LAPS = 6;
-  const earliestStopLap = drySegIdx > 0 ? Math.round(laps * (drySegIdx / segs.length)) : 0;
-  const latestStopLap = drySegIdx > 0 ? earliestStopLap + Math.round(Math.min(TRANSITION_WINDOW_LAPS, segLenLaps)) : 0;
+  const earliestStopLap = drySegIdx > 0 ? Math.min(laps, drySegIdx * ELITE_LAPS_PER_PERIOD) : 0;
+  const latestStopLap = drySegIdx > 0 ? Math.min(laps, earliestStopLap + TRANSITION_WINDOW_LAPS) : 0;
   const rainLaps = latestStopLap;
   const dryLaps = laps - rainLaps;
   const wetPerLap = tyre.bestWet.fuelPerStint / Math.max(1, tyre.bestWet.lapsPerStint);

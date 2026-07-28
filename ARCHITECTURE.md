@@ -179,7 +179,33 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
-### 2026-07-27 — Iteration 30 (rain-stop window narrowed with real user-supplied race data)
+### 2026-07-27 — Iteration 31 (real fix: weather periods are NOT proportional to your own race's lap count)
+
+Iteration 30's fix was still fundamentally wrong. User clarified the Losail screenshot IS the same
+race as their "fuelled 44, rain stopped lap 45" comment, and manually working the math against
+Losail's real 57-lap distance exposed it: the previous code derived each forecast period's length
+as `raceLaps / 4` (14.25 laps for Losail), giving an estimated window of lap 29-35 - nowhere near
+the user's correct 40-46 (actual: 45).
+
+Re-fetched the official wiki and got the exact quote: **"All weather changes (temperature,
+humidity, rain) happen on the same lap in all races, not dependent on time."** Confirmed directly:
+an 80-lap race and a 57-lap race on the same track/week see a weather transition at the same
+ABSOLUTE lap number (tied to the Elite race's pace), not at the same fraction of each race's own
+distance. Dividing the current race's own total laps by 4 was never correct, independent of the
+transition-window-width fix from iteration 30 layered on top of it.
+
+- Replaced the `raceLaps/4`-derived period length with `ELITE_LAPS_PER_PERIOD = 20`, taken
+ directly from the user's own worked example for Losail ("laps/period 20+20 + 0-6 laps"). Both
+ bounds are capped to the race's own total laps (can't run past the actual finish).
+- This constant is explicitly flagged as single-track, single-result calibration - there's no data
+ source yet to derive Elite's per-track pace (would need Elite's own lap time that race week), so
+ it's very likely track-dependent to some degree (shorter-lap tracks probably don't share the same
+ elite laps/period as longer-lap ones). Still far more accurate than the previous proportional
+ assumption, which the wiki directly contradicts. Revisit if a result on a different track falls
+ outside the resulting window - that would be the signal needed to start deriving a per-track value
+ instead of one flat constant.
+
+### 2026-07-27 — Iteration 30 (rain-stop window narrowed with real user-supplied race data - superseded by iteration 31, see below)
 
 Follow-up to iteration 29's segment-width rain-stop window. User supplied their own real-race data
 point and methodology: "laps/period 20+20 + 0-6 laps for the 3 periods = rain stopping around lap
