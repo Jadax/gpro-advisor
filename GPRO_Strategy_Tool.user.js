@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.5.5
+// @version 5.5.6
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -708,9 +708,18 @@
  // both dials on slippery tracks).
  const overtaking = textOf('Overtaking:');
  const gripLevel = textOf('Grip level:');
+ // Added 2026-07-27 to derive a per-track weather-period lap conversion (see
+ // estimateLapsPerWeatherPeriod/renderRaceSetup's rain-stop-window calc) instead of a single
+ // flat constant calibrated from one track. Field names match the real /TrackProfile API
+ // response exactly (`avgSpeed`, `lapDistance` - confirmed in gpro-public-api.yml) so DOM- and
+ // API-sourced track data stay interchangeable, same convention as overtaking/gripLevel above.
+ const avgSpeedStr = textOf('Average speed:');
+ const avgSpeed = avgSpeedStr ? parseFloat(avgSpeedStr) : null;
+ const lapDistanceStr = textOf('Lap distance:');
+ const lapDistance = lapDistanceStr ? parseFloat(lapDistanceStr) : null;
  const h1 = root.querySelector('h1.block');
  const trackName = h1 ? h1.textContent.trim() : '';
- return { laps, timeInOutPits, trackPower, trackHandl, trackAccel, fuelConsumption, tyreWear, overtaking, gripLevel, trackName };
+ return { laps, timeInOutPits, trackPower, trackHandl, trackAccel, fuelConsumption, tyreWear, overtaking, gripLevel, avgSpeed, lapDistance, trackName };
  } catch (e) { return null; }
  }
 
@@ -1136,6 +1145,34 @@
  function setSessionWetManual(gmKey, wet) {
  GM_setValue(gmKey, wet ? '1' : '0');
  GM_setValue(gmKey + '_manual', '1');
+ }
+
+ // Estimates how many laps the (faster-paced) Elite race covers per 30-minute weather-forecast
+ // period, for THIS specific track - added 2026-07-27 after confirming via the official GPRO wiki
+ // that weather transitions land on the same ABSOLUTE lap number for every league on a track, not
+ // a fraction of each race's own distance (see the rain-stop-window calc in renderRaceSetup).
+ // Derived from the track's own "Average speed"/"Lap distance" (both on TrackDetails.asp,
+ // confirmed real /TrackProfile API fields) rather than a single flat constant: lap time =
+ // lapDistance/avgSpeed, laps/period = 1800s / lapTime. Cross-checked against the one real result
+ // available (Losail: formula gives ~22.2 laps/period from 5.381km @ 239.08km/h, user's own
+ // ground-truth calibration from a live race was 20) - the two aren't identical, so a correction
+ // factor (LAPS_PER_PERIOD_CALIBRATION) derived from that one ratio is applied. This is a
+ // two-point derivation (a physics-based per-track estimate, corrected by a single real result),
+ // not a verified formula - it generalizes far better than reusing Losail's flat "20" for every
+ // other track, but the correction factor itself could be wrong; revisit if a result on a
+ // different track falls outside the resulting window. Falls back to the flat Losail-calibrated
+ // constant when avgSpeed/lapDistance aren't available (e.g. before TrackDetails.asp has ever
+ // been visited this race weekend).
+ const LAPS_PER_PERIOD_FALLBACK = 20;
+ const LAPS_PER_PERIOD_CALIBRATION = 20 / ((1800 / (5.381 / 239.08 * 3600)));
+ function estimateLapsPerWeatherPeriod(track) {
+ const avgSpeed = track && parseFloat(track.avgSpeed);
+ const lapDistance = track && parseFloat(track.lapDistance);
+ if (!avgSpeed || !lapDistance) return LAPS_PER_PERIOD_FALLBACK;
+ const lapTimeSeconds = (lapDistance / avgSpeed) * 3600;
+ if (!lapTimeSeconds || !isFinite(lapTimeSeconds)) return LAPS_PER_PERIOD_FALLBACK;
+ const raw = 1800 / lapTimeSeconds;
+ return Math.max(1, Math.round(raw * LAPS_PER_PERIOD_CALIBRATION));
  }
 
  // ============================================================
@@ -3450,22 +3487,15 @@
   // 80-lap race and a 57-lap race on the same track/week see a weather transition at the SAME
   // ABSOLUTE LAP NUMBER, tied to the Elite race's pace - NOT at the same FRACTION of each race's
   // own distance. Dividing THIS race's own total laps by 4 (the previous version of this code)
-  // was therefore never correct, regardless of how the transition-window width was handled -
-  // it produced 29 for a real Losail (57-lap) race whose actual, user-confirmed correct window
-  // was 40-46 (rain stopped on lap 45). The user's own worked example ("laps/period 20+20 +
-  // 0-6 laps for the 3 periods") gives the real per-period lap count directly: 20 elite-paced
-  // laps per 30-minute forecast period, for Losail specifically. We have no data source yet to
-  // derive this per-track (would need Elite's own lap time that race week), so ELITE_LAPS_PER_PERIOD
-  // is used as a single-point-calibrated constant, capped to this race's own total laps (a race
-  // can't run longer than its own distance even if the elite-lap arithmetic would suggest
-  // otherwise). This is empirical calibration from ONE real result on ONE track - very likely
-  // needs to vary by track (shorter-lap tracks probably have a different elite laps/period than
-  // longer-lap ones), but a single-track constant is still far more accurate than the previous
-  // formula's proportional-to-my-own-race assumption, which the wiki directly contradicts. Revisit
-  // if a result on a different track falls outside the resulting window.
-  const ELITE_LAPS_PER_PERIOD = 20;
+  // was therefore never correct - it produced 29 for a real Losail (57-lap) race whose actual,
+  // user-confirmed correct window was 40-46 (rain stopped on lap 45). Now uses
+  // estimateLapsPerWeatherPeriod(track) - derived per-track from Average speed/Lap distance
+  // (TrackDetails.asp), corrected by the one real calibration ratio available - instead of
+  // reusing Losail's flat "20" for every other track. Both bounds capped to this race's own
+  // total laps (can't run past the actual finish).
   const TRANSITION_WINDOW_LAPS = 6;
-  const earliestStopLap = drySegIdx > 0 ? Math.min(laps, drySegIdx * ELITE_LAPS_PER_PERIOD) : 0;
+  const lapsPerPeriod = estimateLapsPerWeatherPeriod(track);
+  const earliestStopLap = drySegIdx > 0 ? Math.min(laps, drySegIdx * lapsPerPeriod) : 0;
   const latestStopLap = drySegIdx > 0 ? Math.min(laps, earliestStopLap + TRANSITION_WINDOW_LAPS) : 0;
   const rainLaps = latestStopLap;
   const dryLaps = laps - rainLaps;

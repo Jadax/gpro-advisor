@@ -179,6 +179,34 @@ Reviewed live (no code copied — feature/UX reference only):
 
 ## Iteration log
 
+### 2026-07-27 — Iteration 32 (weather-period lap conversion generalized beyond one track)
+
+Iteration 31 fixed the mechanic but left `ELITE_LAPS_PER_PERIOD = 20` as a single flat constant
+calibrated from Losail alone - correct for that one track, but with no reason to be right for
+every other track on the calendar. User then shared a TrackDetails.asp screenshot and asked
+whether it carries what's needed to generalize the constant properly.
+
+It does: `Average speed` (km/h) and `Lap distance` (km) are both plain fields on that page,
+confirmed matching the real `/TrackProfile` API's `avgSpeed`/`lapDistance` fields exactly (same
+DOM/API-interchangeable convention already used for `overtaking`/`gripLevel`). Lap time =
+lapDistance/avgSpeed; laps/period = 1800s / lapTime. Cross-checked against Losail's real numbers:
+5.381km @ 239.08km/h → ~81.0s/lap → ~22.2 laps/period from the raw formula, vs. the real
+calibrated value of 20 - not identical, so this is genuinely a two-point derivation (a physics-
+based per-track estimate, corrected by the one real result available as a calibration ratio), not
+a fully verified formula.
+
+- Added `avgSpeed`/`lapDistance` to `parseTrackDetailsDOM` (previously documented in
+ docs/page-structures.md but never actually parsed).
+- New `estimateLapsPerWeatherPeriod(track)`: per-track laps/period from the speed/distance
+ formula, corrected by `LAPS_PER_PERIOD_CALIBRATION` (derived from the Losail ratio), falling
+ back to the flat `20` constant when track data isn't available yet (e.g. before
+ TrackDetails.asp has been visited this race weekend).
+- Wired into the rain-stop-window calc in place of the flat constant. Still explicitly flagged as
+ provisional - the correction ratio itself could be wrong, or could vary by track type (street
+ vs road, corner count) in ways one data point can't reveal. Revisit if a result on a different
+ track falls outside the resulting window - that's the signal to gather more calibration points
+ or abandon the single-ratio-correction approach for something more sophisticated.
+
 ### 2026-07-27 — Iteration 31 (real fix: weather periods are NOT proportional to your own race's lap count)
 
 Iteration 30's fix was still fundamentally wrong. User clarified the Losail screenshot IS the same
