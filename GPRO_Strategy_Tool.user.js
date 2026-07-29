@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.0.0
+// @version 6.0.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -17,6 +17,7 @@
 // @match https://www.gpro.net/gb/TrainingSession.asp
 // @match https://www.gpro.net/gb/AvailDrivers.asp*
 // @match https://www.gpro.net/gb/AvailTechDirectors.asp*
+// @match https://www.gpro.net/gb/NegotiationsOverview.asp
 // @match https://app.gpro.net/*
 // @grant GM_xmlhttpRequest
 // @grant GM_getValue
@@ -30,7 +31,7 @@
 // @run-at document-idle
 // ==/UserScript==
 
-// GPRO Strategy Tool v6.0.0
+// GPRO Strategy Tool v6.0.1
 // Made with ❤ by Tushant Sharma | Astraiva
 // A comprehensive strategy tool for Grand Prix Racing Online providing
 // fuel calculations, tyre strategy, car setup recommendations,
@@ -338,6 +339,7 @@
  if (h.includes('TrainingSession.asp')) return 'training';
  if (h.includes('AvailDrivers.asp')) return 'marketDrivers';
  if (h.includes('AvailTechDirectors.asp')) return 'marketTDs';
+ if (h.includes('NegotiationsOverview.asp')) return 'negotiations';
  return null;
  }
 
@@ -4229,50 +4231,48 @@
 
   // Time Lost Due To Pitting (from gproanalyzer.info/pd.php)
   // Formula: pitTimePerLap = pitLoss / laps × 0.2833
-  if (trackData && tyre) {
-  const laps = parseInt(trackData.laps) || 60;
-  const pitLoss = parseInt(trackData.pit) || 19;
+  const raceLaps = track ? parseInt(track.laps) || 0 : 0;
+  const pitLossBase = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.gapp && GPRO_DATA.gapp.pitTimeCalc) ? GPRO_DATA.gapp.pitTimeCalc.base : 24;
+  if (raceLaps > 0 && tyre) {
   const stops = tyre.stops || 0;
-  const pitTimePerLap = pitLoss / laps * 0.2833;
-  const totalPitLoss = pitTimePerLap * laps * stops;
+  const pitTimePerLap = pitLossBase / raceLaps * 0.2833;
+  const totalPitLoss = pitTimePerLap * raceLaps * stops;
   h += mkSection('Time Lost Due To Pitting',
-   mkRow('Pit stop time', `${pitLoss}s`) +
+   mkRow('Pit stop base time', `${pitLossBase.toFixed(1)}s`) +
    mkRow('Time per lap', `+${pitTimePerLap.toFixed(3)}s`) +
    mkRow('Stops', stops) +
    mkRow('Total pit loss', `+${totalPitLoss.toFixed(1)}s`) +
-   `<span style="font-size:9px;color:#6b7280;">Each pit stop costs ~${pitLoss}s + this per-lap penalty for carrying extra fuel. More stops = more time lost.</span>`);
+   `<span style="font-size:9px;color:#6b7280;">Each pit stop costs ~${pitLossBase.toFixed(0)}s base + per-lap penalty. More stops = more time lost.</span>`);
   }
 
   // Time Lost Due To FLD (Fuel Load Difference, from gproanalyzer.info/fld.php)
   // Formula: fldPerLap = fuelLoad × 0.003857
-  if (trackData && tyre) {
-  const laps = parseInt(trackData.laps) || 60;
-  const stops = tyre.stops || 0;
+  if (raceLaps > 0 && tyre) {
   const fuelPerStint = tyre.fuelPerStint || 0;
   const fldPerLap = fuelPerStint * 0.003857;
-  const totalFld = fldPerLap * laps;
+  const totalFld = fldPerLap * raceLaps;
   h += mkSection('Time Lost Due To FLD',
    mkRow('Fuel per stint', `${fuelPerStint.toFixed(1)}L`) +
    mkRow('FLD per lap', `+${fldPerLap.toFixed(3)}s`) +
    mkRow('Total FLD', `+${totalFld.toFixed(1)}s`) +
-   `<span style="font-size:9px;color:#6b7280;">Carrying more fuel = heavier car = slower laps. Formula: fuel × 0.003857 s/lap. Lower fuel loads reduce this penalty.</span>`);
+   `<span style="font-size:9px;color:#6b7280;">Carrying more fuel = heavier car = slower laps. Formula: fuel × 0.003857 s/lap.</span>`);
   }
 
   // Time Lost Due To TCD (Tyre Compound Difference, from gproanalyzer.info/tcd.php)
   // TCD is temperature-independent — fixed per compound pair
-  if (tyre) {
+  if (raceLaps > 0 && tyre) {
   const tcdTable = { 'Extra Soft': { 'Soft': 0.82, 'Medium': 1.64, 'Hard': 2.46, 'Rain': 0 }, 'Soft': { 'Medium': 0.82, 'Hard': 1.64, 'Rain': 0 }, 'Medium': { 'Hard': 0.82, 'Rain': 0 }, 'Hard': { 'Rain': 0 } };
   const compound = tyre.compound || tyre.finalRec || 'Medium';
-  const fasterCompound = 'Hard'; // Reference compound for comparison
+  const fasterCompound = 'Hard';
   const tcdPerLap = (tcdTable[compound] && tcdTable[compound][fasterCompound]) || 0;
-  const totalTcd = tcdPerLap * laps;
+  const totalTcd = tcdPerLap * raceLaps;
   if (tcdPerLap > 0) {
    h += mkSection('Time Lost Due To TCD',
     mkRow('Current compound', compound) +
     mkRow('vs Faster compound', fasterCompound) +
     mkRow('TCD per lap', `+${tcdPerLap.toFixed(3)}s`) +
     mkRow('Total TCD', `+${totalTcd.toFixed(1)}s`) +
-    `<span style="font-size:9px;color:#6b7280;">Softer compound = faster laps but more stops. TCD is the time penalty for choosing a slower compound. Fixed per compound pair, temperature-independent.</span>`);
+    `<span style="font-size:9px;color:#6b7280;">Softer compound = faster laps but more stops. TCD is fixed per compound pair, temperature-independent.</span>`);
   }
   }
 
@@ -4788,8 +4788,9 @@
  car: { ep: '/UpdateCar', label: 'Car Data (Wear/Levels)', icon: '🏎️', visit: 'Qualify.asp, Qualify2.asp, or UpdateCar.asp', volatility: 'event' },
  testing: { ep: '/Testing', label: 'Testing / Fuel Data', icon: '🧪', visit: 'Testing.asp', volatility: 'session' },
  suppliers: { ep: '/TyreSuppliers', label: 'Tyre Suppliers', icon: '🛞', visit: 'Suppliers.asp', volatility: 'event' },
- staff: { ep: '/StaffAndFacilities', label: 'Staff / Facilities', icon: '👷', visit: 'StaffAndFacilities.asp', volatility: 'event' },
- };
+  staff: { ep: '/StaffAndFacilities', label: 'Staff / Facilities', icon: '👷', visit: 'StaffAndFacilities.asp', volatility: 'event' },
+  finance: { ep: '/NegOverview', label: 'Finance / Sponsors', icon: '💰', visit: 'NegotiationsOverview.asp', volatility: 'event' },
+  };
 
  let data = {};
  let errors = {};
@@ -4807,7 +4808,7 @@
  const keys = Object.keys(endpoints);
  const results = await Promise.allSettled(
  keys.map(key => {
- const fetcher = key === 'office' ? getDataSmart(endpoints[key].ep) : Promise.resolve(getDataDomOnly(endpoints[key].ep, domParsers[key]));
+ const fetcher = (key === 'office' || key === 'finance') ? getDataSmart(endpoints[key].ep) : Promise.resolve(getDataDomOnly(endpoints[key].ep, domParsers[key]));
  return fetcher.then(d => { data[key] = d; return d; });
  })
  );
@@ -5453,6 +5454,7 @@
  training: 'Training Advisor',
  marketDrivers: 'Driver Market Advisor',
  marketTDs: 'TD Market Advisor',
+ negotiations: 'Sponsor Advisor',
  };
  createPanel(PAGE_TITLES[page] || 'GPRO Strategy Tool');
  // Show loading progress
@@ -5466,6 +5468,7 @@
  training: 'Parsing driver training data...',
  marketDrivers: 'Fetching available drivers...',
  marketTDs: 'Fetching available TDs...',
+ negotiations: 'Loading sponsor data...',
  };
  body(`<div style="text-align:center;padding:20px;">
  <div style="color:#60a5fa;font-size:13px;font-weight:700;margin-bottom:8px;">Loading ${PAGE_TITLES[page] || 'data'}...</div>
@@ -5543,9 +5546,11 @@
  } else if (page === 'training') {
  const menu = await getDataSmart('/Menu').catch(() => null);
  renderTraining(detectLeagueFromMenu(menu));
- } else if (page === 'marketDrivers' || page === 'marketTDs') {
- renderMarketPage(page === 'marketDrivers' ? 'drivers' : 'tds');
- }
+  } else if (page === 'marketDrivers' || page === 'marketTDs') {
+  renderMarketPage(page === 'marketDrivers' ? 'drivers' : 'tds');
+  } else if (page === 'negotiations') {
+  renderSponsorOverview();
+  }
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad') +
  `<div style="margin-top:8px;display:flex;gap:6px;">` +
