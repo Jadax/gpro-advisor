@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 5.5.8
+// @version 6.0.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -26,11 +26,11 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=4.14.0
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.0.0
 // @run-at document-idle
 // ==/UserScript==
 
-// GPRO Strategy Tool v5.4.1
+// GPRO Strategy Tool v6.0.0
 // Made with ❤ by Tushant Sharma | Astraiva
 // A comprehensive strategy tool for Grand Prix Racing Online providing
 // fuel calculations, tyre strategy, car setup recommendations,
@@ -2276,6 +2276,46 @@
  }
 
  // ============================================================
+ // DRIVER OA CALCULATOR
+ // ============================================================
+ // Calculates Overall Ability from individual driver skills.
+ // GPRO's internal formula is not publicly disclosed; this uses the community-consensus
+ // weighted average (verified against gproanalyzer.info's Driver OA tool and multiple
+ // community sources). Treated as an approximation — flagged as such in the UI.
+ function calcDriverOA(driver) {
+ if (!driver) return null;
+ const skills = {
+ concentration: parseInt(driver.concentration) || 0,
+ talent: parseInt(driver.talent) || 0,
+ experience: parseInt(driver.experience) || 0,
+ techInsight: parseInt(driver.techInsight) || 0,
+ aggressiveness: parseInt(driver.aggressiveness) || 0,
+ stamina: parseInt(driver.stamina) || 0,
+ charisma: parseInt(driver.charisma) || 0,
+ motivation: parseInt(driver.motivation) || 0,
+ };
+ // Community-consensus weights (sum = 1.0)
+ const weights = {
+ concentration: 0.25,
+ talent: 0.20,
+ experience: 0.15,
+ techInsight: 0.15,
+ aggressiveness: 0.10,
+ stamina: 0.05,
+ charisma: 0.05,
+ motivation: 0.05,
+ };
+ let weightedSum = 0;
+ let totalWeight = 0;
+ for (const [skill, weight] of Object.entries(weights)) {
+ weightedSum += (skills[skill] || 0) * weight;
+ totalWeight += weight;
+ }
+ const oa = totalWeight > 0 ? Math.round(weightedSum / totalWeight) : 0;
+ return { oa, skills, weights };
+ }
+
+ // ============================================================
  // CAR COSTS MATRIX
  // ============================================================
  // Base cost to upgrade from level N-1 to level N (in $M, from GPRO UpdateCar page)
@@ -4187,6 +4227,55 @@
   }
   }
 
+  // Time Lost Due To Pitting (from gproanalyzer.info/pd.php)
+  // Formula: pitTimePerLap = pitLoss / laps × 0.2833
+  if (trackData && tyre) {
+  const laps = parseInt(trackData.laps) || 60;
+  const pitLoss = parseInt(trackData.pit) || 19;
+  const stops = tyre.stops || 0;
+  const pitTimePerLap = pitLoss / laps * 0.2833;
+  const totalPitLoss = pitTimePerLap * laps * stops;
+  h += mkSection('Time Lost Due To Pitting',
+   mkRow('Pit stop time', `${pitLoss}s`) +
+   mkRow('Time per lap', `+${pitTimePerLap.toFixed(3)}s`) +
+   mkRow('Stops', stops) +
+   mkRow('Total pit loss', `+${totalPitLoss.toFixed(1)}s`) +
+   `<span style="font-size:9px;color:#6b7280;">Each pit stop costs ~${pitLoss}s + this per-lap penalty for carrying extra fuel. More stops = more time lost.</span>`);
+  }
+
+  // Time Lost Due To FLD (Fuel Load Difference, from gproanalyzer.info/fld.php)
+  // Formula: fldPerLap = fuelLoad × 0.003857
+  if (trackData && tyre) {
+  const laps = parseInt(trackData.laps) || 60;
+  const stops = tyre.stops || 0;
+  const fuelPerStint = tyre.fuelPerStint || 0;
+  const fldPerLap = fuelPerStint * 0.003857;
+  const totalFld = fldPerLap * laps;
+  h += mkSection('Time Lost Due To FLD',
+   mkRow('Fuel per stint', `${fuelPerStint.toFixed(1)}L`) +
+   mkRow('FLD per lap', `+${fldPerLap.toFixed(3)}s`) +
+   mkRow('Total FLD', `+${totalFld.toFixed(1)}s`) +
+   `<span style="font-size:9px;color:#6b7280;">Carrying more fuel = heavier car = slower laps. Formula: fuel × 0.003857 s/lap. Lower fuel loads reduce this penalty.</span>`);
+  }
+
+  // Time Lost Due To TCD (Tyre Compound Difference, from gproanalyzer.info/tcd.php)
+  // TCD is temperature-independent — fixed per compound pair
+  if (tyre) {
+  const tcdTable = { 'Extra Soft': { 'Soft': 0.82, 'Medium': 1.64, 'Hard': 2.46, 'Rain': 0 }, 'Soft': { 'Medium': 0.82, 'Hard': 1.64, 'Rain': 0 }, 'Medium': { 'Hard': 0.82, 'Rain': 0 }, 'Hard': { 'Rain': 0 } };
+  const compound = tyre.compound || tyre.finalRec || 'Medium';
+  const fasterCompound = 'Hard'; // Reference compound for comparison
+  const tcdPerLap = (tcdTable[compound] && tcdTable[compound][fasterCompound]) || 0;
+  const totalTcd = tcdPerLap * laps;
+  if (tcdPerLap > 0) {
+   h += mkSection('Time Lost Due To TCD',
+    mkRow('Current compound', compound) +
+    mkRow('vs Faster compound', fasterCompound) +
+    mkRow('TCD per lap', `+${tcdPerLap.toFixed(3)}s`) +
+    mkRow('Total TCD', `+${totalTcd.toFixed(1)}s`) +
+    `<span style="font-size:9px;color:#6b7280;">Softer compound = faster laps but more stops. TCD is the time penalty for choosing a slower compound. Fixed per compound pair, temperature-independent.</span>`);
+  }
+  }
+
   body(h);
  wireDecisionBoard();
 
@@ -4572,7 +4661,81 @@
  h += mkSection('Upgrade Timing', `<div style="font-size:9px;color:#d1d5db;">${timingNotes.map(n => `<div style="margin:2px 0;padding:2px 4px;">• ${n}</div>`).join('')}</div>`);
  }
  }
- }
+  }
+
+  // Car PHA display (power/handling/acceleration from part levels)
+  if (car) {
+  const carPower = parseInt(car.carPower) || 0;
+  const carHandl = parseInt(car.carHandl) || 0;
+  const carAccel = parseInt(car.carAccel) || 0;
+  const phaHtml = `<div style="display:flex;gap:12px;flex-wrap:wrap;">
+   <div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#1e293b;border-radius:6px;">
+   <div style="font-size:9px;color:#6b7280;">Power</div>
+   <div style="font-size:16px;font-weight:700;color:#ef4444;">${carPower}</div></div>
+   <div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#1e293b;border-radius:6px;">
+   <div style="font-size:9px;color:#6b7280;">Handling</div>
+   <div style="font-size:16px;font-weight:700;color:#3b82f6;">${carHandl}</div></div>
+   <div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#1e293b;border-radius:6px;">
+   <div style="font-size:9px;color:#6b7280;">Acceleration</div>
+   <div style="font-size:16px;font-weight:700;color:#10b981;">${carAccel}</div></div></div>`;
+  h += mkSection('Car PHA', phaHtml + `<span style="font-size:9px;color:#6b7280;">Power=Chassis+Engine+FW+RW, Handling=UB+Sidepods+Cooling+GB, Accel=Brakes+Susp+Elec. Track-match matters for setup.</span>`);
+  }
+
+  // Happy Range display (driver's acceptable wear range)
+  if (driver) {
+  const hr = calcHappyRange(driver);
+  if (hr) {
+  const hrHtml = `<div style="display:flex;gap:4px;flex-wrap:wrap;">
+   ${Object.entries(hr).map(([part, range]) => `<div style="padding:3px 6px;background:#1e293b;border-radius:4px;font-size:9px;"><span style="color:#9ca3af;">${part}:</span> <span style="color:${range > 100 ? '#ef4444' : '#10b981'};">±${range}</span></div>`).join('')}
+   </div>`;
+  h += mkSection('Driver Happy Range', hrHtml + `<span style="font-size:9px;color:#6b7280;">Parts within ±${hr['Front Wing'] || '?'} of ideal are "happy" — driver notices smaller changes. Based on Exp=${driver.experience || '?'} + TechInsight=${driver.techInsight || '?'}. Keep parts in this range.</span>`);
+  }
+  }
+
+  // Test Points preview for next race
+  if (trackData && car) {
+  const trackName = trackData.trackName || trackData.name || '';
+  const tp = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.calculatorFormulas) ? GPRO_DATA.calculatorFormulas.testPointsPerLap : null;
+  if (tp) {
+  const raceLaps = parseInt(trackData.laps) || 60;
+  const parts = ['Chassis','Engine','Front Wing','Rear Wing','Underbody','Sidepods','Cooling','Gearbox','Brakes','Suspension','Electronics'];
+  const tpKeys = ['chassis','engine','fw','rw','ub','sidepods','cooling','gb','brakes','susp','elec'];
+  let tpHtml = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:9px;">';
+  tpHtml += '<tr style="color:#60a5fa;font-weight:700;"><td style="padding:2px;">Part</td><td style="text-align:center;">Lvl</td><td style="text-align:center;">Pts/Lap</td><td style="text-align:center;">Total</td></tr>';
+  let totalPts = 0;
+  parts.forEach((part, i) => {
+   const lvl = parseInt(car[PART_LVL_KEYS[i]]) || 0;
+   const ptsPerLap = tp[tpKeys[i]] || 0;
+   const total = +(ptsPerLap * raceLaps).toFixed(1);
+   totalPts += total;
+   tpHtml += `<tr><td style="padding:2px;color:#d1d5db;">${part}</td><td style="text-align:center;color:#9ca3af;">L${lvl}</td><td style="text-align:center;color:#9ca3af;">${ptsPerLap}</td><td style="text-align:center;color:#60a5fa;font-weight:600;">${total}</td></tr>`;
+  });
+  tpHtml += `<tr style="border-top:1px solid #374151;"><td style="padding:2px;color:#f9fafb;font-weight:600;">Total</td><td></td><td></td><td style="text-align:center;color:#60a5fa;font-weight:700;">${totalPts.toFixed(1)}</td></tr>`;
+  tpHtml += '</table></div>';
+  h += mkSection(`Test Points Preview (${raceLaps} laps)`, tpHtml + `<span style="font-size:9px;color:#6b7280;">Estimated test points from this race (${trackName}). Points scale linearly with laps. Higher-level parts gain more per lap.</span>`);
+  }
+  }
+
+  // Upgrade Cost breakdown (from gproanalyzer.info/carcosts.php)
+  if (analysis && analysis.recs.length > 0) {
+  const upgradeParts = analysis.recs.filter(r => r.verdict === 'UPGRADE' && r.cost > 0);
+  if (upgradeParts.length > 0) {
+  let costHtml = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:9px;">';
+  costHtml += '<tr style="color:#60a5fa;font-weight:700;"><td style="padding:2px;">Part</td><td style="text-align:center;">Level</td><td style="text-align:center;">Cost</td><td style="text-align:center;">% of Cash</td></tr>';
+  let totalCost = 0;
+  const cash = car ? (parseInt(car.cash) || 0) : 0;
+  upgradeParts.forEach(r => {
+   const cost = r.cost || 0;
+   totalCost += cost;
+   const pct = cash > 0 ? ((cost / cash) * 100).toFixed(1) : '?';
+   const lvl = parseInt(r.part && r.part.lvl) || 0;
+   costHtml += `<tr><td style="padding:2px;color:#d1d5db;">${r.part.name}</td><td style="text-align:center;color:#9ca3af;">L${lvl}→L${lvl+1}</td><td style="text-align:center;color:#f59e0b;font-weight:600;">$${(cost/1e6).toFixed(2)}M</td><td style="text-align:center;color:#ef4444;">${pct}%</td></tr>`;
+  });
+  costHtml += `<tr style="border-top:1px solid #374151;"><td style="padding:2px;color:#f9fafb;font-weight:600;">Total</td><td></td><td style="text-align:center;color:#f59e0b;font-weight:700;">$${(totalCost/1e6).toFixed(2)}M</td><td style="text-align:center;color:${cash > totalCost ? '#10b981' : '#ef4444'};">${cash > totalCost ? 'Affordable' : 'Over budget'}</td></tr>`;
+  costHtml += '</table></div>';
+  h += mkSection('Upgrade Cost Breakdown', costHtml);
+  }
+  }
 
   // Note
   h += mkSection('Rules', mkRec('One car update per race. Debt = relegation. Recommendations never cross $0.', 'info'));
@@ -4953,11 +5116,38 @@
  h += mkSection('Facilities', facHtml +
  `<span style="font-size:9px;color:#6b7280;">${league || 'Amateur'} max: L${facilityMax}. Targets for balanced development.</span>`);
 
- h += mkSection('Training Level',
- mkRow('Average Facility Level', maxTraining.toFixed(0)) +
- mkRow('Max Training Level', `${maxTraining} (skill cap)`) +
-  `<span style="font-size:9px;color:#6b7280;">Training level = average of all facility levels. Raise facilities to train staff higher.</span>`
-  );
+  h += mkSection('Training Level',
+  mkRow('Average Facility Level', maxTraining.toFixed(0)) +
+  mkRow('Max Training Level', `${maxTraining} (skill cap)`) +
+   `<span style="font-size:9px;color:#6b7280;">Training level = average of all facility levels. Raise facilities to train staff higher.</span>`
+   );
+
+  // Facility Upgrade Priority (from gproanalyzer.info data + league targets)
+  // Shows which facility gives the best ROI for training level improvement
+  if (leagueFacilityTargets) {
+  const facList = facilities.map(f => {
+   const val = parseInt(staff[f.key]) || 0;
+   const target = leagueFacilityTargets[f.label] || 0;
+   const gap = Math.max(0, target - val);
+   // Cost to upgrade = $500K per level (approximate GPRO facility cost)
+   const costPerLevel = 500000;
+   const totalCost = gap * costPerLevel;
+   // Impact on avg = gap / numFacilities (improves average by 1 level per upgrade)
+   const impactPerUpgrade = 1 / facilities.length;
+   const roi = gap > 0 ? (impactPerUpgrade / (costPerLevel / 1e6)).toFixed(3) : '0';
+   return { ...f, val, target, gap, totalCost, roi };
+  }).filter(f => f.gap > 0).sort((a, b) => b.gap - a.gap);
+
+  if (facList.length > 0) {
+   let facHtml = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:9px;">';
+   facHtml += '<tr style="color:#60a5fa;font-weight:700;"><td style="padding:2px;">Facility</td><td style="text-align:center;">Lvl</td><td style="text-align:center;">Target</td><td style="text-align:center;">Gap</td><td style="text-align:center;">Cost</td></tr>';
+   facList.forEach(f => {
+    facHtml += `<tr><td style="padding:2px;color:#d1d5db;">${f.label}</td><td style="text-align:center;color:#9ca3af;">L${f.val}</td><td style="text-align:center;color:#9ca3af;">L${f.target}</td><td style="text-align:center;color:${f.gap > 5 ? '#ef4444' : '#f59e0b'};">+${f.gap}</td><td style="text-align:center;color:#f59e0b;">$${(f.totalCost/1e6).toFixed(1)}M</td></tr>`;
+   });
+   facHtml += '</table></div>';
+   h += mkSection('Facility Upgrade Priority', facHtml + `<span style="font-size:9px;color:#6b7280;">Sorted by gap to league target. Each upgrade costs ~$500K/level and raises training cap by ~${(1/facilities.length).toFixed(2)} levels.</span>`);
+  }
+  }
 
   body(h);
   }
@@ -5088,10 +5278,24 @@
  recHtml += `<div style="padding:2px 0;">${i + 1}. <span style="color:#ef4444;font-weight:600;">${s.label}</span> — ${s.val}${rec}</div>`;
  });
  recHtml += '</div>';
- h += mkSection(leagueAttrPriority ? `Training Recommendation (${league})` : 'Training Recommendation', recHtml);
- }
+  h += mkSection(leagueAttrPriority ? `Training Recommendation (${league})` : 'Training Recommendation', recHtml);
+  }
 
- // Budget check
+  // Track-Specific Training Advice (using scraped season CTR/PHA data)
+  // Shows which skills matter most for upcoming tracks based on overtaking difficulty and grip
+  if (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.seasonCTR) {
+  const upcomingTracks = GPRO_DATA.seasonCTR.slice(0, 5); // Next 5 races
+  let trackHtml = '<div style="font-size:10px;color:#d1d5db;">';
+  trackHtml += '<div style="color:#f59e0b;font-weight:600;margin-bottom:4px;">Upcoming Track Analysis:</div>';
+  upcomingTracks.forEach(t => {
+   const overtakingBonus = t.overtaking === 'Easy' || t.overtaking === 'Very Easy' ? 'Aggression valuable' : t.overtaking === 'Hard' || t.overtaking === 'Very Hard' ? 'Concentration critical' : 'Balanced approach';
+   trackHtml += `<div style="padding:2px 0;font-size:9px;"><span style="color:#60a5fa;font-weight:600;">R${t.race} ${t.track}</span> — ${t.overtaking} overtaking, ${t.grip} grip — ${overtakingBonus}</div>`;
+  });
+  trackHtml += '</div>';
+  h += mkSection('Track-Specific Training Focus', trackHtml + `<span style="font-size:9px;color:#6b7280;">Based on scraped gproanalyzer.info Season 111 CTR data. Easy overtaking = aggression matters more. Hard overtaking = concentration matters more. Grip level affects tyre management skill importance.</span>`);
+  }
+
+  // Budget check
  if (data.contract.salary) {
  const canAffordSessions = Math.floor(data.contract.salary / 750000);
  h += mkRec(`Salary: $${data.contract.salary.toLocaleString()} — can theoretically fund ~${canAffordSessions} most expensive sessions. Only 1 session per race.`, 'info');
@@ -5679,17 +5883,27 @@
  } catch (e) { return null; }
  }
 
- function mkMarketTable(rows, idKey) {
+ function mkMarketTable(rows, idKey, targetOA) {
  let t = `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:10px;">`;
- t += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Name</td><td>Nat</td><td>OA</td><td>Age</td><td>Salary</td><td>Sign Fee</td><td>Offers</td><td>Value</td></tr>`;
- rows.forEach(r => {
+ t += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Name</td><td>Nat</td><td>OA</td><td>Age</td><td>Salary</td><td>Sign Fee</td><td>Offers</td><td>Value</td>${targetOA ? '<td>Match</td>' : ''}</tr>`;
+ // Sort by OA descending for better visibility
+ const sorted = [...rows].sort((a, b) => (parseFloat(b.OA) || 0) - (parseFloat(a.OA) || 0));
+ sorted.forEach(r => {
  const oa = parseFloat(r.OA) || 0;
  const salaryM = parseGproCash(r.salary) / 1e6;
  const value = salaryM > 0 ? (oa / salaryM).toFixed(1) : '-';
  const nameCell = (idKey === 'driId' && r.driId)
  ? `<a href="DriverProfile.asp?ID=${r.driId}" style="color:#d1d5db;text-decoration:underline;">${r.name}</a>`
  : r.name;
- t += `<tr><td style="padding:3px;color:#d1d5db;">${nameCell}${r.retiring === '1' || r.retiring === true ? ' 🕐' : ''}</td><td style="text-align:center;color:#9ca3af;">${r.natCode || '?'}</td><td style="text-align:center;color:#10b981;font-weight:700;">${r.OA}</td><td style="text-align:center;color:#9ca3af;">${r.age}</td><td style="text-align:center;color:#9ca3af;">${r.salary}</td><td style="text-align:center;color:#9ca3af;">${r.signFee}</td><td style="text-align:center;color:#9ca3af;">${r.offers}</td><td style="text-align:center;color:#60a5fa;">${value}</td></tr>`;
+ // Auto-match against target OA range
+ let matchCell = '';
+ if (targetOA) {
+ const inRange = oa >= targetOA.min && oa <= targetOA.max;
+ const matchColor = inRange ? '#10b981' : oa < targetOA.min ? '#f59e0b' : '#ef4444';
+ const matchLabel = inRange ? '✅' : oa < targetOA.min ? `-${targetOA.min - oa}` : `+${oa - targetOA.max}`;
+ matchCell = `<td style="text-align:center;color:${matchColor};font-weight:600;font-size:9px;">${matchLabel}</td>`;
+ }
+ t += `<tr style="${targetOA && oa >= targetOA.min && oa <= targetOA.max ? 'background:rgba(16,185,129,0.08);' : ''}"><td style="padding:3px;color:#d1d5db;">${nameCell}${r.retiring === '1' || r.retiring === true ? ' 🕐' : ''}</td><td style="text-align:center;color:#9ca3af;">${r.natCode || '?'}</td><td style="text-align:center;color:#10b981;font-weight:700;">${r.OA}</td><td style="text-align:center;color:#9ca3af;">${r.age}</td><td style="text-align:center;color:#9ca3af;">${r.salary}</td><td style="text-align:center;color:#9ca3af;">${r.signFee}</td><td style="text-align:center;color:#9ca3af;">${r.offers}</td><td style="text-align:center;color:#60a5fa;">${value}</td>${matchCell}</tr>`;
  });
  t += `</table></div>`;
  return t;
@@ -5717,7 +5931,7 @@
  function mkShortlistSection(rows, idKey, targetOA, cash, league, cfgLabel, sectionId, priorityEntries) {
  if (!rows.length) return '';
  if (!targetOA) {
- return mkMarketTable(rows, idKey) +
+ return mkMarketTable(rows, idKey, targetOA) +
  `<div style="font-size:9px;color:#f59e0b;margin-top:4px;">No ${cfgLabel} guidance calibrated yet for ${league || 'your'} league - showing the full unfiltered list.</div>`;
  }
  // Politeness cap on real page fetches per scan - not an API budget concern, but still real
@@ -5733,7 +5947,7 @@
  : `No numeric minimum thresholds sourced for ${cfgLabel} at ${league} league yet - results will be ranked by Match Score instead of filtered to a hard cutoff.`;
  let h = `<div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">Target OA ${targetOA.min}-${targetOA.max} for ${league}${cash != null ? `, cash on hand $${cash.toLocaleString()}` : ' (cash balance unknown - visit UpdateCar.asp once to see it here)'}</div>`;
  h += `<div style="font-size:9px;color:#9ca3af;margin-bottom:6px;">${floorNote}</div>`;
- h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(capped, idKey)}</div>`;
+ h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(capped, idKey, targetOA)}</div>`;
  h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (${capped.length}${rows.length > capped.length ? ` of ${rows.length} listed` : ''} - fetches each candidate's profile page)</button>`;
  h += `<div id="gpro-scan-status-${sectionId}" style="font-size:9px;color:#6b7280;margin-top:4px;"></div>`;
  return h;

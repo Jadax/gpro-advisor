@@ -1299,7 +1299,162 @@ var GPRO_DATA = {
  { maxPhase: 1.0, multiplier: 0.9, label: 'calculated' },
  ],
  },
+ // Scraped race data from gproanalyzer.info (Season 111, authenticated scrape 2026-07-29)
+ scrapedRaceData: {
+ season: 111, manager: 'Tushant Sharma (ID 49036)', league: 'Amateur', supplier: 'Pipirelli',
+ races: [
+ { race: 1, track: 'Barcelona', laps: 65, fuelLkm: 0.729, tyrePkm: 0.779, qPos: 27, rPos: 27, pits: 2, temp: 40.37, humidity: 57.03, dryLaps: 65, rainLaps: 0, setup: { fw: 631, rw: 559, eng: 761, brakes: 550, gb: 609, susp: 447 } },
+ { race: 2, track: 'Ahvenisto', laps: 80, fuelLkm: 0.535, tyrePkm: 0.308, qPos: 36, rPos: 36, pits: 1, temp: 23.50, humidity: 57.95, dryLaps: 80, rainLaps: 0, setup: { fw: 999, rw: 999, eng: 410, brakes: 690, gb: 617, susp: 447 } },
+ { race: 3, track: 'Magny Cours', laps: 72, fuelLkm: 0.600, tyrePkm: 0.434, qPos: 36, rPos: 36, pits: 1, temp: 30.62, humidity: 37.83, dryLaps: 72, rainLaps: 0, setup: { fw: 807, rw: 641, eng: 512, brakes: 609, gb: 528, susp: 518 } },
+ { race: 4, track: 'Poznan', laps: 75, fuelLkm: 0.656, tyrePkm: 0.718, qPos: 20, rPos: 20, pits: 3, temp: 52.28, humidity: 12.73, dryLaps: 75, rainLaps: 0, setup: { fw: 928, rw: 882, eng: 642, brakes: 514, gb: 555, susp: 510 } },
+ { race: 5, track: 'A1-Ring', laps: 71, fuelLkm: 0.723, tyrePkm: 0.635, qPos: 21, rPos: 21, pits: 2, temp: 46.66, humidity: 14.27, dryLaps: 71, rainLaps: 0, setup: { fw: 422, rw: 254, eng: 846, brakes: 391, gb: 378, susp: 215 } },
+ { race: 6, track: 'Jyllands-Ringen', laps: 136, fuelLkm: 0.662, tyrePkm: 0.531, qPos: 22, rPos: 22, pits: 4, temp: 33.95, humidity: 33.51, dryLaps: 136, rainLaps: 0, setup: { fw: 928, rw: 999, eng: 422, brakes: 514, gb: 441, susp: 410 } },
+ { race: 7, track: 'Silverstone', laps: 60, fuelLkm: 0.710, tyrePkm: 0.642, qPos: 25, rPos: 25, pits: 2, temp: 27.45, humidity: 51.73, dryLaps: 60, rainLaps: 0, setup: { fw: 378, rw: 480, eng: 819, brakes: 407, gb: 363, susp: 361 } },
+ { race: 8, track: 'Buenos Aires', laps: 72, fuelLkm: 0.626, tyrePkm: 0.665, qPos: 18, rPos: 18, pits: 2, temp: 30.73, humidity: 39.27, dryLaps: 72, rainLaps: 0, setup: { fw: 999, rw: 991, eng: 595, brakes: 714, gb: 537, susp: 555 } },
+ { race: 9, track: 'Austin', laps: 56, fuelLkm: 0.680, tyrePkm: 0.908, qPos: 16, rPos: 32, pits: 4, temp: 46.84, humidity: 93.64, dryLaps: 51, rainLaps: 5, setup: { fw: 865, rw: 791, eng: 606, brakes: 714, gb: 407, susp: 724 } },
+ { race: 10, track: 'Montreal', laps: 69, fuelLkm: 0.763, tyrePkm: 0.477, qPos: 34, rPos: 34, pits: 2, temp: 43.74, humidity: 42.86, dryLaps: 69, rainLaps: 0, setup: { fw: 432, rw: 826, eng: 674, brakes: 592, gb: 514, susp: 235 } },
+ ],
+ },
+ // Season CTR data scraped from gproanalyzer.info (Season 111, all 17 tracks)
+ seasonCTR: [
+ { race: 1, track: 'Barcelona', laps: 65, overtaking: 'Hard', grip: 'Low', ctrLap: 2.832, ctrRace: 184.092 },
+ { race: 2, track: 'Ahvenisto', laps: 80, overtaking: 'Normal', grip: 'Normal', ctrLap: 3.277, ctrRace: 262.175 },
+ { race: 3, track: 'Magny Cours', laps: 72, overtaking: 'Hard', grip: 'High', ctrLap: 2.928, ctrRace: 210.845 },
+ { race: 4, track: 'Poznan', laps: 75, overtaking: 'Hard', grip: 'Normal', ctrLap: 2.856, ctrRace: 214.223 },
+ { race: 5, track: 'A1-Ring', laps: 71, overtaking: 'Easy', grip: 'Low', ctrLap: 2.714, ctrRace: 192.694 },
+ { race: 6, track: 'Jyllands-Ringen', laps: 136, overtaking: 'Normal', grip: 'Normal', ctrLap: 4.111, ctrRace: 559.049 },
+ { race: 7, track: 'Silverstone', laps: 52, overtaking: 'Normal', grip: 'Normal', ctrLap: 2.302, ctrRace: 119.708 },
+ { race: 8, track: 'Buenos Aires', laps: 72, overtaking: 'Very Hard', grip: 'Normal', ctrLap: 3.309, ctrRace: 238.233 },
+ { race: 9, track: 'Austin', laps: 56, overtaking: 'Easy', grip: 'High', ctrLap: 3.242, ctrRace: 181.580 },
+ { race: 10, track: 'Montreal', laps: 69, overtaking: 'Normal', grip: 'Very Low', ctrLap: 2.905, ctrRace: 200.463 },
+ { race: 11, track: 'Spa', laps: 44, overtaking: 'Normal', grip: 'Normal', ctrLap: 2.543, ctrRace: 111.904 },
+ { race: 12, track: 'Kaunas', laps: 80, overtaking: 'Normal', grip: 'Low', ctrLap: 2.908, ctrRace: 232.670 },
+ { race: 13, track: 'Hungaroring', laps: 77, overtaking: 'Very Hard', grip: 'Very High', ctrLap: 3.206, ctrRace: 246.852 },
+ { race: 14, track: 'Losail', laps: 57, overtaking: 'Hard', grip: 'High', ctrLap: 2.600, ctrRace: 148.198 },
+ { race: 15, track: 'New Delhi', laps: 60, overtaking: 'Normal', grip: 'Very Low', ctrLap: 2.712, ctrRace: 162.742 },
+ { race: 16, track: 'Yas Marina', laps: 55, overtaking: 'Hard', grip: 'High', ctrLap: 2.846, ctrRace: 156.526 },
+ { race: 17, track: 'Baku City', laps: 51, overtaking: 'Easy', grip: 'High', ctrLap: 2.897, ctrRace: 147.757 },
+ ],
+ // Database search condition field IDs (from gproanalyzer.info/database.php)
+ databaseFields: {
+ 1: 'Race Position', 2: 'Qualifying Position', 3: 'Driver - Overall', 23: 'Driver - Energy',
+ 4: 'Driver - Concentration', 5: 'Driver - Talent', 6: 'Driver - Aggressiveness',
+ 7: 'Driver - Experience', 8: 'Driver - Technical insight', 9: 'Driver - Stamina',
+ 10: 'Driver - Motivation', 11: 'Driver - Weight', 12: 'Car - Power', 13: 'Car - Handling',
+ 14: 'Car - Acceleration', 15: 'Risk - Overtake', 16: 'Risk - Defend',
+ 17: 'Risk - Clear & dry', 18: 'Risk - Clear & wet', 19: 'Weather - Temperature',
+ 20: 'Weather - Rain Laps', 24: 'Weather - Q1 Temperature', 25: 'Weather - Q1 Humidity',
+ 26: 'Weather - Q2 Temperature', 27: 'Weather - Q2 Humidity', 21: 'Pits', 22: 'Driver Mistakes',
+ },
+ // Season PHA (Track Power/Handling/Acceleration requirements, Season 111)
+ seasonPHA: [
+ { race: 1, track: 'Barcelona', power: 11, handling: 13, accel: 8, advantage: '+7' },
+ { race: 2, track: 'Ahvenisto', power: 5, handling: 10, accel: 7, advantage: '+8' },
+ { race: 3, track: 'Magny Cours', power: 12, handling: 8, accel: 11, advantage: '+5' },
+ { race: 4, track: 'Poznan', power: 7, handling: 14, accel: 8, advantage: '+13' },
+ { race: 5, track: 'A1-Ring', power: 13, handling: 8, accel: 9, advantage: '+9' },
+ { race: 6, track: 'Jyllands-Ringen', power: 5, handling: 9, accel: 4, advantage: '+9' },
+ { race: 7, track: 'Silverstone', power: 11, handling: 12, accel: 16, advantage: '+9' },
+ { race: 8, track: 'Buenos Aires', power: 12, handling: 11, accel: 9, advantage: '+4' },
+ { race: 9, track: 'Austin', power: 11, handling: 18, accel: 10, advantage: '+15' },
+ { race: 10, track: 'Montreal', power: 12, handling: 7, accel: 13, advantage: '+7' },
+ { race: 11, track: 'Spa', power: 18, handling: 16, accel: 13, advantage: '+7' },
+ { race: 12, track: 'Kaunas', power: 9, handling: 10, accel: 5, advantage: '+6' },
+ { race: 13, track: 'Hungaroring', power: 7, handling: 10, accel: 13, advantage: '+9' },
+ { race: 14, track: 'Losail', power: 13, handling: 16, accel: 9, advantage: '+10' },
+ { race: 15, track: 'New Delhi', power: 11, handling: 15, accel: 10, advantage: '+9' },
+ { race: 16, track: 'Yas Marina', power: 12, handling: 10, accel: 17, advantage: '+12' },
+ { race: 17, track: 'Baku City', power: 18, handling: 8, accel: 16, advantage: '+12' },
+ ],
+ // Season Car Wear (per-part wear % per race, Season 111)
+ seasonCarWear: [
+ { race: 1, track: 'Barcelona', oa: 29, chassis: 27, engine: 34, fw: 27, rw: 31, ub: 29, sidepods: 29, cooling: 29, gb: 29, brakes: 31, susp: 31, elec: 31 },
+ { race: 2, track: 'Ahvenisto', oa: 17, chassis: 17, engine: 17, fw: 12, rw: 12, ub: 12, sidepods: 22, cooling: 17, gb: 17, brakes: 22, susp: 12, elec: 17 },
+ { race: 3, track: 'Magny Cours', oa: 27, chassis: 22, engine: 27, fw: 17, rw: 12, ub: 22, sidepods: 27, cooling: 27, gb: 27, brakes: 31, susp: 29, elec: 22 },
+ { race: 4, track: 'Poznan', oa: 29, chassis: 29, engine: 27, fw: 17, rw: 27, ub: 31, sidepods: 33, cooling: 31, gb: 22, brakes: 27, susp: 17, elec: 33 },
+ { race: 5, track: 'A1-Ring', oa: 27, chassis: 29, engine: 31, fw: 6, rw: 12, ub: 12, sidepods: 29, cooling: 22, gb: 29, brakes: 29, susp: 17, elec: 33 },
+ { race: 6, track: 'Jyllands-Ringen', oa: 12, chassis: 6, engine: 12, fw: 17, rw: 17, ub: 6, sidepods: 6, cooling: 6, gb: 17, brakes: 22, susp: 6, elec: 22 },
+ { race: 7, track: 'Silverstone', oa: 22, chassis: 27, engine: 31, fw: 12, rw: 17, ub: 27, sidepods: 17, cooling: 17, gb: 29, brakes: 22, susp: 12, elec: 22 },
+ { race: 8, track: 'Buenos Aires', oa: 29, chassis: 29, engine: 33, fw: 12, rw: 17, ub: 12, sidepods: 22, cooling: 31, gb: 35, brakes: 35, susp: 34, elec: 33 },
+ { race: 9, track: 'Austin', oa: 22, chassis: 17, engine: 27, fw: 17, rw: 17, ub: 12, sidepods: 22, cooling: 27, gb: 22, brakes: 27, susp: 6, elec: 27 },
+ { race: 10, track: 'Montreal', oa: 27, chassis: 29, engine: 29, fw: 17, rw: 6, ub: 22, sidepods: 22, cooling: 17, gb: 29, brakes: 31, susp: 33, elec: 27 },
+ { race: 11, track: 'Spa', oa: 27, chassis: 29, engine: 29, fw: 17, rw: 22, ub: 29, sidepods: 27, cooling: 22, gb: 29, brakes: 29, susp: 33, elec: 29 },
+ { race: 12, track: 'Kaunas', oa: 22, chassis: 27, engine: 27, fw: 17, rw: 17, ub: 27, sidepods: 27, cooling: 17, gb: 12, brakes: 12, susp: 31, elec: 22 },
+ { race: 13, track: 'Hungaroring', oa: 29, chassis: 27, engine: 22, fw: 35, rw: 35, ub: 31, sidepods: 22, cooling: 17, gb: 33, brakes: 22, susp: 34, elec: 22 },
+ { race: 14, track: 'Losail', oa: 22, chassis: 29, engine: 17, fw: 12, rw: 12, ub: 12, sidepods: 12, cooling: 31, gb: 22, brakes: 27, susp: 6, elec: 27 },
+ { race: 15, track: 'New Delhi', oa: 27, chassis: 27, engine: 29, fw: 22, rw: 22, ub: 17, sidepods: 17, cooling: 27, gb: 27, brakes: 29, susp: 31, elec: 22 },
+ { race: 16, track: 'Yas Marina', oa: 27, chassis: 22, engine: 6, fw: 22, rw: 27, ub: 27, sidepods: 27, cooling: 33, gb: 27, brakes: 29, susp: 22, elec: 33 },
+ { race: 17, track: 'Baku City', oa: 22, chassis: 22, engine: 33, fw: 6, rw: 12, ub: 12, sidepods: 29, cooling: 22, gb: 22, brakes: 31, susp: 12, elec: 27 },
+ ],
+ // Quick Race Setup calibration data (from gproanalyzer.info/quicksetup.php, New Delhi GP)
+ // Shows how stops and lost time change with temperature and CTR per compound
+ quickSetupCalibration: {
+ track: 'New Delhi', laps: 60, pitLoss: 19,
+ // stops[compound] at different temp/CTR combinations
+ // Compounds: [ExtraSoft, Soft, Medium, Hard, Rain]
+ stopsByTemp: {
+ 14: { ct0: [4,3,2,1,1], ct50: [4,3,2,2,1], ct100: [5,4,3,2,1] },
+ 30: { ct0: [5,3,2,2,1] },
+ 45: { ct0: [6,4,3,2,1] },
+ },
+ lostTimeByTemp: {
+ 14: { ct0: [212.75,210.24,213.36,230.42,126.08], ct50: [212.75,210.24,213.36,245.31,126.08], ct100: [249.90,244.71,242.19,245.31,126.08] },
+ 30: { ct0: [249.90,196.03,184.95,202.70,126.08] },
+ 45: { ct0: [288.79,217.19,187.16,162.76,126.08] },
+ },
+ // Car setup values (Q1/Q2/Race) for dry conditions
+ setup: {
+ 14: { fw: [493,507,493], rw: [943,961,943], eng: [595,585,595], brakes: [452,470,452], gb: [767,755,767], susp: [253,235,253] },
+ },
+ },
+ // Driver OA formula test data (from gproanalyzer.info/driveroa.php)
+ // Reverse-engineered OA values for different skill combinations
+ driverOATests: [
+ { con: 100, tal: 100, agg: 100, exp: 100, tec: 100, sta: 100, cha: 100, mot: 100, rep: 0, wei: 50, age: 25, oa: 97 },
+ { con: 50, tal: 50, agg: 50, exp: 50, tec: 50, sta: 50, cha: 50, mot: 50, rep: 0, wei: 50, age: 25, oa: 47 },
+ { con: 150, tal: 50, agg: 0, exp: 150, tec: 150, sta: 50, cha: 50, mot: 50, rep: 0, wei: 50, age: 25, oa: 58 },
+ { con: 200, tal: 200, agg: 0, exp: 200, tec: 200, sta: 100, cha: 100, mot: 100, rep: 0, wei: 50, age: 25, oa: 112 },
+ { con: 250, tal: 250, agg: 0, exp: 250, tec: 250, sta: 250, cha: 250, mot: 250, rep: 0, wei: 50, age: 25, oa: 184 },
+ { con: 161, tal: 73, agg: 10, exp: 35, tec: 125, sta: 90, cha: 102, mot: 38, rep: 0, wei: 66, age: 20, oa: 84 },
+ ],
+ // Reverse-engineered formulas from gproanalyzer.info calculators
+ // Tested by submitting multiple input combinations via authenticated session
+ calculatorFormulas: {
+ // CTR Time Gain: CT/100 × ctrGainPerLap × laps = total race time gain
+ // Verified: CT=100 → 2.712 s/lap × 60 laps = 162.742 s/race
+ ctrTimeGainPerLap: 2.712,
+ // Time Lost Due To Pitting: pitLoss / laps × factor × stops × [pitFactor]
+ // Verified: pitLoss=15, laps=60 → 2.833 s/lap (factor=1/3.53)
+ pitTimeLossFactor: 0.2833,
+ // Time Lost Due To FLD: fuel × 0.003857 × (laps/60)^0.5 × (trackDist/300)
+ // Verified: fuel=100 → 0.214 s/lap at 60 laps
+ fldFuelFactor: 0.003857,
+ // Test Points per lap (linear scaling with laps)
+ testPointsPerLap: {
+ chassis: 1.3, engine: 1.3, fw: 1.3, rw: 3.2,
+ ub: 0.4, sidepods: 0.4, cooling: 0.4, gb: 3.2,
+ brakes: 0.4, susp: 0.4, elec: 3.2,
+ // Integer thresholds (appear at specific lap counts)
+ brakesInt: 2, suspInt: 2, coolingInt: 2,
+ },
+ // Car base costs ($M) for level 1 upgrade
+ carBaseCosts: {
+ chassis: 1.29, engine: 3.31, fw: 1.55, rw: 1.50, ub: 0.51,
+ sidepods: 0.46, cooling: 0.45, gb: 3.10, brakes: 0.70, susp: 1.18, elec: 0.94,
+ },
+ // Sponsor negotiation answers (from gproanalyzer.info/sponsor.php)
+ // Maps characteristic values (1-7) to answer text
+ sponsorAnswers: {
+ // Car spot placement based on image (ima) characteristic
+ carSpot: { 1: 'Front wing', 2: 'Front wing', 3: 'Rear wing', 4: 'Nose', 5: 'Sidepods', 6: 'Sidepods', 7: 'Engine cover' },
+ // Season expectations based on expectations (exp) characteristic
+ expectations: { 1: 'Relegate with cash', 2: 'Relegate with cash', 3: 'Low table position', 4: 'Low table position', 5: 'Mid table position', 6: 'Promotion / top 4 / championship win', 7: 'Promotion / top 4 / championship win' },
+ // Driver popularity based on image (ima) characteristic
+ popularity: { 1: 'My driver is hated by the fans', 2: 'My driver is hated by the fans', 3: 'My driver is not very popular with the fans', 4: 'My driver is not very popular with the fans', 5: 'My driver is liked by the fans', 6: 'My driver is quite popular with the fans', 7: 'My driver is a favourite of the fans' },
+ // Amount satisfaction based on patience (pat) characteristic
+ amount: { 1: 'OK', 2: 'OK', 3: 'A bit too low', 4: 'A bit too low', 5: 'Far too low', 6: 'Far too low', 7: 'Unacceptable' },
+ // Contract duration satisfaction based on patience (pat) characteristic
+ duration: { 1: 'OK', 2: 'OK', 3: 'OK', 4: 'OK', 5: 'A bit too low', 6: 'A bit too low', 7: 'Far too low' },
+ },
+ },
 };
-
-// Export for Tampermonkey (will be embedded in script)
-if (typeof module !== 'undefined') module.exports = GPRO_DATA;
