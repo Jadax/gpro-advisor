@@ -314,11 +314,12 @@
  const tdId = office && office.tdId;
  let tdExperience = 0, tdPitCoordination = 0, hasTd = false;
  if (tdId) {
+ // DOM-first: try stale cache from background capture, then API as last resort
  const td = await getDataSmart('/TDProfile').catch(() => null);
  if (td) {
- tdExperience = parseInt(td.experience) || 0;
- tdPitCoordination = parseInt(td.pitCoord) || 0;
- hasTd = true;
+  tdExperience = parseInt(td.experience) || 0;
+  tdPitCoordination = parseInt(td.pitCoord) || 0;
+  hasTd = true;
  }
  }
  return { staffConcentration, staffStress, tdExperience, tdPitCoordination, hasTd };
@@ -821,6 +822,93 @@
  } catch (e) { return null; }
  }
 
+ // Parses NegotiationsOverview.asp DOM for car spots and ongoing negotiations.
+ // Replaces the /NegOverview API call with zero-budget DOM scraping.
+ function parseNegOverviewDOM(root) {
+ root = root || document;
+ try {
+ const out = { carSpots: [], carSpotsTaken: 0, ongNegs: [], comms: [] };
+
+ // Car spots: table rows with car spot name, sponsor, amount, races left, satisfaction
+ const tables = root.querySelectorAll('table');
+ tables.forEach(table => {
+ const headers = [];
+ table.querySelectorAll('tr:first-child th, tr:first-child td').forEach(th => {
+  headers.push(th.textContent.trim().toLowerCase());
+ });
+ // Look for car spots table (has "car spot" or "sponsor" in headers)
+ const hasCarSpots = headers.some(h => h.includes('car spot') || h.includes('sponsor'));
+ if (hasCarSpots) {
+  table.querySelectorAll('tr').forEach((tr, i) => {
+  if (i === 0) return; // skip header
+  const cells = tr.querySelectorAll('td');
+  if (cells.length >= 4) {
+   const spotName = cells[0]?.textContent?.trim() || '';
+   const sponsorName = cells[1]?.textContent?.trim() || '';
+   const amount = cells[2]?.textContent?.trim() || '';
+   const racesLeft = cells[3]?.textContent?.trim() || '';
+   const satisfaction = cells[4]?.textContent?.trim() || '';
+   if (spotName) {
+    const empty = !sponsorName || sponsorName === '(empty)' || sponsorName === '';
+    out.carSpots.push({
+     carSpotName: spotName,
+     sponsorId: empty ? null : 1,
+     name: empty ? '' : sponsorName,
+     amount: amount,
+     racesLeft: parseInt(racesLeft) || 0,
+     satisfaction: satisfaction,
+    });
+    if (!empty) out.carSpotsTaken++;
+   }
+  }
+  });
+ }
+ });
+
+ // Ongoing negotiations: table rows with sponsor, spot, amount, duration, progress, priority
+ tables.forEach(table => {
+ const headers = [];
+ table.querySelectorAll('tr:first-child th, tr:first-child td').forEach(th => {
+  headers.push(th.textContent.trim().toLowerCase());
+ });
+ const hasNegs = headers.some(h => h.includes('negotiation') || h.includes('progress'));
+ if (hasNegs && !headers.some(h => h.includes('car spot'))) {
+  table.querySelectorAll('tr').forEach((tr, i) => {
+  if (i === 0) return;
+  const cells = tr.querySelectorAll('td');
+  if (cells.length >= 5) {
+   const name = cells[0]?.textContent?.trim() || '';
+   const spot = cells[1]?.textContent?.trim() || '';
+   const amount = cells[2]?.textContent?.trim() || '';
+   const duration = cells[3]?.textContent?.trim() || '';
+   const progress = cells[4]?.textContent?.trim() || '';
+   if (name) {
+    out.ongNegs.push({
+     name, carSpotName: spot, amount, duration, progress,
+     priority: cells[5]?.textContent?.trim() || '',
+     contested: cells[6]?.textContent?.trim() || '',
+     attention: progress.includes('?') || progress.includes('stalled'),
+     sponsorId: 1,
+    });
+   }
+  }
+  });
+ }
+ });
+
+ // Recent messages
+ const msgEls = root.querySelectorAll('.message, [class*="message"], [class*="comm"]');
+ msgEls.forEach(el => {
+ const text = el.textContent?.trim();
+ if (text && text.length > 5 && text.length < 500) {
+  out.comms.push({ msg: text, dt: '' });
+ }
+ });
+
+ return out;
+ } catch (e) { return null; }
+ }
+
  // Weather from Qualify.asp/Qualify2.asp/RaceSetup.asp, shaped to match what extractWeather()
  // expects at the top level of a /Practice response (raceQ{1-4}TempLow/High/RainPLow/RainPHigh/
  // HumLow/HumHigh) - lets a background-fetched Qualify.asp page fully stand in for a failed
@@ -1102,11 +1190,13 @@
  // links already present on gpro.asp itself (`DriverProfile.asp?ID=N`, `TrackDetails.asp?id=N`) -
  // both are always on the home page, so no extra request is needed to discover them.
  async function backgroundCaptureAuxPages() {
- const results = { driver: false, track: false, suppliers: false, staff: false, weather: false, testing: false };
+ const results = { driver: false, track: false, suppliers: false, staff: false, weather: false, testing: false, td: false, neg: false };
  const driverLink = document.querySelector('a[href*="DriverProfile.asp?ID="]');
  const trackLink = document.querySelector('a[href*="TrackDetails.asp?id="]');
+ const tdLink = document.querySelector('a[href*="TDProfile.asp"]');
  const driverId = driverLink && (driverLink.getAttribute('href').match(/ID=(\d+)/) || [])[1];
  const trackId = trackLink && (trackLink.getAttribute('href').match(/id=(\d+)/) || [])[1];
+ const tdId = tdLink && (tdLink.getAttribute('href').match(/ID=(\d+)/i) || [])[1];
 
  const jobs = [];
  if (driverId) {
@@ -1145,6 +1235,20 @@
  const w = parseWeatherDOM(doc);
  if (w) { setStaleData('/Practice', w); results.weather = true; }
  }).catch((e) => logError('background Qualify weather fetch failed:', e.message)));
+ // TD profile: parse if link is visible on page
+ if (tdId) {
+ jobs.push(fetchPageHTML(`TDProfile.asp?ID=${tdId}`).then((html) => {
+ const doc = new DOMParser().parseFromString(html, 'text/html');
+ const td = parseTdProfileDOM(doc);
+ if (td) { setStaleData('/TDProfile', td); results.td = true; }
+ }).catch((e) => logError('background TDProfile fetch failed:', e.message)));
+ }
+ // NegotiationsOverview: parse sponsor/car-spot data
+ jobs.push(fetchPageHTML('NegotiationsOverview.asp').then((html) => {
+ const doc = new DOMParser().parseFromString(html, 'text/html');
+ const neg = parseNegOverviewDOM(doc);
+ if (neg) { setStaleData('/NegOverview', neg); results.neg = true; }
+ }).catch((e) => logError('background NegotiationsOverview fetch failed:', e.message)));
 
  await Promise.allSettled(jobs);
  return results;
