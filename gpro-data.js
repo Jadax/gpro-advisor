@@ -1457,4 +1457,22 @@ var GPRO_DATA = {
  duration: { 1: 'OK', 2: 'OK', 3: 'OK', 4: 'OK', 5: 'A bit too low', 6: 'A bit too low', 7: 'Far too low' },
  },
  },
+ // Formula structures from gpro-pitwall (MVinhas/gpro-pitwall, MIT-referenced)
+ // Actual constants are in secrets.php (git-ignored). These are the formula STRUCTURES.
+ pitwallFormulas: {
+ // TCD formula: laps × (corners × lapLength × 0.00018 × (50 - temp) + tcdDiff)
+ // tcdDiff is supplier-specific (Pipirelli=0, others vary)
+ tcdFormula: 'laps * (corners * lapLength * 0.00018 * (50 - temp) + supplierDiff)',
+ // Fuel cost: 0.005 × ((distance × (fuelPerLap + driverAdj)) × distance / (stops+1)) / 2
+ fuelCostFormula: '0.005 * ((dist * (fpl + driverAdj)) * dist / (stops+1)) / 2',
+ // Driver fuel adjustment: conc*ff.conc + agg*ff.agg + exp*ff.exp + te*ff.te + eng*ff.eng + ele*ff.ele + constant
+ // Negative coefficients = better drivers consume LESS fuel
+ // Pit time: fuelPerStint * fFuel + baseTime + staffConc*fConc + staffStress*fStress + tdExp*fTdExp + tdPit*fTdPit
+ // Floor at 15s minimum
+ // Tyre wear: maxKm = factors × trackWear × constant × rainMod
+ // factors = f_Track^trackWearVal × f_Temp^temp × f_Dur^durability × f_Susp^suspLevel × f_Agg^agg × f_Exp^exp × f_Wgt^weight × f_Type^typeVal × f_Risk^risk
+ // OA formula: Σ(skill × factor) — factors are configurable per-division
+ // Division caps: Rookie=85, Amateur=110, Pro=135, Master=160, Elite=∞
+ // When OA > cap: reduce motivation first (factor×mot), then scale secondary skills proportionally
+ },
 };
