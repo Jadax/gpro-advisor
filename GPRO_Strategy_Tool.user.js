@@ -3404,7 +3404,19 @@
  const stopLaps = [];
  for (let i = 1; i <= stops; i++) stopLaps.push(Math.round((laps / stints) * i));
  return { laps, fuelPerLap: tyre.fuelPerLap, totalFuel, stints, stops, fuelPerStint, stopLaps };
- })() : calcFuelSimple(track, testing, driver);
+ })() : (() => {
+ // Fallback: compute from tyre strategy data when DOM FuelStart is unavailable
+ if (!tyre || !chosenTyreResult) return null;
+ const laps = tyre.laps;
+ const totalFuel = tyre.totalFuel;
+ const fuelPerLap = parseFloat(tyre.fuelPerLap) || 0;
+ const stops = chosenTyreResult.stops;
+ const stints = stops + 1;
+ const fuelPerStint = Math.ceil(totalFuel / stints);
+ const stopLaps = [];
+ for (let i = 1; i <= stops; i++) stopLaps.push(Math.round((laps / stints) * i));
+ return { laps, fuelPerLap, totalFuel, stints, stops, fuelPerStint, stopLaps };
+ })();
 
   let h = mkStaleBanner(practice, track, testing, driver, carData);
 
