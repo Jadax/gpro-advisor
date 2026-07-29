@@ -1366,6 +1366,18 @@
  const compoundWearRates = D.tyreConstants?.compoundWearRates || {
  'Extra Soft': 5.65, 'Soft': 4.10, 'Medium': 3.02, 'Hard': 2.23, 'Rain': 3.50,
  };
+ // Enhance with scraped tyre compound factors (from gprohub.net) if available
+ // Lower factor = faster wear. Convert factor to effective wear rate adjustment
+ if (D.tyreCompoundFactors) {
+  for (const [name, info] of Object.entries(D.tyreCompoundFactors)) {
+   if (compoundWearRates[name] !== undefined) {
+    // Factor 0.998 = fast wear (ES), 0.9959 = slow wear (Hard)
+    // Map factor range to wear rate multiplier: 0.998→1.3, 0.996→1.0, 0.995→0.8
+    const factorM = 1.0 + (info.factor - 0.996) * 150;
+    compoundWearRates[name] = compoundWearRates[name] * factorM;
+   }
+  }
+ }
  const CTR_WEAR_ADD = D.tyreConstants?.ctrWearAdd ?? 0.01;
  const WEAR_THRESHOLD = D.tyreConstants?.wearThreshold ?? 15;
  const compoundSpeedDelta = D.tyreConstants?.compoundSpeedDelta || {
@@ -1405,13 +1417,16 @@
  const fuelPerStint = Math.ceil(totalFuel / stints);
  if (fuelPerStint > TANK_MAX) continue;
 
- // === TCD: Tyre Compound Degradation ===
- // TCD increases as final wear decreases (more time on worn tyres)
- // TCD = 0 when final wear is high, increases as wear approaches 0
- // Formula: TCD = stops × (100 - finalWear) × speedDeltaFactor
- const wearPenalty = Math.max(0, (100 - finalWear) / 100);
- const speedDelta = compoundSpeedDelta[name] || 0;
- const tcd = stops * wearPenalty * Math.abs(speedDelta) * 2;
+  // === TCD: Tyre Compound Degradation ===
+  // TCD increases as final wear decreases (more time on worn tyres)
+  // TCD = 0 when final wear is high, increases as wear approaches 0
+  // Use scraped supplier compoundDiff if available (from gprohub.net)
+  const supplierCompoundDiff = (supplier && D.tyreSuppliers)
+   ? (D.tyreSuppliers.find(s => s.name === supplier.name)?.compoundDiff || 0)
+   : 0;
+  const wearPenalty = Math.max(0, (100 - finalWear) / 100);
+  const speedDelta = compoundSpeedDelta[name] || 0;
+  const tcd = stops * wearPenalty * Math.abs(speedDelta) * 2 + (supplierCompoundDiff * laps * 0.1);
 
  // === FLD: Fuel Load Degradation ===
  // FLD = fuel weight penalty per lap × total laps
@@ -4635,10 +4650,23 @@
  const typeData = GPRO_DATA.trackTypeWear[trackType];
  if (trackType !== 'road' && typeData && typeData.note) {
  h += mkSection('Track Type Wear Note', `<div style="font-size:9px;color:#f59e0b;padding:4px 8px;background:#1e293b;border-radius:4px;border-left:3px solid #f59e0b;">${typeData.note}. Prioritize the affected parts above.</div>`);
- }
- }
+  }
+  }
 
- // Upgrade Timing Intelligence (from Elite: optimize when to spend cash)
+  // Real Race Wear Data (from scraped gproanalyzer.info Season 111)
+  // Shows actual per-part wear from your last 10 races for calibration reference
+  if (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.scrapedRaceData && GPRO_DATA.scrapedRaceData.races) {
+  const races = GPRO_DATA.scrapedRaceData.races.slice(-5); // Last 5 races
+  let wearHtml = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:8px;">';
+  wearHtml += '<tr style="color:#60a5fa;font-weight:700;"><td style="padding:2px;">Race</td><td style="text-align:center;">FW</td><td style="text-align:center;">RW</td><td style="text-align:center;">UB</td><td style="text-align:center;">GB</td><td style="text-align:center;">Brk</td><td style="text-align:center;">Susp</td></tr>';
+  races.forEach(r => {
+   wearHtml += `<tr><td style="padding:2px;color:#d1d5db;">R${r.race} ${r.track.split(' ')[0]}</td><td style="text-align:center;color:#9ca3af;">${r.setup.fw}</td><td style="text-align:center;color:#9ca3af;">${r.setup.rw}</td><td style="text-align:center;color:#9ca3af;">${r.setup.ub || '?'}</td><td style="text-align:center;color:#9ca3af;">${r.setup.gb || '?'}</td><td style="text-align:center;color:#9ca3af;">${r.setup.brakes || '?'}</td><td style="text-align:center;color:#9ca3af;">${r.setup.susp || '?'}</td></tr>`;
+  });
+  wearHtml += '</table></div>';
+  h += mkSection('Recent Race Setups (Reference)', wearHtml + `<span style="font-size:8px;color:#6b7280;">Actual setups used in your last 5 races (scraped from gproanalyzer.info). Use as calibration reference for future races.</span>`);
+  }
+
+  // Upgrade Timing Intelligence (from Elite: optimize when to spend cash)
  // Cross-references upcoming tracks' wear data with current part wear to recommend timing
  if (projection && projection.length > 0 && analysis.recs.length > 0) {
  const upgradeRecs = analysis.recs.filter(r => r.verdict === 'UPGRADE' || r.verdict === 'SAVE');
@@ -4679,6 +4707,23 @@
    <div style="font-size:9px;color:#6b7280;">Acceleration</div>
    <div style="font-size:16px;font-weight:700;color:#10b981;">${carAccel}</div></div></div>`;
   h += mkSection('Car PHA', phaHtml + `<span style="font-size:9px;color:#6b7280;">Power=Chassis+Engine+FW+RW, Handling=UB+Sidepods+Cooling+GB, Accel=Brakes+Susp+Elec. Track-match matters for setup.</span>`);
+  }
+
+  // Upcoming Track PHA Requirements (from scraped seasonPHA data)
+  if (car && typeof GPRO_DATA !== 'undefined' && GPRO_DATA.seasonPHA) {
+  const carPower = parseInt(car.carPower) || 0;
+  const carHandl = parseInt(car.carHandl) || 0;
+  const carAccel = parseInt(car.carAccel) || 0;
+  let phaHtml = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:9px;">';
+  phaHtml += '<tr style="color:#60a5fa;font-weight:700;"><td style="padding:2px;">Track</td><td style="text-align:center;">Need P</td><td style="text-align:center;">Need H</td><td style="text-align:center;">Need A</td><td style="text-align:center;">Your P</td><td style="text-align:center;">Your H</td><td style="text-align:center;">Your A</td><td style="text-align:center;">Best Match</td></tr>';
+  GPRO_DATA.seasonPHA.slice(0, 5).forEach(t => {
+   const match = carPower >= t.power && carHandl >= t.handling && carAccel >= t.accel;
+   const best = carPower >= carHandl && carPower >= carAccel ? 'Power' : carHandl >= carAccel ? 'Handling' : 'Acceleration';
+   const trackBest = t.power >= t.handling && t.power >= t.accel ? 'Power' : t.handling >= t.accel ? 'Handling' : 'Acceleration';
+   phaHtml += `<tr style="${match ? 'background:rgba(16,185,129,0.08);' : ''}"><td style="padding:2px;color:#d1d5db;">R${t.race} ${t.track}</td><td style="text-align:center;color:${carPower >= t.power ? '#10b981' : '#ef4444'};">${t.power}</td><td style="text-align:center;color:${carHandl >= t.handling ? '#10b981' : '#ef4444'};">${t.handling}</td><td style="text-align:center;color:${carAccel >= t.accel ? '#10b981' : '#ef4444'};">${t.accel}</td><td style="text-align:center;color:#9ca3af;">${carPower}</td><td style="text-align:center;color:#9ca3af;">${carHandl}</td><td style="text-align:center;color:#9ca3af;">${carAccel}</td><td style="text-align:center;color:#60a5fa;font-size:8px;">${trackBest}</td></tr>`;
+  });
+  phaHtml += '</table></div>';
+  h += mkSection('Upcoming Track PHA Requirements', phaHtml + `<span style="font-size:9px;color:#6b7280;">Green = your car meets the track requirement. Red = deficit. Consider upgrading parts that feed the track's dominant attribute.</span>`);
   }
 
   // Happy Range display (driver's acceptable wear range)
@@ -5715,27 +5760,29 @@
  function calcSponsorAnswerAdvice(profile) {
  if (!profile) return null;
  const c = {
- finances: (parseInt(profile.finances) || 0) + 1,
- expectations: (parseInt(profile.expectations) || 0) + 1,
- patience: (parseInt(profile.patience) || 0) + 1,
- reputation: (parseInt(profile.reputation) || 0) + 1,
- image: (parseInt(profile.image) || 0) + 1,
- negotiation: (parseInt(profile.negotiation) || 0) + 1,
+  finances: (parseInt(profile.finances) || 0) + 1,
+  expectations: (parseInt(profile.expectations) || 0) + 1,
+  patience: (parseInt(profile.patience) || 0) + 1,
+  reputation: (parseInt(profile.reputation) || 0) + 1,
+  image: (parseInt(profile.image) || 0) + 1,
+  negotiation: (parseInt(profile.negotiation) || 0) + 1,
  };
- const carSpotFor = (image) => image <= 1 ? 'Front wing' : image === 2 ? 'Rear wing' : image === 3 ? 'Nose' : image <= 5 ? 'Sidepods' : 'Engine cover';
- const expectationFor = (exp) => exp <= 2 ? 'Relegate with cash' : exp <= 4 ? 'Low table position' : exp === 5 ? 'Mid table position' : 'Promotion / top 4 / championship win';
- const popularityFor = (image) => image <= 2 ? 'My driver is hated by the fans' : image <= 4 ? 'My driver is not very popular with the fans' : image === 5 ? 'My driver is liked by the fans' : image === 6 ? 'My driver is quite popular with the fans' : 'My driver is a favourite of the fans';
- const amountFor = (pat) => pat <= 2 ? 'OK' : pat <= 4 ? 'A bit too low' : pat <= 6 ? 'Far too low' : 'Unacceptable';
- const durationFor = (pat) => pat <= 4 ? 'OK' : pat <= 6 ? 'A bit too low' : 'Far too low';
+ // Use scraped sponsor answers from gproanalyzer.info as source of truth
+ const sa = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.sponsorAnswers) || {};
+ const carSpotFor = (image) => (sa.carSpot && sa.carSpot[image]) || (image <= 1 ? 'Front wing' : image === 2 ? 'Rear wing' : image === 3 ? 'Nose' : image <= 5 ? 'Sidepods' : 'Engine cover');
+ const expectationFor = (exp) => (sa.expectations && sa.expectations[exp]) || (exp <= 2 ? 'Relegate with cash' : exp <= 4 ? 'Low table position' : exp === 5 ? 'Mid table position' : 'Promotion / top 4 / championship win');
+ const popularityFor = (image) => (sa.popularity && sa.popularity[image]) || (image <= 2 ? 'My driver is hated by the fans' : image <= 4 ? 'My driver is not very popular with the fans' : image === 5 ? 'My driver is liked by the fans' : image === 6 ? 'My driver is quite popular with the fans' : 'My driver is a favourite of the fans');
+ const amountFor = (pat) => (sa.amount && sa.amount[pat]) || (pat <= 2 ? 'OK' : pat <= 4 ? 'A bit too low' : pat <= 6 ? 'Far too low' : 'Unacceptable');
+ const durationFor = (pat) => (sa.duration && sa.duration[pat]) || (pat <= 4 ? 'OK' : pat <= 6 ? 'A bit too low' : 'Far too low');
  return {
- characteristics: c,
- answers: {
- 'Which area of the car would our advertisement be placed on?': carSpotFor(c.image),
- 'What are you expecting to achieve next season?': expectationFor(c.expectations),
- 'How popular is your driver with the fans?': popularityFor(c.image),
- 'What do you think of the amount per race we proposed?': amountFor(c.patience),
- 'What do you think of the contract duration we proposed?': durationFor(c.patience),
- },
+  characteristics: c,
+  answers: {
+  'Which area of the car would our advertisement be placed on?': carSpotFor(c.image),
+  'What are you expecting to achieve next season?': expectationFor(c.expectations),
+  'How popular is your driver with the fans?': popularityFor(c.image),
+  'What do you think of the amount per race we proposed?': amountFor(c.patience),
+  'What do you think of the contract duration we proposed?': durationFor(c.patience),
+  },
  };
  }
 
