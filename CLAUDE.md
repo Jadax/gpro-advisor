@@ -45,6 +45,20 @@ Tampermonkey userscript for gpro.net. Two files: `GPRO_Strategy_Tool.user.js` (l
 | `renderTraining()` | 4790 | Training page renderer |
 | `init()` | 5074 | Main router: fetches data, calls render functions |
 
+## Visual design system (2026-07-29)
+
+All panel chrome (background/header/section-cards/rows/buttons/scrollbar) is centralized through
+`PALETTE`, `injectGlobalStyles()`, and `ST` near the top of the file, plus `mkSection`/`mkRow`/
+`mkRec`/`mkInlineBar`/`barStyle`. Editing those few spots reaches every rendered panel — don't
+hand-roll one-off panel/section/card styling in a new render function, reuse these. Semantic verdict
+colors (`good`=#10b981, `warn`=#f59e0b, `bad`=#ef4444, `info`=#3b82f6) are used in hundreds of call
+sites throughout the render functions and are deliberately NOT part of the chrome refresh — don't
+change those hues without a very good reason, since they're load-bearing for meaning, not just
+decoration. `injectGlobalStyles()` is idempotent (checks for `#gpro-global-style` before injecting)
+and must be called from `createPanel()` — it's what gives every `<button>`/`.gpro-card`/
+`[data-jump-to]` element inside `#gpro-panel` its hover/transition behavior for free, without each
+call site needing its own CSS.
+
 ## Active Rules
 
 - **After changing `gpro-data.js`, bump BOTH `@version` in `GPRO_Strategy_Tool.user.js` AND the `?v=` cache-buster on the `@require file://...gpro-data.js` line.** Tampermonkey caches `@require` by exact URL and won't re-fetch a local `file://` require on a normal reload.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.2.3
+// @version 6.3.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -350,27 +350,81 @@
  return `height:100%;border-radius:7px;background:${color};width:${Math.min(100, Math.max(0, pct))}%;transition:width 0.3s;`;
  }
 
+ // ============================================================
+ // VISUAL REFRESH (2026-07-29) — warmer, softer, snappier chrome around the same semantic
+ // verdict colors (good/warn/bad/info) used in hundreds of call sites throughout this file.
+ // Deliberately NOT touching those hues here - only the structural "chrome" (panel/header/
+ // section/row/bar styling), which is fully centralized through ST/mkSection/mkRow/mkRec/
+ // barStyle/mkInlineBar, so this one edit reaches every rendered panel without needing to touch
+ // each render* function individually.
+ // ============================================================
+ const PALETTE = {
+ bg: '#12151d', // panel background - warm-neutral near-black, softer than flat slate
+ bgCard: '#1a1f2b', // section "card" background, one step lighter than the panel
+ bgCardHover: '#20263480',
+ border: '#262c3b',
+ borderSoft: '#1f2430',
+ text: '#e9ebf2', // warm off-white, easier on the eyes than pure white
+ textDim: '#9aa3b8',
+ textMuted: '#6b7386',
+ accent: '#5aa3f5', // primary blue accent (kept close to gpro.net's own brand blue)
+ accentSoft: '#5aa3f533',
+ warm: '#f5b942', // warm amber highlight, used sparingly for a friendly touch
+ };
+
+ // Injects one shared <style> block (scrollbar, transitions, hover states, keyframes) so the
+ // hundreds of inline `style="..."` attributes throughout this file don't each need their own
+ // hover/transition rules. Idempotent - safe to call on every createPanel().
+ function injectGlobalStyles() {
+ if (document.getElementById('gpro-global-style')) return;
+ const style = document.createElement('style');
+ style.id = 'gpro-global-style';
+ style.textContent = `
+ @keyframes gpro-fade-in { from { opacity:0; transform:translateY(-4px) scale(0.99); } to { opacity:1; transform:translateY(0) scale(1); } }
+ #gpro-panel { animation: gpro-fade-in 0.18s ease-out; }
+ #gpro-panel * { box-sizing:border-box; }
+ #gpro-panel ::-webkit-scrollbar { width:8px; height:8px; }
+ #gpro-panel ::-webkit-scrollbar-track { background:transparent; }
+ #gpro-panel ::-webkit-scrollbar-thumb { background:${PALETTE.border}; border-radius:8px; }
+ #gpro-panel ::-webkit-scrollbar-thumb:hover { background:${PALETTE.accent}77; }
+ #gpro-panel .gpro-card { background:${PALETTE.bgCard}; border:1px solid ${PALETTE.borderSoft}; border-radius:10px; padding:9px 11px; margin-bottom:10px; transition:border-color 0.15s ease, transform 0.15s ease; }
+ #gpro-panel .gpro-icon-btn { cursor:pointer; color:${PALETTE.textDim}; border-radius:6px; padding:2px 6px; line-height:1; transition:background 0.15s ease, color 0.15s ease; }
+ #gpro-panel .gpro-icon-btn:hover { background:#ffffff14; color:${PALETTE.text}; }
+ #gpro-panel button { transition:filter 0.15s ease, transform 0.1s ease, opacity 0.15s ease; }
+ #gpro-panel button:hover:not(:disabled) { filter:brightness(1.12); }
+ #gpro-panel button:active:not(:disabled) { transform:translateY(1px); }
+ #gpro-panel button:disabled { opacity:0.55; cursor:not-allowed; }
+ #gpro-panel a { transition:color 0.15s ease; }
+ #gpro-panel [data-jump-to] { transition:transform 0.12s ease, filter 0.12s ease; }
+ #gpro-panel [data-jump-to]:hover { transform:translateY(-1px); filter:brightness(1.15); }
+ #gpro-panel details summary { transition:color 0.15s ease; }
+ #gpro-panel table tr:hover td { background:#ffffff08; }
+ `;
+ document.head.appendChild(style);
+ }
+
  const ST = {
- panel: 'position:fixed;top:50px;right:10px;z-index:99999;width:370px;max-height:88vh;overflow-y:auto;background:#111827;color:#e5e7eb;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,0.6);font-family:system-ui,-apple-system,sans-serif;font-size:12px;line-height:1.5;',
- header: 'background:linear-gradient(135deg,#1e3a5f,#0f172a);padding:10px 14px;border-radius:10px 10px 0 0;display:flex;justify-content:space-between;align-items:center;cursor:move;user-select:none;border-bottom:1px solid #1e40af;',
- headerH3: 'margin:0;font-size:14px;color:#60a5fa;font-weight:700;letter-spacing:0.3px;',
- closeBtn: 'cursor:pointer;color:#6b7280;font-size:20px;padding:0 4px;line-height:1;',
+ panel: `position:fixed;top:50px;right:10px;z-index:99999;width:370px;max-height:88vh;overflow-y:auto;background:${PALETTE.bg};color:${PALETTE.text};border-radius:14px;box-shadow:0 20px 50px -12px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.05);font-family:-apple-system,system-ui,"Segoe UI",sans-serif;font-size:12px;line-height:1.55;transition:max-height 0.25s ease;-webkit-font-smoothing:antialiased;`,
+ header: `background:linear-gradient(135deg,#1d3a5f,#0d1420);padding:11px 14px;border-radius:14px 14px 0 0;display:flex;justify-content:space-between;align-items:center;cursor:move;user-select:none;border-bottom:2px solid ${PALETTE.warm}55;`,
+ headerH3: `margin:0;font-size:14px;color:${PALETTE.text};font-weight:700;letter-spacing:0.2px;`,
+ closeBtn: `cursor:pointer;color:${PALETTE.textDim};font-size:20px;padding:0 4px;line-height:1;`,
  body: 'padding:12px;',
  section: 'margin-bottom:12px;',
- sectionTitle: 'font-size:11px;font-weight:700;color:#60a5fa;text-transform:uppercase;letter-spacing:0.8px;border-bottom:1px solid #1f2937;padding-bottom:4px;margin-bottom:8px;',
- row: 'display:flex;justify-content:space-between;padding:2px 0;',
- label: 'color:#9ca3af;',
- value: 'color:#f9fafb;font-weight:600;',
- rec: 'padding:6px 10px;margin:4px 0;border-radius:0 6px 6px 0;font-size:11px;border-left:3px solid;',
- barOuter: 'height:12px;background:#1f2937;border-radius:6px;overflow:hidden;margin:3px 0;',
- partRow: 'display:flex;align-items:center;gap:4px;padding:4px 0;border-bottom:1px solid #1f2937;',
- wearBar: 'height:6px;background:#1f2937;border-radius:3px;overflow:hidden;',
- loading: 'text-align:center;padding:30px;color:#6b7280;',
+ sectionTitle: `font-size:11px;font-weight:700;color:${PALETTE.accent};text-transform:uppercase;letter-spacing:0.7px;padding-left:8px;margin-bottom:8px;border-left:3px solid ${PALETTE.accent};`,
+ row: 'display:flex;justify-content:space-between;align-items:baseline;padding:3px 0;',
+ label: `color:${PALETTE.textDim};`,
+ value: `color:${PALETTE.text};font-weight:600;`,
+ rec: 'padding:7px 11px;margin:5px 0;border-radius:8px;font-size:11px;border-left:3px solid;line-height:1.5;',
+ barOuter: `height:12px;background:${PALETTE.borderSoft};border-radius:7px;overflow:hidden;margin:3px 0;`,
+ partRow: `display:flex;align-items:center;gap:4px;padding:5px 0;border-bottom:1px solid ${PALETTE.borderSoft};`,
+ wearBar: `height:6px;background:${PALETTE.borderSoft};border-radius:3px;overflow:hidden;`,
+ loading: `text-align:center;padding:30px;color:${PALETTE.textMuted};`,
  };
 
  function mkRec(text, type) {
  const colors = { good: '#10b981', warn: '#f59e0b', bad: '#ef4444', info: '#3b82f6' };
- return `<div style="${ST.rec}border-color:${colors[type] || colors.info};background:${colors[type]}11;">${text}</div>`;
+ const c = colors[type] || colors.info;
+ return `<div style="${ST.rec}border-color:${c};background:${c}14;">${text}</div>`;
  }
 
  // Small non-blocking badge shown when one or more inputs fell back to stale cached data
@@ -389,7 +443,7 @@
  // Tiny inline bar for season overview tables - renders a coloured bar proportional to value (0-1)
  function mkInlineBar(ratio, color, widthPx) {
  const w = widthPx || 26;
- return `<span style="display:inline-block;width:${w}px;height:4px;background:#374151;border-radius:2px;overflow:hidden;vertical-align:middle;margin-right:3px;"><span style="display:block;height:100%;width:${Math.round(Math.min(1, Math.max(0, ratio)) * 100)}%;background:${color};"></span></span>`;
+ return `<span style="display:inline-block;width:${w}px;height:4px;background:${PALETTE.borderSoft};border-radius:3px;overflow:hidden;vertical-align:middle;margin-right:3px;"><span style="display:block;height:100%;width:${Math.round(Math.min(1, Math.max(0, ratio)) * 100)}%;background:${color};border-radius:3px;transition:width 0.3s ease;"></span></span>`;
  }
 
  // GAPP's stop counts are primary; this shows our own calibrated stop counts alongside for
@@ -534,7 +588,7 @@
  }
 
  function mkSection(title, content, id) {
- return `<div${id ? ` id="${id}"` : ''} style="${ST.section}"><div style="${ST.sectionTitle}">${title}</div>${content}</div>`;
+ return `<div${id ? ` id="${id}"` : ''} class="gpro-card" style="${ST.section}"><div style="${ST.sectionTitle}">${title}</div>${content}</div>`;
  }
 
  // Decision-summary board (following the pattern of our Cockpit, ): one
@@ -544,8 +598,8 @@
  const present = tiles.filter(t => t && t.verdict);
  if (!present.length) return '';
  const colors = { good: '#10b981', warn: '#f59e0b', bad: '#ef4444', info: '#3b82f6' };
- const cells = present.map(t => `<div data-jump-to="${t.id}" style="cursor:pointer;flex:1;min-width:90px;background:${colors[t.tone] || colors.info}11;border:1px solid ${colors[t.tone] || colors.info}44;border-radius:6px;padding:6px 8px;">
- <div style="font-size:9px;color:#9ca3af;text-transform:uppercase;letter-spacing:.03em;">${t.label}</div>
+ const cells = present.map(t => `<div data-jump-to="${t.id}" style="cursor:pointer;flex:1;min-width:90px;background:${colors[t.tone] || colors.info}14;border:1px solid ${colors[t.tone] || colors.info}44;border-radius:9px;padding:7px 9px;">
+ <div style="font-size:9px;color:${PALETTE.textDim};text-transform:uppercase;letter-spacing:.03em;">${t.label}</div>
  <div style="font-size:11px;color:${colors[t.tone] || colors.info};font-weight:700;margin-top:2px;">${t.verdict}</div>
  </div>`).join('');
  return `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">${cells}</div>`;
@@ -5100,14 +5154,14 @@
  marketTDs: 'Fetching available TDs...',
  negotiations: 'Loading sponsor data...',
  };
- body(`<div style="text-align:center;padding:20px;">
- <div style="color:#60a5fa;font-size:13px;font-weight:700;margin-bottom:8px;">Loading ${PAGE_TITLES[page] || 'data'}...</div>
- <div style="color:#6b7280;font-size:10px;">${loadingMsgs[page] || 'Fetching data...'}</div>
- <div style="margin-top:12px;height:3px;background:#1f2937;border-radius:2px;overflow:hidden;">
- <div style="height:100%;background:linear-gradient(90deg,#2563eb,#60a5fa);animation:gpro-loading 1.5s ease-in-out infinite;border-radius:2px;width:60%;"></div>
+ body(`<div style="text-align:center;padding:26px 12px;">
+ <div style="color:${PALETTE.text};font-size:13px;font-weight:700;margin-bottom:6px;">Loading ${PAGE_TITLES[page] || 'data'}...</div>
+ <div style="color:${PALETTE.textMuted};font-size:10px;">${loadingMsgs[page] || 'Fetching data...'}</div>
+ <div style="margin-top:14px;height:4px;background:${PALETTE.borderSoft};border-radius:4px;overflow:hidden;">
+ <div style="height:100%;background:linear-gradient(90deg,${PALETTE.accent},${PALETTE.warm});animation:gpro-loading 1.4s ease-in-out infinite;border-radius:4px;width:55%;"></div>
  </div>
  </div>
- <style>@keyframes gpro-loading{0%{transform:translateX(-100%)}100%{transform:translateX(266%)}}</style>`);
+ <style>@keyframes gpro-loading{0%{transform:translateX(-120%)}100%{transform:translateX(280%)}}</style>`);
  try {
  if (page === 'home') {
  await renderHome();
@@ -5194,13 +5248,14 @@
  }
 
  function createPanel(title) {
+ injectGlobalStyles();
  const existing = document.getElementById('gpro-panel');
  if (existing) existing.remove();
  const panelTitle = title || 'GPRO Strategy Tool';
  const d = document.createElement('div');
  d.id = 'gpro-panel';
  d.setAttribute('style', ST.panel);
- d.innerHTML = `<div id="gpro-hdr" style="${ST.header}"><h3 style="${ST.headerH3}">${panelTitle}</h3><div style="display:flex;align-items:center;gap:4px;"><span id="gpro-col" style="cursor:pointer;color:#6b7280;font-size:16px;padding:0 4px;line-height:1;" title="Collapse/Expand">▼</span><span id="gpro-cls" style="cursor:pointer;color:#6b7280;font-size:20px;padding:0 4px;line-height:1;" title="Close">×</span></div></div><div id="gpro-bdy" style="${ST.body}"><div style="${ST.loading}">Loading data...</div></div>`;
+ d.innerHTML = `<div id="gpro-hdr" style="${ST.header}"><h3 style="${ST.headerH3}">${panelTitle}</h3><div style="display:flex;align-items:center;gap:2px;"><span id="gpro-col" class="gpro-icon-btn" style="font-size:14px;" title="Collapse/Expand">▼</span><span id="gpro-cls" class="gpro-icon-btn" style="font-size:16px;" title="Close">×</span></div></div><div id="gpro-bdy" style="${ST.body}"><div style="${ST.loading}">Loading data...</div></div>`;
  document.body.appendChild(d);
  // Collapse toggle
  const colBtn = document.getElementById('gpro-col');
@@ -5208,12 +5263,19 @@
  let collapsed = false;
  colBtn.addEventListener('click', () => {
  collapsed = !collapsed;
- bdy.style.display = collapsed ? 'none' : 'block';
+ bdy.style.transition = 'opacity 0.15s ease';
+ bdy.style.opacity = collapsed ? '0' : '1';
+ setTimeout(() => { bdy.style.display = collapsed ? 'none' : 'block'; }, collapsed ? 150 : 0);
  colBtn.textContent = collapsed ? '▶' : '▼';
  d.style.maxHeight = collapsed ? '50px' : '88vh';
  });
  // Close button
- document.getElementById('gpro-cls').addEventListener('click', () => d.style.display = 'none');
+ document.getElementById('gpro-cls').addEventListener('click', () => {
+ d.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
+ d.style.opacity = '0';
+ d.style.transform = 'translateY(-6px)';
+ setTimeout(() => { d.style.display = 'none'; }, 150);
+ });
  // Drag
  const hdr = document.getElementById('gpro-hdr');
  let ox, oy, drag = false;
