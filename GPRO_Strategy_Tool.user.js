@@ -1751,115 +1751,6 @@
  return result;
  }
 
- // ============================================================
- // STRATEGY CONFIDENCE & RISK FACTORS
- // ============================================================
-  function calcStrategyConfidence(driver, car, track, weather, tyreResult) {
-  let confidence = 75;
-  if (driver) {
-  confidence += (parseInt(driver.experience) - 50) * 0.2;
-  confidence += (parseInt(driver.techInsight) - 50) * 0.15;
-  const conc = parseInt(driver.concentration) || 50;
-  confidence += (conc - 50) * 0.1;
-  // Elite factor: motivation affects execution quality
-  const motiv = parseInt(driver.motivation) || 50;
-  confidence += (motiv - 50) * 0.1;
-  }
-  if (car) {
-  const avgWear = PART_NAMES.map((n, i) => parseInt(car[PART_WEAR_KEYS[i]]) || 0).reduce((a, b) => a + b, 0) / PART_NAMES.length;
-  confidence -= avgWear * 0.15;
-  // Elite factor: critical wear parts (>80%) reduce confidence more
-  const critCount = PART_NAMES.filter((n, i) => (parseInt(car[PART_WEAR_KEYS[i]]) || 0) > 80).length;
-  confidence -= critCount * 3;
-  }
-  if (track && parseInt(track.overtakingDifficulty || track.overtaking || 0) > 70) confidence -= 10;
-  // Elite factor: tyre supplier factor (from GAPP)
-  if (tyreResult && typeof GPRO_DATA !== 'undefined' && GPRO_DATA.gapp && GPRO_DATA.gapp.tyreSupplierFactor) {
-  const supplier = (tyreResult.tyreSupplier || '').toLowerCase();
-  const supplierName = Object.keys(GPRO_DATA.gapp.tyreSupplierFactor).find(k => k.toLowerCase() === supplier);
-  if (supplierName) {
-  const factor = GPRO_DATA.gapp.tyreSupplierFactor[supplierName];
-  confidence += (factor > 5 ? -3 : factor < 3 ? 3 : 0); // worse suppliers reduce confidence
-  }
-  }
-  if (weather) {
-  const segs = [];
-  for (let i = 1; i <= 4; i++) {
-  segs.push(parseInt(weather[`raceQ${i}RainPLow`] || 0));
-  segs.push(parseInt(weather[`raceQ${i}RainPHigh`] || 0));
-  }
-  const maxRain = Math.max(...segs);
-  if (maxRain > 30) confidence -= maxRain * 0.2;
-  // Elite factor: weather uncertainty (high variance in rain predictions reduces confidence)
-  const rainVariance = Math.max(...segs) - Math.min(...segs);
-  if (rainVariance > 40) confidence -= 5;
-  }
-  if (tyreResult && tyreResult.ctrValue > 50) confidence -= (tyreResult.ctrValue - 50) * 0.3;
-  return Math.max(30, Math.min(95, Math.round(confidence)));
-  }
-
- function identifyRiskFactors(driver, car, track, weather) {
- const risks = [];
- if (driver) {
- const conc = parseInt(driver.concentration) || 50;
- const aggr = parseInt(driver.aggressiveness) || 50;
- const exp = parseInt(driver.experience) || 50;
- if (conc < 70) risks.push('⚠️ Low concentration: higher error risk in race');
- if (aggr > 85) risks.push('🔥 Very aggressive style: higher tyre/parts wear');
- if (exp < 40) risks.push('📚 Low experience: strategy may need adjustment');
- }
- if (car) {
- const critParts = PART_NAMES.filter((n, i) => (parseInt(car[PART_WEAR_KEYS[i]]) || 0) > 70);
- if (critParts.length > 0) risks.push(`🔧 Worn parts: ${critParts.slice(0, 3).join(', ')} may fail`);
- }
- if (weather) {
- const segs = [];
- for (let i = 1; i <= 4; i++) {
- segs.push({ rain: Math.max(parseInt(weather[`raceQ${i}RainPLow`] || 0), parseInt(weather[`raceQ${i}RainPHigh`] || 0)) });
- }
- const maxRain = Math.max(...segs.map(s => s.rain));
- if (maxRain > 30) risks.push(`🌧️ ${maxRain}% rain chance: consider rain tyre option`);
- }
- if (track) {
- const fuelC = (track.fuelConsumption || 'Medium');
- const tyreW = (track.tyreWear || 'Medium');
- if (tyreW === 'Very High' || tyreW === 'High') risks.push('🛞 High tyre wear track: aggressive compounds risky');
- if (fuelC === 'Very High' || fuelC === 'High') risks.push('⛽ High fuel consumption: plan fuel carefully');
- }
- return risks;
- }
-
- function generateStrategyNotes(driver, track, weather, tyreResult) {
- const notes = [];
- if (tyreResult) {
- if (tyreResult.ctrValue > 60) notes.push('⚠️ High CTR: increase tyre budget or reduce risk');
- if (tyreResult.results && tyreResult.results[0]) {
- const best = tyreResult.results[0];
- if (best.stops === 0) notes.push('🏁 No-stop strategy: monitor tyre wear closely');
- else if (best.stops === 1) notes.push('🛑 1-stop strategy: optimal for most conditions');
- else notes.push('🛑🛑 Multi-stop: higher risk but can pay off');
- }
- }
- if (weather) {
- const segs = [];
- for (let i = 1; i <= 4; i++) {
- segs.push(Math.max(parseInt(weather[`raceQ${i}RainPLow`] || 0), parseInt(weather[`raceQ${i}RainPHigh`] || 0)));
- }
- const maxRain = Math.max(...segs);
- if (maxRain > 50) notes.push('🌧️ High rain probability: prepare wet setup');
- else if (maxRain > 20) notes.push('⛅ Possible rain: keep options open');
- }
- if (track) {
- if (track.grip === 'Very Low' || track.grip === 'Low') notes.push('🏎️ Low grip: conservative setup recommended');
- if (track.overtaking === 'Hard' || track.overtaking === 'Very Hard') notes.push('🚧 Hard to overtake: qualifying position crucial');
- }
- if (driver) {
- const aggr = parseInt(driver.aggressiveness) || 50;
- if (aggr < 30) notes.push('🐢 Conservative driver: focus on consistency');
- else if (aggr > 80) notes.push('⚡ Aggressive driver: higher push possible');
- }
- return notes;
- }
 
  // ============================================================
  // CAR SETUP CALCULATOR
@@ -2367,46 +2258,7 @@
  return Math.round(gappWear.values[partIdx] * levelExp * driverFactor);
  }
 
- // Testing-session per-lap wear estimate. from our own CarWearService
- // (, `testingWearRates()`) - the one fully-disclosed public constant in that
- // file: TESTING_WEAR_FACTOR = 0.53, calibrated by that project against two real testing sessions
- // (a 30-lap and a 100-lap run, both best-fitting ~0.533). Their own reasoning, reused as-is:
- // testing wears the car at roughly half the full-race per-lap rate, with no risk/CTR exponent
- // and no level factor (level only modulates *risk-driven* wear, and testing has no clear-track
- // risk) - so this is just (full-race trackBase wear / race laps) * driverFactor * 0.53, using the
- // exact same gappWear.values[] this file already uses for race-wear (gappPartRaceWear above).
- const TESTING_WEAR_FACTOR = 0.53;
- function calcTestingWearPerLap(trackName, driver) {
- const gappWear = lookupGappTrack(trackName, 'wearData');
- const seasonTrack = lookupSeasonTrack(trackName);
- if (!gappWear || !seasonTrack || !seasonTrack.laps) return null;
- const driverFactor = calcDriverWearFactor(driver);
- return PART_NAMES.map((name, i) => ({
- name,
- perLap: +(gappWear.values[i] * driverFactor * TESTING_WEAR_FACTOR / seasonTrack.laps).toFixed(3),
- }));
- }
 
- // "Testing targets" - which upcoming races a testing session run TODAY will actually land on.
- // from our own TestingTargetsService (, fully disclosed, no
- // secret constants): test points decay through the pipeline over 3 race weekends, so they land
- // in the car for the +3/+4/+5 races. Uses our own SEASON_RACE_LIST + D.tracks pha data; targets
- // past race 17 are skipped silently (next season's calendar isn't in our data, same limitation applies
- // skips when GPRO hasn't published it).
- function calcTestingTargets(currentTrackName) {
- if (!currentTrackName || !SEASON_RACE_LIST.length) return null;
- const idx = SEASON_RACE_LIST.findIndex(t => currentTrackName.includes(t.name.split(' ')[0]) || t.name.includes(currentTrackName.split(' ')[0]));
- if (idx === -1) return null;
- const targets = [];
- [3, 4, 5].forEach(offset => {
- const targetIdx = idx + offset; // 0-based; race numbers shown 1-based below
- if (targetIdx >= SEASON_RACE_LIST.length) return;
- const t = SEASON_RACE_LIST[targetIdx];
- const prof = TRACK_PROFILES[t.name] || {};
- targets.push({ offset, race: targetIdx + 1, name: t.name, pha: prof.pha || null });
- });
- return targets.length ? targets : null;
- }
 
  // Per-track wear data is PRIMARY here whenever the track is found (falls back to our
  // Montreal-only calibration otherwise). NOTE: a numeric check at Montreal found GAPP's numbers
@@ -4107,46 +3959,7 @@
  }, 200);
  }
 
- function calcFuelSimple(track, testing, driver) {
- const laps = track ? parseInt(track.laps) || 0 : 0;
- if (!laps) return null;
- let fpl = null;
- if (testing && testing.stintsDone && testing.stintsDone.length > 0) {
- const last = testing.stintsDone[testing.stintsDone.length - 1];
- const fs = parseInt(last.setFuel) || 0;
- const fl = parseInt(last.fuelLeft) || 0;
- const ld = parseInt((last.lapsDone || '0/0').split('/')[0]) || 1;
- if (fs > fl && ld > 0) fpl = (fs - fl) / ld;
- }
- if (!fpl) {
- const gappTrack = lookupGappTrack(track && track.trackName, 'trackData');
- if (gappTrack) {
- fpl = gappTrack.values[6] * gappTrack.values[13];
- } else {
- const c = (track||{}).fuelConsumption || 'Medium';
- fpl = FUEL_BASE[c] || 2.4;
- }
- // Apply driver factors
- if (driver) {
- const driConc = parseInt(driver.concentration) || 100;
- const driAggr = parseInt(driver.aggressiveness) || 50;
- const driExp = parseInt(driver.experience) || 50;
- const driTech = parseInt(driver.techInsight) || 50;
- const concFactor = 1.0 - (driConc - 100) * 0.001;
- const aggrFactor = 1.0 + (driAggr - 50) * 0.002;
- const expFactor = 1.0 - (driExp - 50) * 0.001;
- const techFactor = 1.0 - (driTech - 50) * 0.001;
- fpl *= concFactor * aggrFactor * expFactor * techFactor;
- }
- }
- const total = Math.ceil(fpl * laps * 1.03); // +3% safety margin
- const stints = Math.max(1, Math.ceil(total / TANK_MAX));
- const perStint = Math.ceil(total / stints);
- const stops = stints - 1;
- const stopLaps = [];
- for (let i = 1; i <= stops; i++) stopLaps.push(Math.round((laps / stints) * i));
- return { laps, fuelPerLap: fpl.toFixed(2), totalFuel: total, stints, stops, fuelPerStint: perStint, stopLaps };
- }
+
 
  // ============================================================
  // MULTI-RACE WEAR PLANNER

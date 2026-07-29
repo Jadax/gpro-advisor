@@ -231,11 +231,6 @@ var GPRO_DATA = {
  },
 
  // ============================================================
- // SEASON PHA AVERAGES (for car build planning)
- // ============================================================
- phaSeasonAvg: { power: 12.24, handling: 11.35, accel: 11.24 },
-
- // ============================================================
  // CAR WEAR MULTIPLIERS PER TRACK
  // Relative wear intensity per track (1.0 = average)
  // Higher = more wear on all parts
@@ -268,17 +263,6 @@ var GPRO_DATA = {
  // different: its values are NOT duplicated on `tracks` entries, and it was sitting unused until
  // 2026-07-19 when `lookupSeasonTrack()` was fixed to actually merge it in (see that function) -
  // callers reading `.wearIntensity` were silently getting `undefined` before that fix. Kept here.
-
- // ============================================================
- // WEAR ALERT THRESHOLDS
- // ============================================================
- wearAlerts: {
- fast: 30, // Engine, FW, RW, GB, Chassis
- slow: 15, // UB, Sidepods, Cooling, Brakes, Susp, Electronics
- critical: 10,
- // Wear % above which replacement is recommended (not downgrade)
- replaceThreshold: 25,
- },
 
  // ============================================================
  // RACE RISK GUIDELINES
@@ -1227,47 +1211,8 @@ var GPRO_DATA = {
  ],
 
  // ============================================================
- // CAR IDEAL LEVELS (for rendering)
- // ============================================================
- carIdealLevels: {
- 'Chassis': { target: 6, priority: 2, note: 'Power contribution, good baseline' },
- 'Engine': { target: 7, priority: 1, note: 'Most impactful for Power PHA' },
- 'Front Wing': { target: 6, priority: 3, note: 'Handling contribution' },
- 'Rear Wing': { target: 6, priority: 3, note: 'Handling contribution' },
- 'Underbody': { target: 5, priority: 5, note: 'Handling, cheap to upgrade' },
- 'Sidepods': { target: 5, priority: 5, note: 'Acceleration, cheap to upgrade' },
- 'Cooling': { target: 5, priority: 6, note: 'Supports engine reliability' },
- 'Gearbox': { target: 6, priority: 4, note: 'Acceleration contribution' },
- 'Brakes': { target: 7, priority: 2, note: 'Handling contribution, high wear' },
- 'Suspension': { target: 6, priority: 3, note: 'Acceleration, reduces tyre wear' },
- 'Electronics': { target: 5, priority: 4, note: 'Weight reduction, reliability' },
- },
- // ============================================================
  // NON-LINEAR WEAR MODELS (stolen from GPRO Setup Tool + Elite spreadsheets)
  // ============================================================
- // Performance loss curve: wear → seconds lost per lap (non-linear, exponential above 70%)
- wearPerformanceLoss: [
- { maxWear: 30, loss: 0 },
- { maxWear: 50, base: 0, factor: 0.5, offset: 30 },     // (wear-30) * 0.5
- { maxWear: 70, base: 10, factor: 1.0, offset: 50 },     // 10 + (wear-50) * 1.0
- { maxWear: 85, base: 30, factor: 1.5, offset: 70 },     // 30 + (wear-70) * 1.5
- { maxWear: 100, base: 52.5, factor: 2.0, offset: 85 },  // 52.5 + (wear-85) * 2.0
- ],
- // Exponential failure risk: wear → probability of DNF
- wearFailureRisk: [
- { maxWear: 60, risk: 0 },
- { maxWear: 70, risk: 5 },
- { maxWear: 80, risk: 15 },
- { maxWear: 90, risk: 40 },
- { maxWear: 95, risk: 75 },
- { maxWear: 100, risk: 95 },
- ],
- // Wear acceleration: higher wear → faster degradation (non-linear)
- wearAcceleration: [
- { maxWear: 50, multiplier: 1.0 },
- { maxWear: 70, multiplier: 1.2 },
- { maxWear: 100, multiplier: 1.5 },
- ],
  // Temperature wear multiplier: track temp affects tyre and component wear
  // Formula: 1 + (trackTemp - 20) * 0.015 + (riskLevel * 0.08)
  tempWearMultiplier: { baseTemp: 20, tempCoeff: 0.015, riskCoeff: 0.08 },
@@ -1276,16 +1221,6 @@ var GPRO_DATA = {
  street: { engine: 1.2, suspension: 1.5, brakes: 1.3, note: 'Street circuits: high braking/suspension stress' },
  speedway: { engine: 1.4, brakes: 0.7, cooling: 1.3, note: 'Speedways: engine stress, less braking' },
  road: { note: 'Standard road courses: baseline wear rates' },
- },
- // Upgrade ROI formula: performanceGain = (maxLevel - currentLevel) * 5; roi = (gain * 1000) / cost
- upgradeRoiThreshold: 0.5, // ROI > 0.5 and level < 15 → recommended
- // Pre-race DNF risk score
- preRaceDnfRisk: {
- safeThreshold: 80,      // below this = SAFE
- warnThreshold: 85,      // 80-85 = WATCH
- dangerThreshold: 90,    // 85-90 = WARNING
- criticalThreshold: 95,  // 90-95 = DANGER
- failThreshold: 100,     // 95+ = LIKELY FAIL
  },
  // Overtaking decision matrix thresholds
  overtakingDecision: {
@@ -1335,17 +1270,6 @@ var GPRO_DATA = {
  { race: 16, track: 'Yas Marina', laps: 55, overtaking: 'Hard', grip: 'High', ctrLap: 2.846, ctrRace: 156.526 },
  { race: 17, track: 'Baku City', laps: 51, overtaking: 'Easy', grip: 'High', ctrLap: 2.897, ctrRace: 147.757 },
  ],
- // Database search condition field IDs (from gproanalyzer.info/database.php)
- databaseFields: {
- 1: 'Race Position', 2: 'Qualifying Position', 3: 'Driver - Overall', 23: 'Driver - Energy',
- 4: 'Driver - Concentration', 5: 'Driver - Talent', 6: 'Driver - Aggressiveness',
- 7: 'Driver - Experience', 8: 'Driver - Technical insight', 9: 'Driver - Stamina',
- 10: 'Driver - Motivation', 11: 'Driver - Weight', 12: 'Car - Power', 13: 'Car - Handling',
- 14: 'Car - Acceleration', 15: 'Risk - Overtake', 16: 'Risk - Defend',
- 17: 'Risk - Clear & dry', 18: 'Risk - Clear & wet', 19: 'Weather - Temperature',
- 20: 'Weather - Rain Laps', 24: 'Weather - Q1 Temperature', 25: 'Weather - Q1 Humidity',
- 26: 'Weather - Q2 Temperature', 27: 'Weather - Q2 Humidity', 21: 'Pits', 22: 'Driver Mistakes',
- },
  // Season PHA (Track Power/Handling/Acceleration requirements, Season 111)
  seasonPHA: [
  { race: 1, track: 'Barcelona', power: 11, handling: 13, accel: 8, advantage: '+7' },
@@ -1365,57 +1289,6 @@ var GPRO_DATA = {
  { race: 15, track: 'New Delhi', power: 11, handling: 15, accel: 10, advantage: '+9' },
  { race: 16, track: 'Yas Marina', power: 12, handling: 10, accel: 17, advantage: '+12' },
  { race: 17, track: 'Baku City', power: 18, handling: 8, accel: 16, advantage: '+12' },
- ],
- // Season Car Wear (per-part wear % per race, Season 111)
- seasonCarWear: [
- { race: 1, track: 'Barcelona', oa: 29, chassis: 27, engine: 34, fw: 27, rw: 31, ub: 29, sidepods: 29, cooling: 29, gb: 29, brakes: 31, susp: 31, elec: 31 },
- { race: 2, track: 'Ahvenisto', oa: 17, chassis: 17, engine: 17, fw: 12, rw: 12, ub: 12, sidepods: 22, cooling: 17, gb: 17, brakes: 22, susp: 12, elec: 17 },
- { race: 3, track: 'Magny Cours', oa: 27, chassis: 22, engine: 27, fw: 17, rw: 12, ub: 22, sidepods: 27, cooling: 27, gb: 27, brakes: 31, susp: 29, elec: 22 },
- { race: 4, track: 'Poznan', oa: 29, chassis: 29, engine: 27, fw: 17, rw: 27, ub: 31, sidepods: 33, cooling: 31, gb: 22, brakes: 27, susp: 17, elec: 33 },
- { race: 5, track: 'A1-Ring', oa: 27, chassis: 29, engine: 31, fw: 6, rw: 12, ub: 12, sidepods: 29, cooling: 22, gb: 29, brakes: 29, susp: 17, elec: 33 },
- { race: 6, track: 'Jyllands-Ringen', oa: 12, chassis: 6, engine: 12, fw: 17, rw: 17, ub: 6, sidepods: 6, cooling: 6, gb: 17, brakes: 22, susp: 6, elec: 22 },
- { race: 7, track: 'Silverstone', oa: 22, chassis: 27, engine: 31, fw: 12, rw: 17, ub: 27, sidepods: 17, cooling: 17, gb: 29, brakes: 22, susp: 12, elec: 22 },
- { race: 8, track: 'Buenos Aires', oa: 29, chassis: 29, engine: 33, fw: 12, rw: 17, ub: 12, sidepods: 22, cooling: 31, gb: 35, brakes: 35, susp: 34, elec: 33 },
- { race: 9, track: 'Austin', oa: 22, chassis: 17, engine: 27, fw: 17, rw: 17, ub: 12, sidepods: 22, cooling: 27, gb: 22, brakes: 27, susp: 6, elec: 27 },
- { race: 10, track: 'Montreal', oa: 27, chassis: 29, engine: 29, fw: 17, rw: 6, ub: 22, sidepods: 22, cooling: 17, gb: 29, brakes: 31, susp: 33, elec: 27 },
- { race: 11, track: 'Spa', oa: 27, chassis: 29, engine: 29, fw: 17, rw: 22, ub: 29, sidepods: 27, cooling: 22, gb: 29, brakes: 29, susp: 33, elec: 29 },
- { race: 12, track: 'Kaunas', oa: 22, chassis: 27, engine: 27, fw: 17, rw: 17, ub: 27, sidepods: 27, cooling: 17, gb: 12, brakes: 12, susp: 31, elec: 22 },
- { race: 13, track: 'Hungaroring', oa: 29, chassis: 27, engine: 22, fw: 35, rw: 35, ub: 31, sidepods: 22, cooling: 17, gb: 33, brakes: 22, susp: 34, elec: 22 },
- { race: 14, track: 'Losail', oa: 22, chassis: 29, engine: 17, fw: 12, rw: 12, ub: 12, sidepods: 12, cooling: 31, gb: 22, brakes: 27, susp: 6, elec: 27 },
- { race: 15, track: 'New Delhi', oa: 27, chassis: 27, engine: 29, fw: 22, rw: 22, ub: 17, sidepods: 17, cooling: 27, gb: 27, brakes: 29, susp: 31, elec: 22 },
- { race: 16, track: 'Yas Marina', oa: 27, chassis: 22, engine: 6, fw: 22, rw: 27, ub: 27, sidepods: 27, cooling: 33, gb: 27, brakes: 29, susp: 22, elec: 33 },
- { race: 17, track: 'Baku City', oa: 22, chassis: 22, engine: 33, fw: 6, rw: 12, ub: 12, sidepods: 29, cooling: 22, gb: 22, brakes: 31, susp: 12, elec: 27 },
- ],
- // Quick Race Setup calibration data (from gproanalyzer.info/quicksetup.php, New Delhi GP)
- // Shows how stops and lost time change with temperature and CTR per compound
- quickSetupCalibration: {
- track: 'New Delhi', laps: 60, pitLoss: 19,
- // stops[compound] at different temp/CTR combinations
- // Compounds: [ExtraSoft, Soft, Medium, Hard, Rain]
- stopsByTemp: {
- 14: { ct0: [4,3,2,1,1], ct50: [4,3,2,2,1], ct100: [5,4,3,2,1] },
- 30: { ct0: [5,3,2,2,1] },
- 45: { ct0: [6,4,3,2,1] },
- },
- lostTimeByTemp: {
- 14: { ct0: [212.75,210.24,213.36,230.42,126.08], ct50: [212.75,210.24,213.36,245.31,126.08], ct100: [249.90,244.71,242.19,245.31,126.08] },
- 30: { ct0: [249.90,196.03,184.95,202.70,126.08] },
- 45: { ct0: [288.79,217.19,187.16,162.76,126.08] },
- },
- // Car setup values (Q1/Q2/Race) for dry conditions
- setup: {
- 14: { fw: [493,507,493], rw: [943,961,943], eng: [595,585,595], brakes: [452,470,452], gb: [767,755,767], susp: [253,235,253] },
- },
- },
- // Driver OA formula test data (from gproanalyzer.info/driveroa.php)
- // Reverse-engineered OA values for different skill combinations
- driverOATests: [
- { con: 100, tal: 100, agg: 100, exp: 100, tec: 100, sta: 100, cha: 100, mot: 100, rep: 0, wei: 50, age: 25, oa: 97 },
- { con: 50, tal: 50, agg: 50, exp: 50, tec: 50, sta: 50, cha: 50, mot: 50, rep: 0, wei: 50, age: 25, oa: 47 },
- { con: 150, tal: 50, agg: 0, exp: 150, tec: 150, sta: 50, cha: 50, mot: 50, rep: 0, wei: 50, age: 25, oa: 58 },
- { con: 200, tal: 200, agg: 0, exp: 200, tec: 200, sta: 100, cha: 100, mot: 100, rep: 0, wei: 50, age: 25, oa: 112 },
- { con: 250, tal: 250, agg: 0, exp: 250, tec: 250, sta: 250, cha: 250, mot: 250, rep: 0, wei: 50, age: 25, oa: 184 },
- { con: 161, tal: 73, agg: 10, exp: 35, tec: 125, sta: 90, cha: 102, mot: 38, rep: 0, wei: 66, age: 20, oa: 84 },
  ],
  // Reverse-engineered formulas from gproanalyzer.info calculators
  // Tested by submitting multiple input combinations via authenticated session
@@ -1457,24 +1330,6 @@ var GPRO_DATA = {
  duration: { 1: 'OK', 2: 'OK', 3: 'OK', 4: 'OK', 5: 'A bit too low', 6: 'A bit too low', 7: 'Far too low' },
  },
  },
- // Formula structures from gpro-pitwall (MVinhas/gpro-pitwall, MIT-referenced)
- // Actual constants are in secrets.php (git-ignored). These are the formula STRUCTURES.
- pitwallFormulas: {
- // TCD formula: laps × (corners × lapLength × 0.00018 × (50 - temp) + tcdDiff)
- // tcdDiff is supplier-specific (Pipirelli=0, others vary)
- tcdFormula: 'laps * (corners * lapLength * 0.00018 * (50 - temp) + supplierDiff)',
- // Fuel cost: 0.005 × ((distance × (fuelPerLap + driverAdj)) × distance / (stops+1)) / 2
- fuelCostFormula: '0.005 * ((dist * (fpl + driverAdj)) * dist / (stops+1)) / 2',
- // Driver fuel adjustment: conc*ff.conc + agg*ff.agg + exp*ff.exp + te*ff.te + eng*ff.eng + ele*ff.ele + constant
- // Negative coefficients = better drivers consume LESS fuel
- // Pit time: fuelPerStint * fFuel + baseTime + staffConc*fConc + staffStress*fStress + tdExp*fTdExp + tdPit*fTdPit
- // Floor at 15s minimum
- // Tyre wear: maxKm = factors × trackWear × constant × rainMod
- // factors = f_Track^trackWearVal × f_Temp^temp × f_Dur^durability × f_Susp^suspLevel × f_Agg^agg × f_Exp^exp × f_Wgt^weight × f_Type^typeVal × f_Risk^risk
- // OA formula: Σ(skill × factor) — factors are configurable per-division
- // Division caps: Rookie=85, Amateur=110, Pro=135, Master=160, Elite=∞
- // When OA > cap: reduce motivation first (factor×mot), then scale secondary skills proportionally
- },
  // Tyre supplier data scraped from gprohub.net (authenticated session, Season 111)
  // Complete supplier stats: durability, compound difference, peak temp, performance, cost, warmup
  tyreSuppliers: [
@@ -1496,16 +1351,5 @@ var GPRO_DATA = {
  'Medium': { type: 2, factor: 0.996380346554349 },
  'Hard': { type: 3, factor: 0.995862526048112 },
  'Rain': { type: 5, factor: 0.996087854384523 },
- },
- // Driver performance score categories (from gprohub.net)
- // Dry, Wet, Quali, Race, OVT (overtaking), Tyre (preservation), Car Wear
- driverPerformanceScores: {
- dry: 'How fast the driver is in dry conditions',
- wet: 'How fast the driver is in wet conditions',
- quali: 'How well the driver performs in qualifying',
- race: 'How well the driver performs in races',
- ovt: 'Overtaking performance',
- tyre: 'Tyre preservation (Experience helps, aggression hurts)',
- carWear: 'Car parts wear management (Talent, Technical Insight, Experience; raised by Aggressiveness)',
  },
 };

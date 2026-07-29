@@ -2,38 +2,78 @@
 
 Made with ❤ by Tushant Sharma | Astraiva
 
-Tampermonkey userscript for gpro.net. Two files: `GPRO_Strategy_Tool.user.js` (logic/UI), `gpro-data.js` (season/track/calibration data, loaded via `@require`). No build step — verify with `node --check GPRO_Strategy_Tool.user.js`.
+Tampermonkey userscript for gpro.net. Two files: `GPRO_Strategy_Tool.user.js` (logic/UI, ~5440 lines), `gpro-data.js` (season/track/calibration data, ~1330 lines, loaded via `@require`). No build step — verify with `node --check`.
 
-## Reference material (grep, don't dump)
-- `gpro-public-api.yml` — GPRO's official OpenAPI spec (~116k lines). **Authoritative source for API field/endpoint names — grep it before guessing a field name or adding a new `apiGet`/`getDataSmart` call.** Never read or glob this file wholesale; it will blow the context budget. Two real bugs were found this way: TD endpoint was `/TechDProfile`, real one is `/TDProfile`; staff `concentration`/`stressHandling` live on `/StaffAndFacilities`, not `/Office`.
-- `docs/page-structures.md` — confirmed DOM selectors for ~14 game pages, updated in place as new pages are captured. This is for *scraping HTML*; `gpro-public-api.yml` is for *API field names* — don't conflate the two when a field could come from either.
+## File Inventory
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `GPRO_Strategy_Tool.user.js` | 5,439 | Main script: DOM parsing, calculations, UI rendering |
+| `gpro-data.js` | 1,332 | Season data, track profiles, GAPP formulas, calibration data |
+| `gpro-public-api.yml` | 116,639 | **Reference only** — GPRO's OpenAPI spec. Never load it. Grep for field names. |
+| `docs/page-structures.md` | 156 | DOM selectors for ~14 game pages |
+| `CLAUDE.md` | this file | Development rules for AI assistants |
+| `README.md` | 167 | User-facing install guide |
+
+## Architecture (3 sentences)
+
+1. **Data resolution**: `getDataSmart(endpoint, domParseFn?)` tries live DOM parse → long-lived stale cache → real API call. `apiGet()` is last resort (GPRO token capped at ~100 requests/race).
+2. **GAPP-first formulas**: Every calc function checks `D.gapp` data first, falls back to own calibrated formulas. Key functions: `calcCarSetupSmart`, `calcTyreStrategySmart`, `calcPartsWear`.
+3. **Passive capture**: `runPassiveCapture()` fires when visiting DriverProfile/TrackDetails/Suppliers/StaffAndFacilities pages. `backgroundCaptureAuxPages()` fetches those pages without navigation on every gpro.asp load.
+
+## Key Functions Index
+
+| Function | Line | Purpose |
+|----------|------|---------|
+| `detectPage()` | 330 | URL → page key mapping |
+| `init()` | 5239 | Main router: fetches data, calls render functions |
+| `getDataSmart()` | 260 | 3-tier data resolution (DOM → stale → API) |
+| `apiGet()` | 183 | Direct API call with budget guard |
+| `calcCarSetupSmart()` | 1984 | Q1/Q2/Race setup calculation |
+| `calcTyreStrategySmart()` | 1694 | Tyre compound analysis (GAPP-first) |
+| `calcPartsWear()` | 2453 | Per-part wear prediction |
+| `analyzeCar()` | 2732 | Car upgrade recommendations |
+| `calcDriverStrategyRecommendation()` | 2052 | Risk advisor (overtake/defend dials) |
+| `calcBoostLapSuggestion()` | 2208 | Boost lap placement |
+| `renderRaceSetup()` | 3440 | Race Setup page renderer |
+| `renderUpdateCar()` | 4326 | Car Update page renderer |
+| `renderQualify()` | 3202 | Qualify page renderer |
+| `renderStaff()` | 4606 | Staff & Facilities renderer |
+| `renderTraining()` | 4869 | Training page renderer |
+| `parseUpdateCarDOM()` | 2498 | DOM parser for UpdateCar.asp |
+| `calcHappyRange()` | 2266 | Driver acceptable wear range |
+
+## Dead Code (verified, safe to ignore)
+
+**Functions never called**: `calcFuelSimple`, `calcStrategyConfidence`, `identifyRiskFactors`, `generateStrategyNotes`, `calcTestingWearPerLap`, `calcTestingTargets` — all removed in v6.2.0.
+
+**gpro-data.js keys never referenced**: `phaSeasonAvg`, `wearAlerts`, `carIdealLevels`, `upgradeRoiThreshold`, `preRaceDnfRisk`, `wearPerformanceLoss`, `wearFailureRisk`, `wearAcceleration`, `driverPerformanceScores`, `driverOATests`, `pitwallFormulas`, `seasonCarWear`, `quickSetupCalibration`, `databaseFields` — all removed in v6.2.0.
 
 ## Active Rules
-- **After changing `gpro-data.js`, bump BOTH `@version` in `GPRO_Strategy_Tool.user.js` AND the `?v=` cache-buster on the `@require file://...gpro-data.js` line.** Tampermonkey caches `@require` by exact URL and won't re-fetch a local `file://` require on a normal reload — this cost a full debugging session chasing a "GAPP not activating" ghost that was just a stale cached copy.
-- **API calls are last resort, not default.** GPRO's token is capped at ~100 requests/race. Any new data need must go through `getDataSmart(endpoint, domParseFn?)`, never `apiGet()` directly: (1) live-parse the current page's DOM if a parser exists for it, (2) long-lived stale cache (any age), (3) only then a real API call. See "API budget system" below.
-- Keep scripts modular; no duplicate helpers. Don't re-derive constant tables by eye — diff with a short `node -e` script.
-- Don't paste full page HTML into chat/memory — update `docs/page-structures.md` in place instead.
-- Data additions (trackHistory, calibration, etc.) go in `gpro-data.js` only, never duplicated in the `.user.js`, unless the script genuinely can't read `GPRO_DATA` at that point.
-- Money strings are dot-thousands (`$5.902.387`) — reuse `parseGproCash`, don't reinvent.
-- Before touching `apiGet`/cache/stale-fallback/`getDataSmart` logic, re-read it in full first — it already handles retries, short cache, long-lived stale fallback, and the budget guard; don't add a second caching layer.
-- Never write extensive explanatory text in chat; output code directly.
 
-## API budget system
-- `apiGet` enforces `API_CALL_BUDGET` (40, GM key `gpro_api_call_count`) and also respects GPRO's own `apiRequestsRemaining` field (returned by `/Office`, cached as `gpro_api_requests_remaining`) — whichever is more conservative wins. Once either is hit, no more real requests; straight to cache/stale. Reset manually via Tampermonkey menu each new race (no reliable auto-detect without spending a request to check).
-- `CACHE_TTL` is 20 min. `getDataSmart`'s stale-cache tier has no TTL at all — it's fed by:
-  - `runPassiveCapture()` — fires when the user is physically on DriverProfile/TrackDetails/Suppliers/StaffAndFacilities.asp (all `@match`ed pages).
-  - `backgroundCaptureAuxPages()` — fetches those same pages *without navigation* on every gpro.asp load, throttled to once/30min (`gpro_bg_capture_last`), bypassable by "Update All Data". Real HTTP requests but not `/backend/api/v2` calls, so they don't count against the budget.
-- `resolveActiveSupplier(office, supplierData)` matches by `office.tyreSupplierId` (API path) or `supplierData.activeSupplierName` (DOM-capture path has no numeric ids).
+- **After changing `gpro-data.js`, bump BOTH `@version` in `GPRO_Strategy_Tool.user.js` AND the `?v=` cache-buster on the `@require file://...gpro-data.js` line.** Tampermonkey caches `@require` by exact URL.
+- **API calls are last resort.** Use `getDataSmart(endpoint, domParseFn?)`, never `apiGet()` directly. Token capped at ~100 requests/race.
+- **DOM parsers** for: `parseUpdateCarDOM`, `parseDriverProfileDOM`, `parseTrackDetailsDOM`, `parseTyreSuppliersDOM`, `parseStaffFacilitiesDOM`, `parseTestingDOM`, `parseAvailListDOM`.
+- **Money strings** are dot-thousands (`$5.902.387`) — reuse `parseGproCash`.
+- **`gpro-public-api.yml`** is reference-only (116k lines). Never load it wholesale — grep for specific field names.
+- **`ARCHITECTURE.md`** is a 1,248-line iteration log. Don't read it unless specifically debugging a historical change.
 
-## Internal formulas (`gpro-data.js` `gapp` block)
-Verified formulas for tyre stops, fuel, setup, pit times, and wear. **GAPP is PRIMARY everywhere it applies** (`calcCarSetupSmart`, `calcTyreStrategySmart`, `calcPartsWear`, `analyzeCar`), falling back to the legacy/own-calibrated formula only when track+driver+car+supplier data is unavailable. Two unresolved numeric discrepancies found during validation against Spa/Montreal calibration — both intentionally kept visible in the UI rather than silently trusted:
-- Tyre stop-count: ~2x fewer stops than calibrated numbers for dry compounds (Rain matches closely). Own numbers shown via `result.ownCrossCheck` / `mkGappStopsCrossCheck`.
-- Part wear-per-race: ~25-30% higher than calibration across all 11 parts. Own numbers shown via `.ownRaceWear`/.ownTotalRaceWear` in an "(own)" column.
+## GAPP Data Hierarchy
 
-If asked to investigate either further, start here rather than re-trusting the numbers outright.
+`gpro-data.js` → `D.gapp` contains:
+- `trackData` — per-track: laps, fuel, tyre, PHA, CTR, overtaking, grip
+- `tyreCalc` — tyre wear formula constants
+- `pitTimeCalc` — pit stop formula constants
+- `fuelTimeCalcConstant` — FLD formula constant
+- `compoundCalcConstant` — TCD formula constant
+- `levelFactors` — car level → wear multiplier
+- `profileFactors` — part → PHA contribution
 
-## Driver Strategy risk advisor
-`calcDriverStrategyRecommendation`, `calcBoostLapSuggestion` — composure formula (wet/dry-weighted concentration/talent/experience/motivation), track `overtaking`/`gripLevel` as real inputs (confirmed live on `/TrackProfile` — `track.overtaking`, `track.gripLevel`), aggression-vs-experience mistake penalty, race-distance/stamina tiering, start-risk approach, "pit on solvable problem" lap threshold, and boost-lap placement. Explicitly still a heuristic, not a verified game formula.
+## Scraped Data (from gproanalyzer.info, Season 111)
 
-## User context
-- User never runs practice laps — goes straight to a Q1 lap using per-track derived setup values. Don't design features around a practice-feedback loop.
+`D.scrapedRaceData` — 10 races with fuel/tyre rates, setups, positions
+`D.seasonCTR` — 17 tracks: overtaking, grip, CTR/lap, CTR/race
+`D.seasonPHA` — 17 tracks: Power/Handling/Acceleration requirements
+`D.tyreSuppliers` — 9 suppliers: durability, compound diff, peak temp, performance
+`D.tyreCompoundFactors` — 5 compounds: type value, wear factor
+`D.sponsorAnswers` — 5 negotiation questions mapped to characteristic values
