@@ -3746,40 +3746,6 @@
 
   }
 
- // Testing wear estimate - from our own CarWearService::testingWearRates()
- // (), a fully-disclosed constant (TESTING_WEAR_FACTOR=0.53) this project
- // didn't have any equivalent for. Only shown when there's an actual testing session with laps
- // done, at whichever track the testing happened at (can differ from the race track).
- if (testing && testing.trackName && testing.stintsDone && testing.stintsDone.length) {
- const lapsDoneTotal = testing.stintsDone.reduce((sum, s) => sum + (parseInt((s.lapsDone || '0/0').split('/')[0]) || 0), 0);
- const wearRates = lapsDoneTotal > 0 ? calcTestingWearPerLap(testing.trackName, driver) : null;
- if (wearRates) {
- let twHtml = mkRow('Testing laps done', lapsDoneTotal);
- wearRates.forEach(w => {
- const added = +(w.perLap * lapsDoneTotal).toFixed(1);
- if (added >= 0.5) twHtml += mkRow(w.name, `+${added}% (${w.perLap}%/lap)`);
- });
- twHtml += `<div style="font-size:9px;color:#f59e0b;margin-top:4px;">Testing wears the car at roughly half the full-race per-lap rate (from our own disclosed 0.53 factor, calibrated against real sessions) - own estimate, not confirmed against your actual current wear.</div>`;
- h += mkSection(`Testing Wear (${testing.trackName})`, twHtml);
- }
- }
-
- // Testing targets - which races today's test points actually land on (+3/+4/+5 race decay,
- // from our own TestingTargetsService, ). Helps pick the test
- // priority (Power/Handling/Accel focus) by showing what those races demand, not this one.
- {
- const targets = calcTestingTargets((practice||{}).trackName || (track||{}).trackName);
- if (targets) {
- let ttHtml = '';
- targets.forEach(t => {
- const phaStr = t.pha ? `P${t.pha.power} / H${t.pha.handling} / A${t.pha.accel}` : '?';
- ttHtml += mkRow(`+${t.offset} (Race ${t.race}) ${t.name}`, phaStr);
- });
- ttHtml += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Test points convert over 3 race weekends, so a session run this week lands in the car for these races - pick your test priority for what THEY demand, not this weekend's track.</div>`;
- h += mkSection('Testing Targets', ttHtml);
- }
- }
-
  // === DRIVER STRATEGY (RaceSetup.asp "Driver strategy" risk block) ===
  // Overtake/defend/start-approach/problem-pit-laps from our own RiskAdvisorService
  // (disclosed public heuristic - see calcDriverStrategyRecommendation for full rationale). Dry/wet
