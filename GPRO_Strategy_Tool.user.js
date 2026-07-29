@@ -3234,21 +3234,19 @@
  // Weather
  h += mkWeatherForecastSection(analyze, { id: 'gpro-sec-weather' });
 
- // Q1/Q2 Weather inputs - auto-detected from the weather widget (DOM rain icon, falling back to
- // race-start forecast rain%) until the user manually overrides a dropdown at least once.
- const qDomTemps = scrapeSessionTempsFromDOM();
- const autoQ1Wet = qDomTemps && qDomTemps.q1Rain !== null ? qDomTemps.q1Rain : !!(analyze && analyze.segs[0].rainMax >= 40);
- const autoQ2Wet = qDomTemps && qDomTemps.q2Rain !== null ? qDomTemps.q2Rain : !!(analyze && analyze.segs[0].rainMax >= 40);
- const q1WetQ = resolveSessionWet('gpro_q1_wet', autoQ1Wet);
- const q2WetQ = resolveSessionWet('gpro_q2_wet', autoQ2Wet);
- h += `<div style="${ST.section}"><div style="${ST.sectionTitle}">Session Weather (auto-detected, override below)</div>`;
- h += `<div style="display:flex;gap:12px;align-items:center;font-size:11px;">`;
- // Q1's own weather is irrelevant on the Q2 page - you never practice/run Q1 here (setup comes
- // from gapp/our calibrated model, not practice-lap feedback), so only show the dropdown for the session
- // actually being driven. The Q1 dropdown still renders (hidden) on Q1 pages as before.
- if (!isQ2) h += `<span style="color:#d1d5db;">Q1: <select id="gpro-q1-weather-q" style="font-size:10px;background:#1f2937;color:#f9fafb;border:1px solid #374151;border-radius:3px;"><option value="0"${!q1WetQ ? ' selected' : ''}>☀️ Dry</option><option value="1"${q1WetQ ? ' selected' : ''}>🌧️ Wet</option></select></span>`;
- h += `<span style="color:#d1d5db;">Q2: <select id="gpro-q2-weather-q" style="font-size:10px;background:#1f2937;color:#f9fafb;border:1px solid #374151;border-radius:3px;"><option value="0"${!q2WetQ ? ' selected' : ''}>☀️ Dry</option><option value="1"${q2WetQ ? ' selected' : ''}>🌧️ Wet</option></select></span>`;
- h += `</div></div>`;
+  // Q1/Q2 Weather inputs - auto-detected from the weather widget (DOM rain icon, falling back to
+  // race-start forecast rain%) until the user manually overrides a dropdown at least once.
+  const qDomTemps = scrapeSessionTempsFromDOM();
+  const autoQ1Wet = qDomTemps && qDomTemps.q1Rain !== null ? qDomTemps.q1Rain : !!(analyze && analyze.segs[0].rainMax >= 40);
+  const autoQ2Wet = qDomTemps && qDomTemps.q2Rain !== null ? qDomTemps.q2Rain : !!(analyze && analyze.segs[0].rainMax >= 40);
+  const q1WetQ = resolveSessionWet('gpro_q1_wet', autoQ1Wet);
+  const q2WetQ = resolveSessionWet('gpro_q2_wet', autoQ2Wet);
+  h += `<div style="${ST.section}"><div style="${ST.sectionTitle}">Session Weather (auto-detected, override below)</div>`;
+  h += `<div style="display:flex;gap:12px;align-items:center;font-size:11px;">`;
+  // Only show the weather dropdown for the current session
+  if (!isQ2) h += `<span style="color:#d1d5db;">Q1: <select id="gpro-q1-weather-q" style="font-size:10px;background:#1f2937;color:#f9fafb;border:1px solid #374151;border-radius:3px;"><option value="0"${!q1WetQ ? ' selected' : ''}>☀️ Dry</option><option value="1"${q1WetQ ? ' selected' : ''}>🌧️ Wet</option></select></span>`;
+  if (isQ2) h += `<span style="color:#d1d5db;">Q2: <select id="gpro-q2-weather-q" style="font-size:10px;background:#1f2937;color:#f9fafb;border:1px solid #374151;border-radius:3px;"><option value="0"${!q2WetQ ? ' selected' : ''}>☀️ Dry</option><option value="1"${q2WetQ ? ' selected' : ''}>🌧️ Wet</option></select></span>`;
+  h += `</div></div>`;
 
  // Car Setup for this session - Q1 page uses Q1 temp/weather, Q2 page uses Q2 temp/weather (was
  // always showing Q1's numbers/label on the Q2 page regardless of `isQ2`).
@@ -3538,6 +3536,10 @@
   }
   if (fuel) {
   summaryItems.push({ icon: '⛽', label: `${fuel.totalFuel}L`, detail: `${fuel.fuelPerLap}L/lap` });
+  if (tyre && chosenTyreResult && chosenTyreResult.stops > 0) {
+   const stintFuel = Math.ceil(fuel.totalFuel / (chosenTyreResult.stops + 1));
+   summaryItems.push({ icon: '🔄', label: `${stintFuel}L/stint`, detail: `${chosenTyreResult.stops + 1} stints` });
+  }
   }
   if (analyze) {
   summaryItems.push({ icon: analyze.commitRain ? '🌧' : '☀', label: analyze.commitRain ? 'RAIN' : 'DRY', detail: analyze.commitRain ? 'Wet strategy' : 'Dry strategy' });
@@ -3793,14 +3795,6 @@
     const baseWearPerLap = 0.5 * gappWearFactor * intensityVal;
     const endWearEstimate = 100 - (lapsPerStint * baseWearPerLap * tempMultiplier * 100);
     const cliffThreshold = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.tyreConstants) ? GPRO_DATA.tyreConstants.wearThreshold : 15;
-    if (endWearEstimate < cliffThreshold) {
-    const severity = endWearEstimate < 0 ? 'critical' : endWearEstimate < 5 ? 'severe' : 'warning';
-    strategyHtml += `<div style="margin-top:6px;padding:6px;background:#7f1d1d;border-radius:4px;font-size:10px;border-left:3px solid #ef4444;">`;
-    strategyHtml += `<div style="color:#fca5a5;font-weight:700;">⚠️ TYRE CLIFF ${severity === 'warning' ? 'WARNING' : severity.toUpperCase()}</div>`;
-    strategyHtml += `<div style="color:#fca5a5;">Estimated tyre durability at pit: ~${Math.round(endWearEstimate)}% — below ${cliffThreshold}% cliff threshold.</div>`;
-    strategyHtml += `<div style="color:#9ca3af;font-size:9px;margin-top:2px;">Temp: ${trackTemp}°C (${tempMultiplier.toFixed(2)}×), track wear intensity: ${intensityVal.toFixed(2)}×, GAPP tyre factor: ${gappWearFactor.toFixed(3)}. Add a stop or switch harder.</div>`;
-    strategyHtml += `</div>`;
-    }
     }
 
    // 4c. Pre-race DNF risk score: flag parts likely to fail during this race
@@ -3827,17 +3821,6 @@
    dnfParts.push({ name, wear, endWear: Math.round(endWear), risk: endWear >= 95 ? 95 : endWear >= 90 ? 40 : 15 });
    }
    });
-   if (dnfParts.length > 0) {
-   dnfParts.sort((a, b) => b.endWear - a.endWear);
-   strategyHtml += `<div style="margin-top:6px;padding:6px;background:#7f1d1d;border-radius:4px;font-size:10px;border-left:3px solid #ef4444;">`;
-   strategyHtml += `<div style="color:#fca5a5;font-weight:700;">🔧 PRE-RACE DNF RISK</div>`;
-   dnfParts.forEach(p => {
-   const riskLabel = p.risk >= 75 ? 'VERY HIGH' : p.risk >= 40 ? 'HIGH' : 'MODERATE';
-   strategyHtml += `<div style="color:#fca5a5;">${p.name}: ${p.wear}% → ~${p.endWear}% end (${riskLabel} failure risk)</div>`;
-   });
-   strategyHtml += `<div style="color:#9ca3af;font-size:9px;margin-top:2px;">Part will likely need replacement. Check UpdateCar for options.</div>`;
-   strategyHtml += `</div>`;
-   }
    }
 
    // 5. Rain transition details (if drying race)
@@ -3920,40 +3903,6 @@
 
   h += mkSection('Race Strategy', strategyHtml, 'gpro-sec-strategy');
 
-  // Pit Strategy Comparison (from Elite spreadsheet models)
-  // Compares aggressive vs conservative pit strategies with time/dnf trade-offs
-  if (tyre && chosenTyreResult && track && car) {
-  const laps = parseInt(track.laps) || 0;
-  const pitLoss = parseFloat(track.timeInOutPits) || 13.5;
-  const recStops = chosenTyreResult.stops;
-  const strategies = [];
-  // Conservative: recStops + 1 (one extra stop)
-  const consStops = recStops + 1;
-  const consStintLen = Math.ceil(laps / (consStops + 1));
-  const consTyreWear = consStintLen * 0.5 * 1.0; // simplified
-  strategies.push({ name: `Conservative (${consStops} stops)`, stintLen: consStintLen, tyreWear: consTyreWear, pitTime: consStops * pitLoss, dnfRisk: 'Low', color: '#10b981' });
-  // Recommended
-  const recStintLen = Math.ceil(laps / (recStops + 1));
-  const recTyreWear = recStintLen * 0.5 * 1.0;
-  strategies.push({ name: `Recommended (${recStops} stops)`, stintLen: recStintLen, tyreWear: recTyreWear, pitTime: recStops * pitLoss, dnfRisk: 'Medium', color: '#f59e0b' });
-  // Aggressive: recStops - 1 (one fewer stop, if > 0)
-  if (recStops > 0) {
-  const aggStops = recStops - 1;
-  const aggStintLen = Math.ceil(laps / (aggStops + 1));
-  const aggTyreWear = aggStintLen * 0.5 * 1.0;
-  strategies.push({ name: `Aggressive (${aggStops} stops)`, stintLen: aggStintLen, tyreWear: aggTyreWear, pitTime: aggStops * pitLoss, dnfRisk: aggTyreWear > 80 ? 'High' : 'Medium', color: '#ef4444' });
-  }
-  let pitCmpHtml = `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:9px;">`;
-  pitCmpHtml += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:2px 4px;">Strategy</td><td>Stint Laps</td><td>Tyre Wear</td><td>Pit Time</td><td>DNF Risk</td></tr>`;
-  strategies.forEach(s => {
-  const wearColor = s.tyreWear > 80 ? '#ef4444' : s.tyreWear > 60 ? '#f59e0b' : '#10b981';
-  const dnfColor = s.dnfRisk === 'High' ? '#ef4444' : s.dnfRisk === 'Medium' ? '#f59e0b' : '#10b981';
-  pitCmpHtml += `<tr style="color:#d1d5db;"><td style="padding:2px 4px;color:${s.color};font-weight:600;">${s.name}</td><td style="text-align:center;">${s.stintLen}</td><td style="text-align:center;color:${wearColor};">~${Math.round(s.tyreWear)}%</td><td style="text-align:center;">${s.pitTime.toFixed(1)}s</td><td style="text-align:center;color:${dnfColor};">${s.dnfRisk}</td></tr>`;
-  });
-  pitCmpHtml += `</table></div>`;
-  pitCmpHtml += `<div style="font-size:8px;color:#6b7280;margin-top:3px;">⚠️ Conservative = more stops but less tyre wear. Aggressive = fewer stops but higher DNF risk. Recommended = balanced.</div>`;
-  h += mkSection('Pit Strategy Comparison', pitCmpHtml);
-  }
   }
 
  // Testing wear estimate - from our own CarWearService::testingWearRates()
@@ -4068,70 +4017,15 @@
   drHtml += `<div style="font-size:9px;color:#9ca3af;padding-left:4px;">${boost.note}</div>`;
   }
 
-  // Phase-by-phase race strategy (from Elite spreadsheet models)
-  // Breaks race into 4 phases with different aggressiveness/focus recommendations
-  if (tyre.laps && tyre.laps >= 12) {
-  const laps = tyre.laps;
-  const stops = chosenTyreResult.stops;
-  const overtaking = driverRiskRec.overtaking;
-  const isEasy = overtaking === 'Very Easy' || overtaking === 'Easy';
-  const p1End = Math.round(laps * 0.2);
-  const p2End = Math.round(laps * 0.5);
-  const p3End = Math.round(laps * 0.75);
-  drHtml += `<div style="margin-top:8px;padding:6px;background:#1e293b;border-radius:4px;font-size:10px;">`;
-  drHtml += `<div style="color:#60a5fa;font-weight:700;margin-bottom:4px;">📋 Phase-by-Phase Strategy:</div>`;
-  // Phase 1: Start (0-20%)
-  drHtml += `<div style="color:#10b981;font-weight:600;">Phase 1: Start (Lap 1-${p1End})</div>`;
-  drHtml += `<div style="color:#9ca3af;font-size:9px;margin-bottom:4px;">${isEasy ? 'Push early — easy overtaking means pace converts to positions fast.' : 'Conservative start — protect tyres, avoid incidents. Build rhythm.'}</div>`;
-  // Phase 2: Build (20-50%)
-  drHtml += `<div style="color:#f59e0b;font-weight:600;">Phase 2: Build (Lap ${p1End+1}-${p2End})</div>`;
-  drHtml += `<div style="color:#9ca3af;font-size:9px;margin-bottom:4px;">${stops > 0 ? 'Push through middle stint — boost into pit windows to jump rivals via overcut.' : 'Steady pace — manage fuel and tyres for the long haul. No stops to play with.'}</div>`;
-  // Phase 3: Attack (50-75%)
-  drHtml += `<div style="color:#ef4444;font-weight:600;">Phase 3: Attack (Lap ${p2End+1}-${p3End})</div>`;
-  drHtml += `<div style="color:#9ca3af;font-size:9px;margin-bottom:4px;">${isEasy ? 'Peak aggression — most overtaking opportunities before final stint.' : 'Calculated moves — wait for tyre-degradation mistakes from rivals.'}</div>`;
-  // Phase 4: Defend/Home (75-100%)
-  drHtml += `<div style="color:#8b5cf6;font-weight:600;">Phase 4: Home (Lap ${p3End+1}-${laps})</div>`;
-  drHtml += `<div style="color:#9ca3af;font-size:9px;margin-bottom:4px;">${isEasy ? 'Defend positions — use boost to cover. tyre advantage matters most now.' : 'Defend or attack depending on gap — boost final laps to secure best finish.'}</div>`;
-  drHtml += `</div>`;
-  }
   }
   h += mkSection('Driver Strategy', drHtml, 'gpro-sec-driver-strategy');
   }
 
-  // === STRATEGY INSIGHTS ===
+ // === STRATEGY INSIGHTS ===
  const confidence = calcStrategyConfidence(driver, car, track, weather, tyre);
  const riskFactors = identifyRiskFactors(driver, car, track, weather);
  const stratNotes = generateStrategyNotes(driver, track, weather, tyre);
- if (riskFactors.length > 0 || stratNotes.length > 0) {
- const confColor = confidence >= 75 ? '#10b981' : confidence >= 50 ? '#f59e0b' : '#ef4444';
- let insightsHtml = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><span style="color:#9ca3af;font-size:11px;">Confidence:</span><span style="color:${confColor};font-weight:700;font-size:14px;">${confidence}%</span></div>`;
- if (riskFactors.length > 0) {
- insightsHtml += `<div style="font-size:11px;color:#f59e0b;font-weight:600;margin-bottom:4px;">⚠️ Risk Factors:</div>`;
- riskFactors.forEach(r => { insightsHtml += `<div style="font-size:10px;color:#d1d5db;margin:2px 0;padding-left:8px;">${r}</div>`; });
- }
- if (stratNotes.length > 0) {
- insightsHtml += `<div style="font-size:11px;color:#60a5fa;font-weight:600;margin:8px 0 4px;">💡 Strategy Notes:</div>`;
- stratNotes.forEach(n => { insightsHtml += `<div style="font-size:10px;color:#d1d5db;margin:2px 0;padding-left:8px;">${n}</div>`; });
- }
- // Race pace prediction based on PHA match (from Elite analysis)
- if (car && track) {
- const trackPower = parseInt(track && (track.trackPower || track.power)) || 0;
- const trackHandl = parseInt(track && (track.trackHandl || track.handling)) || 0;
- const trackAccel = parseInt(track && (track.trackAccel || track.acceleration)) || 0;
- const carPower = parseInt(car && (car.carPower || car.power)) || 0;
- const carHandl = parseInt(car && (car.carHandl || car.handling)) || 0;
- const carAccel = parseInt(car && (car.carAccel || car.acceleration)) || 0;
- const maxTrack = Math.max(trackPower, trackHandl, trackAccel) || 1;
- const phaMatch = ((carPower / maxTrack) * trackPower + (carHandl / maxTrack) * trackHandl + (carAccel / maxTrack) * trackAccel) / (trackPower + trackHandl + trackAccel || 1);
- const paceRating = phaMatch >= 0.8 ? 'Strong' : phaMatch >= 0.6 ? 'Competitive' : phaMatch >= 0.4 ? 'Average' : 'Weak';
- const paceColor = phaMatch >= 0.8 ? '#10b981' : phaMatch >= 0.6 ? '#f59e0b' : phaMatch >= 0.4 ? '#6b7280' : '#ef4444';
- insightsHtml += `<div style="margin-top:6px;padding:4px 8px;background:#1e293b;border-radius:4px;border-left:2px solid ${paceColor};">`;
- insightsHtml += `<div style="color:${paceColor};font-weight:600;font-size:10px;">📊 Race Pace: ${paceRating}</div>`;
- insightsHtml += `<div style="color:#9ca3af;font-size:9px;">PHA match: ${(phaMatch * 100).toFixed(0)}% — ${phaMatch >= 0.8 ? 'Your car suits this track well.' : phaMatch >= 0.6 ? 'Decent match, some compromises expected.' : phaMatch >= 0.4 ? 'Below average — expect to lose time on key sectors.' : 'Poor match — significant pace deficit.'}</div>`;
- insightsHtml += `</div>`;
- }
- h += mkSection('Strategy Insights', insightsHtml);
- }
+
 
  // === CAR SETUP TABLE ===
  // Q1 uses practice temp, Q2 uses raceQ1 temp (Q2 & race start share weather), Race uses avg
@@ -5293,7 +5187,7 @@
  // irrelevant to flag for a Rookie driver even if it's numerically their lowest stat.
  const leagueAttrPriority = league && typeof GPRO_DATA !== 'undefined' && GPRO_DATA.driverAttributeLeaguePriority
  && GPRO_DATA.driverAttributeLeaguePriority[league];
- const skillValues = skillOrder.map(sk => ({ key: sk, label: skillLabels[sk], val: data.skills[sk] || 0 })).filter(s => s.val > 0);
+  const skillValues = skillOrder.map(sk => ({ key: sk, label: skillLabels[sk], val: data.skills[sk] || 0 })).filter(s => s.val > 0 && s.key !== 'aggressiveness');
  if (skillValues.length) {
  const sorted = [...skillValues].sort((a, b) => {
  if (leagueAttrPriority) {
@@ -5799,7 +5693,12 @@
  createPanel('Sponsor Overview');
  body(`<div style="${ST.loading}">Loading sponsor data...</div>`);
  try {
- const neg = await apiGet('/NegOverview');
+ // Use getDataSmart for graceful fallback to cached data if token is expired
+ const neg = await getDataSmart('/NegOverview').catch(() => ({}));
+ if (!neg || !neg.carSpots) {
+  body(mkRec('No sponsor data available. Visit NegotiationsOverview.asp once to capture data, or check your API token.', 'warn'));
+  return;
+ }
  let h = '';
 
  const spots = neg.carSpots || [];
