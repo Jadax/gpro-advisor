@@ -1475,4 +1475,37 @@ var GPRO_DATA = {
  // Division caps: Rookie=85, Amateur=110, Pro=135, Master=160, Elite=∞
  // When OA > cap: reduce motivation first (factor×mot), then scale secondary skills proportionally
  },
+ // Tyre supplier data scraped from gprohub.net (authenticated session, Season 111)
+ // Complete supplier stats: durability, compound difference, peak temp, performance, cost, warmup
+ tyreSuppliers: [
+ { name: 'Pipirelli', id: 1, durability: 2, compoundDiff: 0, peakTemp: 31, dryPerf: 2, rainPerf: 2, cost: 250000, warmup: 7 },
+ { name: 'Yokomama', id: 2, durability: 7, compoundDiff: 0.05, peakTemp: 27, dryPerf: 3, rainPerf: 1, cost: 2610000, warmup: 3 },
+ { name: 'Dunnolop', id: 3, durability: 4, compoundDiff: 0.07, peakTemp: 21, dryPerf: 4, rainPerf: 3, cost: 2510000, warmup: 6 },
+ { name: 'Badyear', id: 4, durability: 5, compoundDiff: 0.09, peakTemp: 23, dryPerf: 5, rainPerf: 6, cost: 4770000, warmup: 4 },
+ { name: 'Michelini', id: 5, durability: 2, compoundDiff: 0.075, peakTemp: 15, dryPerf: 8, rainPerf: 8, cost: 8000000, warmup: 1 },
+ { name: 'Bridgerock', id: 6, durability: 8, compoundDiff: 0.08, peakTemp: 26, dryPerf: 6, rainPerf: 5, cost: 7000000, warmup: 5 },
+ { name: 'Hancock', id: 7, durability: 1, compoundDiff: 0, peakTemp: 11, dryPerf: 7, rainPerf: 4, cost: 4440000, warmup: 2 },
+ { name: 'Contimental', id: 8, durability: 6, compoundDiff: 0.07, peakTemp: 37, dryPerf: 7, rainPerf: 2, cost: 3330000, warmup: 8 },
+ { name: 'Avonn', id: 9, durability: 8, compoundDiff: 0.015, peakTemp: 33, dryPerf: 1, rainPerf: 7, cost: 1620000, warmup: 5 },
+ ],
+ // Tyre compound wear factors (from gprohub.net props data)
+ // factor = base^(type_value) — lower factor = faster wear
+ tyreCompoundFactors: {
+ 'Extra Soft': { type: 0, factor: 0.998163750229071 },
+ 'Soft': { type: 1, factor: 0.997064844817654 },
+ 'Medium': { type: 2, factor: 0.996380346554349 },
+ 'Hard': { type: 3, factor: 0.995862526048112 },
+ 'Rain': { type: 5, factor: 0.996087854384523 },
+ },
+ // Driver performance score categories (from gprohub.net)
+ // Dry, Wet, Quali, Race, OVT (overtaking), Tyre (preservation), Car Wear
+ driverPerformanceScores: {
+ dry: 'How fast the driver is in dry conditions',
+ wet: 'How fast the driver is in wet conditions',
+ quali: 'How well the driver performs in qualifying',
+ race: 'How well the driver performs in races',
+ ovt: 'Overtaking performance',
+ tyre: 'Tyre preservation (Experience helps, aggression hurts)',
+ carWear: 'Car parts wear management (Talent, Technical Insight, Experience; raised by Aggressiveness)',
+ },
 };
