@@ -41,7 +41,6 @@
  'use strict';
  const D = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA) ? GPRO_DATA : {};
 
- const API_BASE = 'https://gpro.net/gb/backend/api/v2';
  const TANK_MAX = 180;
  const PART_NAMES = ['Chassis','Engine','Front Wing','Rear Wing','Underbody','Sidepods','Cooling','Gearbox','Brakes','Suspension','Electronics'];
  const PART_LVL_KEYS = ['lvlChassis','lvlEngine','lvlFWing','lvlRWing','lvlUnderbody','lvlSidepods','lvlCooling','lvlGear','lvlBrakes','lvlSusp','lvlElectronics'];
@@ -2293,63 +2292,9 @@
  }
 
  // ============================================================
- // DRIVER OA CALCULATOR
- // ============================================================
- // Calculates Overall Ability from individual driver skills.
- // GPRO's internal formula is not publicly disclosed; this uses the community-consensus
- // weighted average (verified against gproanalyzer.info's Driver OA tool and multiple
- // community sources). Treated as an approximation — flagged as such in the UI.
- function calcDriverOA(driver) {
- if (!driver) return null;
- const skills = {
- concentration: parseInt(driver.concentration) || 0,
- talent: parseInt(driver.talent) || 0,
- experience: parseInt(driver.experience) || 0,
- techInsight: parseInt(driver.techInsight) || 0,
- aggressiveness: parseInt(driver.aggressiveness) || 0,
- stamina: parseInt(driver.stamina) || 0,
- charisma: parseInt(driver.charisma) || 0,
- motivation: parseInt(driver.motivation) || 0,
- };
- // Community-consensus weights (sum = 1.0)
- const weights = {
- concentration: 0.25,
- talent: 0.20,
- experience: 0.15,
- techInsight: 0.15,
- aggressiveness: 0.10,
- stamina: 0.05,
- charisma: 0.05,
- motivation: 0.05,
- };
- let weightedSum = 0;
- let totalWeight = 0;
- for (const [skill, weight] of Object.entries(weights)) {
- weightedSum += (skills[skill] || 0) * weight;
- totalWeight += weight;
- }
- const oa = totalWeight > 0 ? Math.round(weightedSum / totalWeight) : 0;
- return { oa, skills, weights };
- }
-
- // ============================================================
  // CAR COSTS MATRIX
  // ============================================================
  // Base cost to upgrade from level N-1 to level N (in $M, from GPRO UpdateCar page)
- // Formula from GPRO: cost(level) = round(1.2385^(level-1) * baseCost)
- const PART_COSTS = D.carCosts?.partCosts || {
- 'Chassis': [0,1.29,1.60,1.98,2.46,3.04,3.77,4.66,5.78,7.16],
- 'Engine': [0,3.31,4.10,5.08,6.29,7.79,9.65,11.95,14.80,18.33],
- 'Front Wing': [0,1.55,1.92,2.38,2.95,3.65,4.52,5.60,6.93,8.59],
- 'Rear Wing': [0,1.50,1.86,2.31,2.86,3.54,4.38,5.43,6.72,8.33],
- 'Underbody': [0,0.51,0.63,0.78,0.97,1.20,1.49,1.84,2.28,2.82],
- 'Sidepods': [0,0.46,0.57,0.71,0.87,1.08,1.34,1.66,2.06,2.55],
- 'Cooling': [0,0.45,0.56,0.70,0.86,1.07,1.32,1.64,2.03,2.52],
- 'Gearbox': [0,3.10,3.84,4.75,5.89,7.29,9.03,11.18,13.85,17.15],
- 'Brakes': [0,0.70,0.86,1.07,1.33,1.64,2.03,2.52,3.12,3.86],
- 'Suspension': [0,1.18,1.46,1.81,2.24,2.78,3.44,4.26,5.28,6.54],
- 'Electronics': [0,0.94,1.16,1.44,1.78,2.21,2.73,3.39,4.19,5.19],
- };
  const PART_BASE_COST = D.carCosts?.partBaseCost || {
  'Chassis': 1292539, 'Engine': 3311737, 'Front Wing': 1551354,
  'Rear Wing': 1504126, 'Underbody': 510128, 'Sidepods': 459831,
@@ -2486,25 +2431,6 @@
  });
  return parts;
  }
-
- // ============================================================
- // CAR COSTS TABLE
- // ============================================================
- // Cost in millions to upgrade/replace each part at each level
- const CAR_COSTS = D.carCosts?.partCosts || {
- 'Chassis': [1.29,1.60,1.98,2.46,3.04,3.77,4.66,5.78,7.16],
- 'Engine': [3.31,4.10,5.08,6.29,7.79,9.65,11.95,14.80,18.33],
- 'Front Wing': [1.55,1.92,2.38,2.95,3.65,4.52,5.60,6.93,8.59],
- 'Rear Wing': [1.50,1.86,2.31,2.86,3.54,4.38,5.43,6.72,8.33],
- 'Underbody': [0.51,0.63,0.78,0.97,1.20,1.49,1.84,2.28,2.82],
- 'Sidepods': [0.46,0.57,0.71,0.87,1.08,1.34,1.66,2.06,2.55],
- 'Cooling': [0.45,0.56,0.70,0.86,1.07,1.32,1.64,2.03,2.52],
- 'Gearbox': [3.10,3.84,4.75,5.89,7.29,9.03,11.18,13.85,17.15],
- 'Brakes': [0.70,0.86,1.07,1.33,1.64,2.03,2.52,3.12,3.86],
- 'Suspension': [1.18,1.46,1.81,2.24,2.78,3.44,4.26,5.28,6.54],
- 'Electronics': [0.94,1.16,1.44,1.78,2.21,2.73,3.39,4.19,5.19],
- };
- const CAR_COST_TOTALS = D.carCosts?.carCostTotals || [15.00, 18.58, 23.01, 28.50, 35.29, 43.71, 54.13, 67.04, 83.03];
 
  // ============================================================
  // UPDATE CAR DOM PARSER
@@ -3537,8 +3463,13 @@
   if (fuel) {
   summaryItems.push({ icon: '⛽', label: `${fuel.totalFuel}L`, detail: `${fuel.fuelPerLap}L/lap` });
   if (tyre && chosenTyreResult && chosenTyreResult.stops > 0) {
-   const stintFuel = Math.ceil(fuel.totalFuel / (chosenTyreResult.stops + 1));
-   summaryItems.push({ icon: '🔄', label: `${stintFuel}L/stint`, detail: `${chosenTyreResult.stops + 1} stints` });
+   // Different fuel for race start (from Q2) vs remaining stints
+   if (fuel.stint1Fuel && fuel.stint1Fuel !== fuel.fuelPerStint) {
+    summaryItems.push({ icon: '🔄', label: `${fuel.stint1Fuel}L start`, detail: `then ${fuel.fuelPerLap}L × ${chosenTyreResult.stops} more stops` });
+   } else {
+    const stintFuel = Math.ceil(fuel.totalFuel / (chosenTyreResult.stops + 1));
+    summaryItems.push({ icon: '🔄', label: `${stintFuel}L/stint`, detail: `${chosenTyreResult.stops + 1} stints` });
+   }
   }
   }
   if (analyze) {
@@ -3777,53 +3708,7 @@
    strategyHtml += mkRec('Complete testing to get fuel data', 'warn');
    }
 
-    // 4b. Tyre cliff alert: warn if tyres will drop below 15% before planned pit stop
-    if (tyre && chosenTyreResult && track) {
-    const laps = parseInt(track.laps) || 0;
-    const stops = chosenTyreResult.stops;
-    const stints = stops + 1;
-    const lapsPerStint = Math.ceil(laps / stints);
-    const trackTemp = raceTemp || 25;
-    // Elite temperature wear multiplier (from Elite spreadsheets): tempCoeff=0.015
-    const tempCoeff = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.tempWearMultiplier) ? GPRO_DATA.tempWearMultiplier.tempCoeff : 0.015;
-    const tempMultiplier = 1 + (trackTemp - 20) * tempCoeff;
-    // GAPP track tyre wear factor if available
-    const trackName = (practice||{}).trackName || (track||{}).trackName || '';
-    const gappWearFactor = lookupGappTrack(trackName, 'tyreWearFactor') || 1.0;
-    const trackWearIntensity = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.trackWearIntensity) ? GPRO_DATA.trackWearIntensity : null;
-    const intensityVal = trackWearIntensity ? (trackWearIntensity[trackName] || 1.0) : 1.0;
-    const baseWearPerLap = 0.5 * gappWearFactor * intensityVal;
-    const endWearEstimate = 100 - (lapsPerStint * baseWearPerLap * tempMultiplier * 100);
-    const cliffThreshold = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.tyreConstants) ? GPRO_DATA.tyreConstants.wearThreshold : 15;
-    }
-
-   // 4c. Pre-race DNF risk score: flag parts likely to fail during this race
-   if (car && track) {
-   const trackName = (practice||{}).trackName || (track||{}).trackName || '';
-   const laps = parseInt(track.laps) || 0;
-   const gappWear = lookupGappTrack(trackName, 'wearData');
-   const levelFactors = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.gapp) ? GPRO_DATA.gapp.levelFactors : null;
-   const driverFactor = calcDriverWearFactor(driver);
-   const ctrVal = ctr || 0;
-   const dnfThreshold = 90;
-   let dnfParts = [];
-   PART_NAMES.forEach((name, i) => {
-   const wear = parseInt(car[PART_WEAR_KEYS[i]]) || 0;
-   const lvl = parseInt(car[PART_LVL_KEYS[i]]) || 0;
-   let raceWear = 0;
-   if (gappWear && levelFactors) {
-   raceWear = gappWear.values[i] * Math.pow(levelFactors[lvl - 1], ctrVal) * driverFactor;
-   } else {
-   raceWear = laps * 0.5 * 0.85;
-   }
-   const endWear = wear + raceWear;
-   if (endWear >= dnfThreshold) {
-   dnfParts.push({ name, wear, endWear: Math.round(endWear), risk: endWear >= 95 ? 95 : endWear >= 90 ? 40 : 15 });
-   }
-   });
-   }
-
-   // 5. Rain transition details (if drying race)
+    // 5. Rain transition details (if drying race)
   if (dryingFuelData) {
   const df = dryingFuelData;
   const pitLoss = parseFloat(track.timeInOutPits) || 13.5;
@@ -4020,12 +3905,6 @@
   }
   h += mkSection('Driver Strategy', drHtml, 'gpro-sec-driver-strategy');
   }
-
- // === STRATEGY INSIGHTS ===
- const confidence = calcStrategyConfidence(driver, car, track, weather, tyre);
- const riskFactors = identifyRiskFactors(driver, car, track, weather);
- const stratNotes = generateStrategyNotes(driver, track, weather, tyre);
-
 
  // === CAR SETUP TABLE ===
  // Q1 uses practice temp, Q2 uses raceQ1 temp (Q2 & race start share weather), Race uses avg
@@ -4901,20 +4780,6 @@
  { key: 'commercial', label: 'Commercial', targetLvl: 15, priority: 6, note: 'Sponsorship income' },
  { key: 'windtunnel', label: 'Windtunnel', targetLvl: 0, priority: 7, note: 'Low priority in Amateur' },
  ];
- const CAR_IDEAL_LEVELS = D.carIdealLevels || {
- 'Chassis': { target: 6, priority: 2, note: 'Power contribution' },
- 'Engine': { target: 7, priority: 1, note: 'Most impactful for Power PHA' },
- 'Front Wing': { target: 6, priority: 3, note: 'Handling contribution' },
- 'Rear Wing': { target: 6, priority: 3, note: 'Handling contribution' },
- 'Underbody': { target: 5, priority: 5, note: 'Handling, cheap to upgrade' },
- 'Sidepods': { target: 5, priority: 5, note: 'Acceleration, cheap to upgrade' },
- 'Cooling': { target: 5, priority: 6, note: 'Supports engine reliability' },
- 'Gearbox': { target: 6, priority: 4, note: 'Acceleration contribution' },
- 'Brakes': { target: 7, priority: 2, note: 'Handling, high wear' },
- 'Suspension': { target: 6, priority: 3, note: 'Acceleration, reduces tyre wear' },
- 'Electronics': { target: 5, priority: 4, note: 'Weight reduction, reliability' },
- };
-
  // ============================================================
  // RENDER: STAFF & FACILITIES (StaffAndFacilities.asp)
  // ============================================================
