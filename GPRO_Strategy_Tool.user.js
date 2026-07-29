@@ -3433,7 +3433,7 @@
   if (tyre && chosenTyreResult && chosenTyreResult.stops > 0) {
    // Different fuel for race start (from Q2) vs remaining stints
    if (fuel.stint1Fuel && fuel.stint1Fuel !== fuel.fuelPerStint) {
-    summaryItems.push({ icon: '🔄', label: `${fuel.stint1Fuel}L start`, detail: `then ${fuel.fuelPerLap}L × ${chosenTyreResult.stops} more stops` });
+     summaryItems.push({ icon: '🔄', label: `${fuel.stint1Fuel}L start`, detail: `then ${fuel.fuelPerStint}L × ${chosenTyreResult.stops} more stops` });
    } else {
     const stintFuel = Math.ceil(fuel.totalFuel / (chosenTyreResult.stops + 1));
     summaryItems.push({ icon: '🔄', label: `${stintFuel}L/stint`, detail: `${chosenTyreResult.stops + 1} stints` });
@@ -3491,28 +3491,6 @@
  mkRow('Laps', (track||{}).laps || '?') +
  mkRow('Pit Loss', `${(track||{}).timeInOutPits || '?'}s`)
  );
-
- // PHA: Car character vs Track
- if (trackPower || trackHandl || trackAccel) {
- const phaBar = (carVal, trackVal, name) => {
- const diff = carVal - trackVal;
- const color = diff >= 3 ? '#10b981' : diff >= 0 ? '#f59e0b' : '#ef4444';
- const sign = diff >= 0 ? '+' : '';
- return `<div style="margin:4px 0;font-size:10px;"><span style="color:#9ca3af;width:75px;display:inline-block;">${name}</span> <span style="color:#f9fafb;font-weight:700;">${carVal}</span> <span style="color:#6b7280;">/</span> <span style="color:#d1d5db;">${trackVal}</span> <span style="color:${color};font-weight:700;">(${sign}${diff})</span> ${diff >= 3 ? '🟢' : diff >= 0 ? '🟡' : '🔴'}</div>`;
- };
- const phaMatch = calcPhaMatch(car, { power: trackPower, handling: trackHandl, accel: trackAccel });
- const phaMatchBadge = phaMatch && phaMatch.level !== 'none'
- ? mkRec(phaMatch.level === 'perfect' ? '🏆 Perfect PHA match - your car\'s full priority order mirrors this track.' : '⭐ Top match - your car\'s strongest attribute is this track\'s most important one.', 'good')
- : '';
- h += mkSection('PHA: Car vs Track',
- phaMatchBadge +
- phaBar(carPower, trackPower, 'Power') +
- phaBar(carHandl, trackHandl, 'Handling') +
- phaBar(carAccel, trackAccel, 'Acceleration') +
- `<div style="font-size:9px;color:#6b7280;margin-top:4px;">🟢 +3 or more | 🟡 0 to +2 | 🔴 negative</div>`,
- 'gpro-sec-pha'
- );
- }
 
  // Weather
  h += mkWeatherForecastSection(analyze, { rainLabel: 'RAIN PLAN COMMITTED', showAvg: false, id: 'gpro-sec-weather' });
@@ -3949,54 +3927,7 @@
   checkHtml += `</div>`;
   h += `<div style="margin-bottom:8px;"><div style="font-size:10px;color:#60a5fa;font-weight:700;margin-bottom:4px;">🏁 Race Weekend Checklist</div>${checkHtml}</div>`;
   }
-  }
-
-  // Time Lost Due To Pitting (from gproanalyzer.info/pd.php)
-  // Formula: pitTimePerLap = pitLoss / laps × 0.2833
-  const raceLaps = track ? parseInt(track.laps) || 0 : 0;
-  const pitLossBase = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.gapp && GPRO_DATA.gapp.pitTimeCalc) ? GPRO_DATA.gapp.pitTimeCalc.base : 24;
-  if (raceLaps > 0 && tyre) {
-  const stops = tyre.stops || 0;
-  const pitTimePerLap = pitLossBase / raceLaps * 0.2833;
-  const totalPitLoss = pitTimePerLap * raceLaps * stops;
-  h += mkSection('Time Lost Due To Pitting',
-   mkRow('Pit stop base time', `${pitLossBase.toFixed(1)}s`) +
-   mkRow('Time per lap', `+${pitTimePerLap.toFixed(3)}s`) +
-   mkRow('Stops', stops) +
-   mkRow('Total pit loss', `+${totalPitLoss.toFixed(1)}s`) +
-   `<span style="font-size:9px;color:#6b7280;">Each pit stop costs ~${pitLossBase.toFixed(0)}s base + per-lap penalty. More stops = more time lost.</span>`);
-  }
-
-  // Time Lost Due To FLD (Fuel Load Difference, from gproanalyzer.info/fld.php)
-  // Formula: fldPerLap = fuelLoad × 0.003857
-  if (raceLaps > 0 && tyre) {
-  const fuelPerStint = tyre.fuelPerStint || 0;
-  const fldPerLap = fuelPerStint * 0.003857;
-  const totalFld = fldPerLap * raceLaps;
-  h += mkSection('Time Lost Due To FLD',
-   mkRow('Fuel per stint', `${fuelPerStint.toFixed(1)}L`) +
-   mkRow('FLD per lap', `+${fldPerLap.toFixed(3)}s`) +
-   mkRow('Total FLD', `+${totalFld.toFixed(1)}s`) +
-   `<span style="font-size:9px;color:#6b7280;">Carrying more fuel = heavier car = slower laps. Formula: fuel × 0.003857 s/lap.</span>`);
-  }
-
-  // Time Lost Due To TCD (Tyre Compound Difference, from gproanalyzer.info/tcd.php)
-  // TCD is temperature-independent — fixed per compound pair
-  if (raceLaps > 0 && tyre) {
-  const tcdTable = { 'Extra Soft': { 'Soft': 0.82, 'Medium': 1.64, 'Hard': 2.46, 'Rain': 0 }, 'Soft': { 'Medium': 0.82, 'Hard': 1.64, 'Rain': 0 }, 'Medium': { 'Hard': 0.82, 'Rain': 0 }, 'Hard': { 'Rain': 0 } };
-  const compound = tyre.compound || tyre.finalRec || 'Medium';
-  const fasterCompound = 'Hard';
-  const tcdPerLap = (tcdTable[compound] && tcdTable[compound][fasterCompound]) || 0;
-  const totalTcd = tcdPerLap * raceLaps;
-  if (tcdPerLap > 0) {
-   h += mkSection('Time Lost Due To TCD',
-    mkRow('Current compound', compound) +
-    mkRow('vs Faster compound', fasterCompound) +
-    mkRow('TCD per lap', `+${tcdPerLap.toFixed(3)}s`) +
-    mkRow('Total TCD', `+${totalTcd.toFixed(1)}s`) +
-    `<span style="font-size:9px;color:#6b7280;">Softer compound = faster laps but more stops. TCD is fixed per compound pair, temperature-independent.</span>`);
-  }
-  }
+   }
 
   body(h);
  wireDecisionBoard();
