@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.2.2
+// @version 6.2.3
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1104,8 +1104,8 @@
 
  // Runs once per passive page load (DriverProfile/TrackDetails/Suppliers/StaffAndFacilities) - no
  // extra panel, just capture into the stale-fallback cache.
- // Foundational storage piece for the driver attribute-drift estimator (our "Driver
- // info" - see ARCHITECTURE.md TODOs): persists one snapshot per driver per day, capped at 60
+ // Foundational storage piece for a possible future driver attribute-drift estimator: persists
+ // one snapshot per driver per day, capped at 60
  // entries (~2 months of daily visits) per driver, keyed by driver ID so scouted drivers get their
  // own history alongside the account's own. Deliberately storage-only for now - no drift
  // *prediction* is built on top of this yet (that needs a real methodology, not a guess), but the
@@ -2117,7 +2117,7 @@
  // only, which turned out to undersell it - the real version has a per-rating-tier lead sentence
  // plus up to 2 caveats from a richer, ordered list, not just grip/long-race). Purely a template
  // over numbers already computed here - no LLM involved, degrades to a generic sentence if driver
- // data is thin, per the AI-first principles in ARCHITECTURE.md.
+ // data is thin.
  function mkRaceEngineerNarrative(rec, track, driver, raceWet) {
  if (!rec) return '';
  const trackName = (track && (track.name || track.trackName)) || 'this track';

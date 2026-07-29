@@ -54,7 +54,6 @@ GPRO gives you raw data. This tool turns it into **decisions**.
 - **Background data capture** — silently fetches driver, track, supplier, and staff pages in the background to keep your cache fresh
 - **Cross-checks everywhere** — when per-track and calibrated data disagree, both numbers are shown so you can judge for yourself
 - **Multi-race wear planner** — projects car wear forward across upcoming races to plan ahead
-- **AI Coaching** — optional OpenAI/Anthropic integration for natural-language race coaching (bring your own API key)
 
 ---
 
@@ -129,7 +128,6 @@ The tool mostly works out of the box. A few optional settings:
 | **CTR (Clear Track Risk)** | Race Advisor | Set your driver's CTR value for risk calculations |
 | **Wet/Dry overrides** | Q1/Q2 pages | Manually toggle session conditions when auto-detection is wrong |
 | **API token** | Tampermonkey menu → Settings | Required for API access |
-| **AI Coaching** | Tampermonkey menu → Settings | Optional OpenAI/Anthropic API key for natural-language coaching |
 
 ---
 
@@ -151,8 +149,7 @@ GPRO Tool/
 ├── gpro-public-api.yml           # GPRO's official OpenAPI spec (reference only)
 ├── docs/
 │   └── page-structures.md        # Confirmed DOM selectors for game pages (reference only)
-├── ARCHITECTURE.md               # Iteration log / roadmap for contributors
-├── CLAUDE.md                     # House rules for AI-assisted development on this repo
+├── CLAUDE.md                     # House rules + durable project knowledge for AI-assisted development
 └── README.md
 ```
 

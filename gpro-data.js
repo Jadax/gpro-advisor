@@ -875,7 +875,7 @@ var GPRO_DATA = {
  // Only wearThreshold is actually read from here - GPRO_Strategy_Tool.user.js keeps its own
  // working copies of compounds/wearMultipliers/fuelBase/etc (COMPOUNDS, WEAR_MULTIPLIERS,
  // FUEL_BASE) since those are on the calc hot path; duplicating them here too was dead weight
- // (removed 2026-07-19 - see ARCHITECTURE.md iteration log). Don't re-add without wiring
+ // (removed 2026-07-19 as dead weight). Don't re-add without wiring
  // .user.js to actually read from here.
  // ============================================================
  tyreConstants: {
