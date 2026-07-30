@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.3.0
+// @version 6.3.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -27,11 +27,11 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.0.0
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.1.0
 // @run-at document-idle
 // ==/UserScript==
 
-// GPRO Strategy Tool v6.2.2
+// GPRO Strategy Tool v6.3.1
 // Made with ❤ by Tushant Sharma | Astraiva
 // A comprehensive strategy tool for Grand Prix Racing Online providing
 // fuel calculations, tyre strategy, car setup recommendations,
@@ -41,14 +41,15 @@
  'use strict';
  const D = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA) ? GPRO_DATA : {};
 
+ // Every GM_xmlhttpRequest must set this - without a timeout a hung request never settles and
+ // any `await` on it blocks that render path permanently.
+ const NET_TIMEOUT_MS = 20000;
  const TANK_MAX = 180;
  const PART_NAMES = ['Chassis','Engine','Front Wing','Rear Wing','Underbody','Sidepods','Cooling','Gearbox','Brakes','Suspension','Electronics'];
  const PART_LVL_KEYS = ['lvlChassis','lvlEngine','lvlFWing','lvlRWing','lvlUnderbody','lvlSidepods','lvlCooling','lvlGear','lvlBrakes','lvlSusp','lvlElectronics'];
  const PART_WEAR_KEYS = ['usaChassis','usaEngine','usaFWing','usaRWing','usaUnderbody','usaSidepods','usaCooling','usaGear','usaBrakes','usaSusp','usaElectronics'];
  const PART_OPT_KEYS = ['chassisOptions','engineOptions','fWingOptions','rWingOptions','underbodyOptions','sidepodsOptions','coolingOptions','gearOptions','brakesOptions','suspOptions','electronicsOptions'];
- const PART_SEL_KEYS = ['selectedChassis','selectedEngine','selectedFWing','selectedRWing','selectedUnderbody','selectedSidepods','selectedCooling','selectedGear','selectedBrakes','selectedSusp','selectedElectronics'];
  const FAST_WEAR = D.wearConstants?.fastWearParts || ['Chassis','Engine','Front Wing','Rear Wing','Gearbox'];
- const SLOW_WEAR = D.wearConstants?.slowWearParts || ['Underbody','Sidepods','Cooling','Brakes','Suspension','Electronics'];
  const CRITICAL_WEAR = D.wearConstants?.critical ?? 10;
  const FAST_ALERT = D.wearConstants?.fastAlert ?? 30;
  const SLOW_ALERT = D.wearConstants?.slowAlert ?? 15;
@@ -107,6 +108,13 @@
  // parser diagnostics) through console.log with no way to filter devtools by severity. Genuine
  // failures now go through logError; verbose parse/fallback tracing stays console.log by design.
  function logError(...args) { console.error('[GPRO]', ...args); }
+
+ // Verbose parser/fallback tracing. Was 27 bare console.log calls firing on every page load for
+ // every user; that's devtools noise nobody asked for in a shipped build, and it made real errors
+ // harder to spot. Off by default - enable with `localStorage.gproDebug = '1'` (or the Tampermonkey
+ // menu) when actually diagnosing a parse failure. logError stays unconditional.
+ const DEBUG = (() => { try { return localStorage.getItem('gproDebug') === '1'; } catch (e) { return false; } })();
+ function logDebug(...args) { if (DEBUG) console.log('[GPRO]', ...args); }
 
  // Money strings from GPRO are dot-thousands, e.g. "$5.902.387" - never reinvent this parse.
  function parseGproCash(str) {
@@ -210,12 +218,17 @@
  GM_xmlhttpRequest({
  method: 'GET',
  url: url,
+ // Real bug fixed 2026-07-29: no timeout was set and no ontimeout handler existed, so a request
+ // that never came back left the awaiting caller (init()) hanging forever - the panel sat on
+ // "Loading..." with no error, no fallback to stale cache, and no retry button.
+ timeout: NET_TIMEOUT_MS,
  headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' },
+ ontimeout() { fallbackOrReject(endpoint, new Error(`Request timed out after ${NET_TIMEOUT_MS / 1000}s - using cached data if available.`), resolve, reject); },
  onload(r) {
  // Check HTTP status first
  if (r.status === 502 || r.status === 503 || r.status === 429) {
  if (retries > 0) {
- console.log(`[GPRO] ${r.status} on ${endpoint}, retrying (${retries} left)...`);
+ logDebug(`${r.status} on ${endpoint}, retrying (${retries} left)...`);
  setTimeout(() => apiGet(endpoint, retries - 1).then(resolve).catch(reject), 1500);
  return;
  }
@@ -241,7 +254,7 @@
  },
  onerror() {
  if (retries > 0) {
- console.log(`[GPRO] Network error on ${endpoint}, retrying (${retries} left)...`);
+ logDebug(`Network error on ${endpoint}, retrying (${retries} left)...`);
  setTimeout(() => apiGet(endpoint, retries - 1).then(resolve).catch(reject), 1500);
  return;
  }
@@ -421,8 +434,24 @@
  loading: `text-align:center;padding:30px;color:${PALETTE.textMuted};`,
  };
 
+ // Semantic verdict colors - single source of truth. These carry MEANING (used at hundreds of
+ // call sites), unlike PALETTE's chrome colors; don't re-declare them inline or change the hues
+ // casually. Was duplicated verbatim in mkRec and mkDecisionBoard until 2026-07-29.
+ const VERDICT = { good: '#10b981', warn: '#f59e0b', bad: '#ef4444', info: '#3b82f6' };
+
+ // Escapes text before it goes into an innerHTML template. Everything this tool renders is built
+ // by string-concatenating into innerHTML, and some of those strings are SCRAPED off gpro.net
+ // pages (driver/TD names from market listings, track names, sponsor text). Those are
+ // game-generated today so there's no known live injection path, but nothing structurally
+ // prevents one: a scraped string containing markup would be re-parsed as HTML on insertion.
+ // Use this for any value that originates from scraped page content rather than from our own code.
+ function esc(v) {
+ if (v === null || v === undefined) return '';
+ return String(v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+ }
+
  function mkRec(text, type) {
- const colors = { good: '#10b981', warn: '#f59e0b', bad: '#ef4444', info: '#3b82f6' };
+ const colors = VERDICT;
  const c = colors[type] || colors.info;
  return `<div style="${ST.rec}border-color:${c};background:${c}14;">${text}</div>`;
  }
@@ -597,7 +626,7 @@
  function mkDecisionBoard(tiles) {
  const present = tiles.filter(t => t && t.verdict);
  if (!present.length) return '';
- const colors = { good: '#10b981', warn: '#f59e0b', bad: '#ef4444', info: '#3b82f6' };
+ const colors = VERDICT;
  const cells = present.map(t => `<div data-jump-to="${t.id}" style="cursor:pointer;flex:1;min-width:90px;background:${colors[t.tone] || colors.info}14;border:1px solid ${colors[t.tone] || colors.info}44;border-radius:9px;padding:7px 9px;">
  <div style="font-size:9px;color:${PALETTE.textDim};text-transform:uppercase;letter-spacing:.03em;">${t.label}</div>
  <div style="font-size:11px;color:${colors[t.tone] || colors.info};font-weight:700;margin-top:2px;">${t.verdict}</div>
@@ -730,7 +759,7 @@
  if (!isNaN(v)) out[key] = v;
  });
  }
- if (Object.keys(out).length === 0) { console.log('[GPRO][parseTdProfileDOM] no recognizable fields found - page markup unconfirmed'); return null; }
+ if (Object.keys(out).length === 0) { logDebug('[GPRO][parseTdProfileDOM] no recognizable fields found - page markup unconfirmed'); return null; }
  const h1 = root.querySelector('h1.block');
  out.tdName = h1 ? h1.textContent.replace(/technical director profile:/i, '').trim() : '';
  return out;
@@ -811,7 +840,7 @@
  if (!cols.length) {
  cols = Array.from(root.querySelectorAll('.column')).filter(c => c.querySelector('h2') && /Dry performance/i.test(c.textContent));
  }
- if (!cols.length) { console.log('[GPRO][parseTyreSuppliersDOM] no supplier columns found - page markup may have changed'); return null; }
+ if (!cols.length) { logDebug('[GPRO][parseTyreSuppliersDOM] no supplier columns found - page markup may have changed'); return null; }
  cols.forEach((col) => {
  const h2 = col.querySelector('h2');
  if (!h2) return;
@@ -1223,6 +1252,27 @@
  }
  }
 
+ // Runs async jobs with a hard cap on how many are in flight at once. Every fan-out point in this
+ // file previously fired its whole batch simultaneously - up to 30 parallel page fetches from the
+ // market full-stat scan and 17 from the season track-specs pre-cache. That is a lot of
+ // simultaneous load to put on gpro.net from one browser tab, risks tripping rate limiting, and
+ // gains little over a small pool since the bottleneck is the server, not us.
+ async function mapLimit(items, limit, fn) {
+ const results = new Array(items.length);
+ let next = 0;
+ const workers = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
+ while (true) {
+ const i = next++;
+ if (i >= items.length) return;
+ try { results[i] = { status: 'fulfilled', value: await fn(items[i], i) }; }
+ catch (e) { results[i] = { status: 'rejected', reason: e }; }
+ }
+ });
+ await Promise.all(workers);
+ return results;
+ }
+ const NET_CONCURRENCY = 4;
+
  // Fetches an arbitrary same-site page's HTML in the background (no navigation) so its DOM can be
  // parsed the same way as a real visit. Used by "Update All Data" to reach DriverProfile.asp/
  // TrackDetails.asp/Suppliers.asp without making the user actually click through to them.
@@ -1231,6 +1281,9 @@
  const url = `https://${getApiHost()}/${getLang()}/${path}`;
  GM_xmlhttpRequest({
  method: 'GET', url,
+ // `timeout` must be set for the ontimeout handler below to ever fire - it was declared
+ // without one until 2026-07-29, so background page fetches could hang indefinitely.
+ timeout: NET_TIMEOUT_MS,
  onload(r) { (r.status >= 200 && r.status < 300) ? resolve(r.responseText) : reject(new Error(`HTTP ${r.status} fetching ${path}`)); },
  onerror() { reject(new Error(`Network error fetching ${path}`)); },
  ontimeout() { reject(new Error(`Timeout fetching ${path}`)); },
@@ -1334,14 +1387,13 @@
  });
  let cachedCount = races.length - missing.length;
  if (missing.length) {
- const results = await Promise.allSettled(missing.map(r =>
- fetchPageHTML(`TrackDetails.asp?id=${r.id}`).then((html) => {
+ const results = await mapLimit(missing, NET_CONCURRENCY, async (r) => {
+ const html = await fetchPageHTML(`TrackDetails.asp?id=${r.id}`);
  const doc = new DOMParser().parseFromString(html, 'text/html');
  const t = parseTrackDetailsDOM(doc);
  if (t) { setStaleData(`/TrackSpecs/${encodeURIComponent(r.name)}`, t); return true; }
  return false;
- })
- ));
+ });
  cachedCount += results.filter(r => r.status === 'fulfilled' && r.value).length;
  }
  if (cachedCount >= races.length) GM_setValue('gpro_season_specs_cached_season', `${seasonKey}|${groupStr}`);
@@ -1536,7 +1588,6 @@
   }
  }
  const CTR_WEAR_ADD = D.tyreConstants?.ctrWearAdd ?? 0.01;
- const WEAR_THRESHOLD = D.tyreConstants?.wearThreshold ?? 15;
  const compoundSpeedDelta = D.tyreConstants?.compoundSpeedDelta || {
  'Extra Soft': -1.5, 'Soft': -0.8, 'Medium': 0, 'Hard': 0.5, 'Rain': 0,
  };
@@ -1720,16 +1771,16 @@
  const gapp = typeof GPRO_DATA !== 'undefined' ? GPRO_DATA.gapp : null;
  const trackName = track && track.trackName;
  const gappTrack = lookupGappTrack(trackName, 'trackData');
- if (!gapp) { console.log('[GPRO][gapp tyre] no GPRO_DATA.gapp loaded'); return null; }
- if (!gappTrack) { console.log(`[GPRO][gapp tyre] track "${trackName}" not found in gapp.trackData`); return null; }
- if (!driver) { console.log('[GPRO][gapp tyre] no driver data'); return null; }
- if (!car) { console.log('[GPRO][gapp tyre] no car data'); return null; }
- if (!supplier || !supplier.name) { console.log('[GPRO][gapp tyre] no supplier data (supplier.name missing)'); return null; }
+ if (!gapp) { logDebug('[GPRO][gapp tyre] no GPRO_DATA.gapp loaded'); return null; }
+ if (!gappTrack) { logDebug(`[GPRO][gapp tyre] track "${trackName}" not found in gapp.trackData`); return null; }
+ if (!driver) { logDebug('[GPRO][gapp tyre] no driver data'); return null; }
+ if (!car) { logDebug('[GPRO][gapp tyre] no car data'); return null; }
+ if (!supplier || !supplier.name) { logDebug('[GPRO][gapp tyre] no supplier data (supplier.name missing)'); return null; }
  const sc = gapp.stopCalc;
  const supFactor = gappLookupByName(sc.tyreSupplierFactor, supplier.name);
  const supCompoundFactor = gappLookupByName(gapp.tyreCompoundSupplierFactor, supplier.name);
  if (supFactor === undefined || supCompoundFactor === undefined) {
- console.log(`[GPRO][gapp tyre] supplier name "${supplier.name}" doesn't match any known key (${Object.keys(sc.tyreSupplierFactor).join(', ')}) - using legacy`);
+ logDebug(`[GPRO][gapp tyre] supplier name "${supplier.name}" doesn't match any known key (${Object.keys(sc.tyreSupplierFactor).join(', ')}) - using legacy`);
  return null;
  }
 
@@ -1966,15 +2017,15 @@
  function calcCarSetupGappSession(trackName, sessionTemp, isWet, driver, car) {
  const gapp = typeof GPRO_DATA !== 'undefined' ? GPRO_DATA.gapp : null;
  const gappTrack = lookupGappTrack(trackName, 'trackData');
- if (!gapp) { console.log('[GPRO][gapp setup] no GPRO_DATA.gapp loaded'); return null; }
- if (!gappTrack) { console.log(`[GPRO][gapp setup] track "${trackName}" not found in gapp.trackData`); return null; }
- if (!driver) { console.log('[GPRO][gapp setup] no driver data'); return null; }
- if (!car) { console.log('[GPRO][gapp setup] no car data'); return null; }
+ if (!gapp) { logDebug('[GPRO][gapp setup] no GPRO_DATA.gapp loaded'); return null; }
+ if (!gappTrack) { logDebug(`[GPRO][gapp setup] track "${trackName}" not found in gapp.trackData`); return null; }
+ if (!driver) { logDebug('[GPRO][gapp setup] no driver data'); return null; }
+ if (!car) { logDebug('[GPRO][gapp setup] no car data'); return null; }
  // Only reject if car is essentially empty (no part levels at all, e.g. the {lvlEngine,lvlSusp}
  // minimal fallback used before /UpdateCar has ever loaded). Missing individual parts already
  // default to 0 contribution via gappCarPartLvl, so don't require every field to be present.
  const anyLevelPresent = PART_LVL_KEYS.some(k => parseInt(car[k]) > 0);
- if (!anyLevelPresent) { console.log('[GPRO][gapp setup] car object has no part levels at all - using legacy'); return null; }
+ if (!anyLevelPresent) { logDebug('[GPRO][gapp setup] car object has no part levels at all - using legacy'); return null; }
 
  const t = gappTrack.values;
  const trackBaseWings = t[0] * 2, trackBaseEngine = t[1], trackBaseBrakes = t[2], trackBaseGears = t[3], trackBaseSusp = t[4], trackBaseWingSplit = t[5];
@@ -2566,10 +2617,10 @@
  if (result.parts.length > 0) {
  const zeroLvl = result.parts.filter(p => p.currentLevel === 0).length;
  const zeroWear = result.parts.filter(p => p.currentWear === 0).length;
- console.log(`[GPRO] DOM parse: ${result.parts.length} parts found, ${zeroLvl} missing levels, ${zeroWear} missing wear`);
+ logDebug(`DOM parse: ${result.parts.length} parts found, ${zeroLvl} missing levels, ${zeroWear} missing wear`);
  } else {
  logError('DOM parse: NO selects found with name/id starting with "Buy"');
- console.log('[GPRO] All selects on page:', Array.from(document.querySelectorAll('select')).map(s => s.name || s.id || '(unnamed)').join(', '));
+ logDebug('All selects on page:', Array.from(document.querySelectorAll('select')).map(s => s.name || s.id || '(unnamed)').join(', '));
  }
 
  // Text-based fallback: if levels or wear are still 0, scan page text for "PartName: <level>" patterns
@@ -2583,7 +2634,7 @@
  const m = allText.match(lvlRe);
  if (m) {
  const v = parseInt(m[1]);
- if (v > 0 && v <= 10) { p.currentLevel = v; console.log(`[GPRO] Text fallback: ${p.name} level ${v}`); }
+ if (v > 0 && v <= 10) { p.currentLevel = v; logDebug(`Text fallback: ${p.name} level ${v}`); }
  }
  }
  if (p.currentWear === 0) {
@@ -2592,7 +2643,7 @@
  const m = allText.match(wearRe);
  if (m) {
  const v = parseInt(m[1]);
- if (v >= 0 && v <= 100) { p.currentWear = v; console.log(`[GPRO] Text fallback: ${p.name} wear ${v}%`); }
+ if (v >= 0 && v <= 100) { p.currentWear = v; logDebug(`Text fallback: ${p.name} wear ${v}%`); }
  }
  }
  }
@@ -2600,7 +2651,7 @@
 
  // If still no parts found, try scanning ALL table rows on the page
  if (result.parts.length === 0) {
- console.log('[GPRO] Trying table row fallback for levels...');
+ logDebug('Trying table row fallback for levels...');
  const allRows = document.querySelectorAll('tr');
  for (const row of allRows) {
  const tds = row.querySelectorAll('td');
@@ -2621,7 +2672,7 @@
  if (lvl !== undefined) {
  if (existing) existing.currentLevel = lvl;
  else result.parts.push({ name, opts: [], currentLevel: lvl, currentWear: 0 });
- console.log(`[GPRO] Table fallback: ${name} level ${lvl}`);
+ logDebug(`Table fallback: ${name} level ${lvl}`);
  }
  }
  }
@@ -4094,10 +4145,10 @@
  setTimeout(() => { document.getElementById('gpro-retry')?.addEventListener('click', () => location.reload()); }, 100);
  return;
  }
- console.log('[GPRO] API car levels:', PART_LVL_KEYS.map(k => `${k}=${car?.[k] ?? 'null'}`).join(', '));
- console.log('[GPRO] API car wear:', PART_WEAR_KEYS.map(k => `${k}=${car?.[k] ?? 'null'}`).join(', '));
- console.log('[GPRO] API car cash:', car?.cash ?? 'null', '| DOM cash:', domData.cash);
- console.log('[GPRO] DOM parts:', domData.parts.map(p => `${p.name}: lvl=${p.currentLevel} wear=${p.currentWear}`).join(' | '));
+ logDebug('API car levels:', PART_LVL_KEYS.map(k => `${k}=${car?.[k] ?? 'null'}`).join(', '));
+ logDebug('API car wear:', PART_WEAR_KEYS.map(k => `${k}=${car?.[k] ?? 'null'}`).join(', '));
+ logDebug('API car cash:', car?.cash ?? 'null', '| DOM cash:', domData.cash);
+ logDebug('DOM parts:', domData.parts.map(p => `${p.name}: lvl=${p.currentLevel} wear=${p.currentWear}`).join(' | '));
  // Merge DOM cash with API cash - only override if DOM found a reasonable value
  const apiCash = car ? (parseInt(car.cash) || 0) : 0;
  if (domData.cash > 1000 && domData.cash > apiCash && car) car.cash = domData.cash;
@@ -4852,7 +4903,7 @@
  let h = '';
 
  // Driver overview
- h += mkSection('Driver', mkRow('Name', data.driverName || '?') +
+ h += mkSection('Driver', mkRow('Name', esc(data.driverName) || '?') +
  mkRow('Overall', data.skills.overall || '?') +
  mkRow('Energy', data.energy != null ? `${data.energy}%` : '?') +
  (data.age ? mkRow('Age', data.age) : '') +
@@ -5597,8 +5648,8 @@
  const salaryM = parseGproCash(r.salary) / 1e6;
  const value = salaryM > 0 ? (oa / salaryM).toFixed(1) : '-';
  const nameCell = (idKey === 'driId' && r.driId)
- ? `<a href="DriverProfile.asp?ID=${r.driId}" style="color:#d1d5db;text-decoration:underline;">${r.name}</a>`
- : r.name;
+ ? `<a href="DriverProfile.asp?ID=${r.driId}" style="color:#d1d5db;text-decoration:underline;">${esc(r.name)}</a>`
+ : esc(r.name);
  // Auto-match against target OA range
  let matchCell = '';
  if (targetOA) {
@@ -5682,7 +5733,7 @@
  async function scanCandidatesFullStats(rows, idKey) {
  const kind = idKey === 'driId' ? 'driver' : 'td';
  const capped = rows.slice(0, 30);
- const results = await Promise.allSettled(capped.map(r => fetchCandidateFullStats(kind, r[idKey], r.profileHref)));
+ const results = await mapLimit(capped, NET_CONCURRENCY, (r) => fetchCandidateFullStats(kind, r[idKey], r.profileHref));
  return capped.map((r, i) => Object.assign({}, r, { fullStats: results[i].status === 'fulfilled' ? results[i].value : null }));
  }
 
@@ -5711,8 +5762,8 @@
  t += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Name</td><td>OA</td><td>Salary</td><td>Match Score</td></tr>`;
  scored.forEach(({ row: r, score }) => {
  const nameCell = (idKey === 'driId' && r.driId)
- ? `<a href="DriverProfile.asp?ID=${r.driId}" style="color:#d1d5db;text-decoration:underline;">${r.name}</a>`
- : r.name;
+ ? `<a href="DriverProfile.asp?ID=${r.driId}" style="color:#d1d5db;text-decoration:underline;">${esc(r.name)}</a>`
+ : esc(r.name);
  const scoreCell = score != null ? `<strong>${score}</strong>` : `<span style="color:#6b7280;">unavailable</span>`;
  t += `<tr><td style="padding:3px;color:#d1d5db;">${nameCell}</td><td style="text-align:center;color:#10b981;font-weight:700;">${r.OA}</td><td style="text-align:center;color:#9ca3af;">${r.salary}</td><td style="text-align:center;color:#60a5fa;">${scoreCell}</td></tr>`;
  });
