@@ -75,6 +75,21 @@ call site needing its own CSS.
 - **UI stays copy-paste-simple.** Several backend-only breakdown sections (Time Lost/FLD/TCD, PHA car-vs-track, pit-strategy/phase-by-phase, tyre-cliff/DNF-risk blocks) were deliberately removed from visible panels in v6.1.1 per explicit user request — the calculations still run internally, just aren't surfaced. Don't re-add UI clutter without checking this preference first.
 - **User context**: this user does not run practice laps — goes straight to Q1 using GAPP/derived setup values. Don't design features around a practice-feedback loop.
 
+## Cash/balance freshness (real bug fixed 2026-07-31)
+
+`renderUpdateCar`'s DOM-vs-cached cash merge used to only overwrite the cached figure when the
+fresh DOM reading was numerically *greater* than what was already cached (`domData.cash > apiCash`).
+That's backwards for a balance that legitimately goes down when you spend — once any purchase
+happened, the true (lower) fresh reading could never pass the check, so the panel got permanently
+stuck showing the pre-purchase balance and kept re-persisting it. Fixed: a valid live DOM reading
+always wins outright. Also removed `parseUpdateCarDOM`'s "largest dollar amount on the page"
+fallback — the page is full of non-cash dollar figures (every part's upgrade/replace option has its
+own cost, easily larger than the real balance), so that fallback could silently report a part's
+price as the account balance. A wrong number for a financial figure is worse than no number.
+`parseHomeMoneyDOM`/`updateCachedCash` now also refresh the same cached cash figure from gpro.asp's
+own "Money:" row on every home-page visit (far more frequent than UpdateCar.asp visits), so it stays
+current even on race weekends where the user never opens the Car Advisor.
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.

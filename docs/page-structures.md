@@ -8,7 +8,7 @@ This file covers **DOM selectors** (scraping rendered HTML). For **API field/end
 
 ## gpro.asp (Home)
 
-- Manager money: `<td>Money:</td><td><a href="EconomyHistory.asp">$5.902.387</a></td>` — dot-thousands format.
+- Manager money: `<td>Money:</td><td><a href="EconomyHistory.asp">$5.902.387</a></td>` — dot-thousands format. **Now parsed and used (2026-07-31, `parseHomeMoneyDOM` → `updateCachedCash`)**: refreshes the cached cash figure (`gpro_cached_car.cash`, shared with `renderUpdateCar`/Market-shortlist affordability) on every gpro.asp visit, since this page is loaded far more often than UpdateCar.asp. Fixes a real bug where the cached balance could get stuck at an old, too-high value after spending money (see CLAUDE.md).
 - Sponsors: adjacent `<tr>` with `<a href="NegotiationsOverview.asp">$322.812</a>`.
 - Group/league: `<a href="Standings.asp?Group=Amateur - 3">Amateur - 3</a>`.
 - Position/Points: plain `<td>` text in the same manager info table.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.3.1
+// @version 6.3.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -2533,13 +2533,13 @@
  }
  }
 
- // Fallback: find the largest dollar amount on the page
- if (result.cash === 0) {
- const allText = document.body.innerText;
- const dollarMatches = [...allText.matchAll(/\$([\d.,]{4,})/g)];
- const candidates = dollarMatches.map(m => parseGproCash(m[0])).filter(v => v >= 100 && v <= 500000000);
- if (candidates.length > 0) result.cash = Math.max(...candidates);
- }
+ // Real bug fixed 2026-07-31: removed a third fallback that took the LARGEST dollar amount
+ // anywhere on the page as "cash" if the two targeted patterns above both failed. UpdateCar.asp
+ // is full of dollar figures that aren't cash - every part's upgrade/replace option carries its
+ // own cost (e.g. a level-9 part option can run into the millions, easily larger than the real
+ // balance) - so this could silently report a part's price as the account balance. A wrong
+ // number for a financial figure is worse than no number: better to return 0 (falls through to
+ // the last known-good cached value) than guess.
  // Find all part rows - each has a select dropdown (name="BuyChassis", "BuyEngine", etc. on UpdateCar.asp)
  const selects = document.querySelectorAll('select[name^="Buy"], select[id^="Buy"]');
  const nameMap = {
@@ -4149,9 +4149,16 @@
  logDebug('API car wear:', PART_WEAR_KEYS.map(k => `${k}=${car?.[k] ?? 'null'}`).join(', '));
  logDebug('API car cash:', car?.cash ?? 'null', '| DOM cash:', domData.cash);
  logDebug('DOM parts:', domData.parts.map(p => `${p.name}: lvl=${p.currentLevel} wear=${p.currentWear}`).join(' | '));
- // Merge DOM cash with API cash - only override if DOM found a reasonable value
- const apiCash = car ? (parseInt(car.cash) || 0) : 0;
- if (domData.cash > 1000 && domData.cash > apiCash && car) car.cash = domData.cash;
+ // Real bug fixed 2026-07-31: this only overwrote the cached/API cash figure when the fresh
+ // DOM reading was GREATER than what was already cached - a heuristic meant to avoid clobbering
+ // a real value with a failed-parse zero, but cash is a live balance that legitimately goes DOWN
+ // whenever the user spends money. Once any purchase happened, domData.cash (fresh, lower, TRUE)
+ // could never pass `> apiCash` (stale, higher, from before the purchase) - so the panel got
+ // permanently stuck showing the old higher balance, persisting it back into the cache on every
+ // subsequent visit (reported: panel showed $9,794,534 while the account was actually down to
+ // $7,382,670). We're live on UpdateCar.asp right now, so a valid DOM reading is always the most
+ // authoritative source available - it should simply win, not just when it happens to be bigger.
+ if (domData.cash > 100 && car) car.cash = domData.cash;
 
  // Merge DOM-parsed levels/wear with API data (DOM is authoritative)
  if (car && domData.parts && domData.parts.length > 0) {
@@ -4544,6 +4551,11 @@
  let data = {};
  let errors = {};
  const startTime = Date.now();
+
+ // Refresh the cached cash figure straight off this page's own "Money:" row every time it loads -
+ // gpro.asp is visited far more often than UpdateCar.asp, so this is the highest-frequency point
+ // to keep getCachedCarData().cash correct (see parseHomeMoneyDOM/updateCachedCash).
+ updateCachedCash(parseHomeMoneyDOM());
 
  try {
  // DOM-only for every endpoint here except Office (see getDataDomOnly - no DOM source exists
@@ -5133,6 +5145,39 @@
  const raw = GM_getValue('gpro_cached_car', null);
  return raw ? JSON.parse(raw) : null;
  } catch (e) { return null; }
+ }
+
+ // Parses the account balance directly off gpro.asp's own manager-info table - confirmed markup:
+ // <tr><td>Money:</td><td><a href="EconomyHistory.asp">$7.382.670</a></td></tr>. Added 2026-07-31:
+ // gpro.asp is visited far more often than UpdateCar.asp (every race check vs only when actively
+ // managing the car), so refreshing cash here keeps getCachedCarData().cash correct even on race
+ // weekends where the user never opens the Car Advisor at all.
+ function parseHomeMoneyDOM(root) {
+ root = root || document;
+ try {
+ const tds = root.querySelectorAll('td');
+ for (const td of tds) {
+ if (td.textContent.trim() === 'Money:') {
+ const valTd = td.nextElementSibling;
+ if (!valTd) return null;
+ const v = parseGproCash(valTd.textContent);
+ return v > 0 ? v : null;
+ }
+ }
+ return null;
+ } catch (e) { return null; }
+ }
+
+ // Writes a freshly-read cash figure into the same cache slot renderUpdateCar maintains, so every
+ // consumer of getCachedCarData().cash (Car Advisor, Market shortlist affordability, etc.) sees it
+ // regardless of which page last refreshed it.
+ function updateCachedCash(cash) {
+ if (!(cash > 0)) return;
+ try {
+ const cached = getCachedCarData() || {};
+ cached.cash = cash;
+ GM_setValue('gpro_cached_car', JSON.stringify(cached));
+ } catch (e) {}
  }
 
  // Resolves which tyre supplier is actually signed. The API path matches by numeric id
