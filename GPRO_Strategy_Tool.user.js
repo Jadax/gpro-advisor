@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.3.2
+// @version 6.3.3
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -5746,6 +5746,15 @@
  ? `Will filter to candidates meeting ${topFloor[0]} ≥ ${topFloor[2]} (${league}'s top-priority attribute - not every attribute at once, per GPRO's own guide on realistic driver expectations)`
  : `No numeric minimum thresholds sourced for ${cfgLabel} at ${league} league yet - results will be ranked by Match Score instead of filtered to a hard cutoff.`;
  let h = `<div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">Target OA ${targetOA.min}-${targetOA.max} for ${league}${cash != null ? `, cash on hand $${cash.toLocaleString()}` : ' (cash balance unknown - visit UpdateCar.asp once to see it here)'}</div>`;
+ // OA cap validation (from gpro-pitwall) - flag drivers above this league's max OA,
+ // which GPRO will not let you sign, so they're interesting to look at but unusable.
+ const leagueCap = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.leagues && GPRO_DATA.leagues[league]) ? GPRO_DATA.leagues[league].driverMaxOA : null;
+ if (cfgLabel === 'driver' && leagueCap && leagueCap < 999) {
+ const overCap = rows.filter(r => (parseFloat(r.OA) || 0) > leagueCap);
+ if (overCap.length) {
+  h += `<div style="font-size:9px;color:#ef4444;margin-bottom:4px;">⚠️ ${overCap.length} listed above ${league}'s driver OA cap (${leagueCap}) - GPRO won't let you sign these, so they're look-don't-touch.</div>`;
+ }
+ }
  h += `<div style="font-size:9px;color:#9ca3af;margin-bottom:6px;">${floorNote}</div>`;
  h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(capped, idKey, targetOA)}</div>`;
  h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (${capped.length}${rows.length > capped.length ? ` of ${rows.length} listed` : ''} - fetches each candidate's profile page)</button>`;
@@ -5799,18 +5808,57 @@
  return counted ? Math.round(score) : null;
  }
 
+ // Driver performance scores (concept from gprohub.net "Performance Scores").
+ // Computes 0-100 weighted ratings from a driver's real attributes so the market
+ // advisor can compare candidates on race/qualifying/tyre-management merit,
+ // not just raw OA. Heuristic from GPRO attribute semantics, clearly flagged.
+ // GPRO attributes run 0-250; we normalise by ATTRIBUTE_SCALE (2.5) to 0-100.
+ function calcDriverPerformanceScores(stats) {
+ if (!stats) return null;
+ const attrs = ['concentration','talent','aggressiveness','experience','techInsight','stamina','charisma','motivation'];
+ const n = {};
+ attrs.forEach(k => n[k] = Math.max(0, Math.min(100, (parseInt(stats[k]) || 0) / 2.5)));
+ const c = n.concentration, t = n.talent, a = n.aggressiveness, e = n.experience, te = n.techInsight;
+ const scores = {
+ dry:   0.40*c + 0.25*t + 0.25*e + 0.10*te,
+ wet:   0.20*c + 0.45*t + 0.25*e + 0.10*te,
+ quali: 0.30*c + 0.35*t + 0.20*e + 0.15*te,
+ race:  0.35*c + 0.25*t + 0.20*e + 0.20*te,
+ ovt:   0.30*e + 0.35*a + 0.20*t + 0.15*c,
+ tyre:  0.30*e + 0.30*c + 0.20*te + 0.20*t - 0.10*a,
+ carWear: 0.25*t + 0.30*te + 0.25*e + 0.20*a,
+ };
+ Object.keys(scores).forEach(k => scores[k] = Math.round(Math.max(0, Math.min(100, scores[k]))));
+ return scores;
+ }
+
+ // Compact inline bar for a performance score value (0-100).
+ function mkPerfBar(val) {
+ const color = val >= 75 ? '#10b981' : val >= 50 ? '#f59e0b' : '#ef4444';
+ return `<span style="display:inline-block;min-width:24px;text-align:right;color:${color};font-weight:600;font-size:9px;">${val}</span>`;
+ }
+
  // Renders one scored table (used for both the "meets the floor" and "below the floor" groups).
  function mkScoredTable(rows, idKey, priorityEntries) {
  const scored = rows.map(r => ({ row: r, score: scoreCandidate(r.fullStats, priorityEntries) }));
  scored.sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity));
  let t = `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:10px;">`;
- t += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Name</td><td>OA</td><td>Salary</td><td>Match Score</td></tr>`;
+ t += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Name</td><td>OA</td><td>Salary</td><td>Match</td>${idKey === 'driId' ? '<td colspan="4" style="text-align:center;font-size:9px;">Perf Scores (Dry/Wet/Quali/Race/OVT/Tyre/CarWear)</td>' : ''}</tr>`;
  scored.forEach(({ row: r, score }) => {
  const nameCell = (idKey === 'driId' && r.driId)
  ? `<a href="DriverProfile.asp?ID=${r.driId}" style="color:#d1d5db;text-decoration:underline;">${esc(r.name)}</a>`
  : esc(r.name);
  const scoreCell = score != null ? `<strong>${score}</strong>` : `<span style="color:#6b7280;">unavailable</span>`;
- t += `<tr><td style="padding:3px;color:#d1d5db;">${nameCell}</td><td style="text-align:center;color:#10b981;font-weight:700;">${r.OA}</td><td style="text-align:center;color:#9ca3af;">${r.salary}</td><td style="text-align:center;color:#60a5fa;">${scoreCell}</td></tr>`;
+ let perfCell = '';
+ if (idKey === 'driId') {
+ const ps = calcDriverPerformanceScores(r.fullStats);
+ if (ps) {
+  perfCell = `<td style="text-align:center;color:#9ca3af;font-size:8px;">${mkPerfBar(ps.dry)}</td><td style="text-align:center;color:#9ca3af;font-size:8px;">${mkPerfBar(ps.wet)}</td><td style="text-align:center;color:#9ca3af;font-size:8px;">${mkPerfBar(ps.quali)}</td><td style="text-align:center;color:#9ca3af;font-size:8px;">${mkPerfBar(ps.race)}</td><td style="text-align:center;color:#9ca3af;font-size:8px;">${mkPerfBar(ps.ovt)}</td><td style="text-align:center;color:#9ca3af;font-size:8px;">${mkPerfBar(ps.tyre)}</td><td style="text-align:center;color:#9ca3af;font-size:8px;">${mkPerfBar(ps.carWear)}</td>`;
+ } else {
+  perfCell = `<td colspan="4" style="text-align:center;color:#6b7280;font-size:8px;">scan to see ratings</td>`;
+ }
+ }
+ t += `<tr><td style="padding:3px;color:#d1d5db;">${nameCell}</td><td style="text-align:center;color:#10b981;font-weight:700;">${r.OA}</td><td style="text-align:center;color:#9ca3af;">${r.salary}</td><td style="text-align:center;color:#60a5fa;">${scoreCell}</td>${perfCell}</tr>`;
  });
  t += `</table></div>`;
  return t;
