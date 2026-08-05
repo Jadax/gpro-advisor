@@ -1,6 +1,6 @@
 # GPRO Strategy Tool
 
-Made with ❤ by Tushant Sharma | Astraiva
+Made with ❤ by Tushant Sharma
 
 Tampermonkey userscript for gpro.net. Two files: `GPRO_Strategy_Tool.user.js` (logic/UI, ~5820 lines), `gpro-data.js` (season/track/calibration/scraped data, ~1355 lines, loaded via `@require`). No build step — verify with `npm run check:userscript` (or `node --check` on each file directly).
 

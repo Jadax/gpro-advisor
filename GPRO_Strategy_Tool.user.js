@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.4.3
+// @version 6.4.4
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -32,8 +32,8 @@
 // @run-at document-idle
 // ==/UserScript==
 
-// GPRO Strategy Tool v6.3.1
-// Made with ❤ by Tushant Sharma | Astraiva
+// GPRO Strategy Tool v6.4.4
+// Made with ❤ by Tushant Sharma
 // A comprehensive strategy tool for Grand Prix Racing Online providing
 // fuel calculations, tyre strategy, car setup recommendations,
 // weather analysis, and car parts wear prediction.
@@ -870,17 +870,12 @@
  } catch (e) { return null; }
  }
 
- // Staff concentration/stress from StaffAndFacilities.asp - plain digit values, not level-dot bars.
- // Field names match the real /StaffAndFacilities API response (`concentration`, `stressHandling` -
- // confirmed against gpro-public-api.yml) so DOM- and API-sourced data are interchangeable.
- // Expanded 2026-07-19 to cover everything renderStaff actually needs (was only concentration/
- // stressHandling) - found while fixing a real bug where the 'staff' page branch in init() was
- // fetching /Office instead of /StaffAndFacilities (CLAUDE.md already documented this exact
- // mistake once before - concentration/stressHandling live on /StaffAndFacilities, not /Office -
- // so this call site had regressed/never been fixed). Field labels per docs/page-structures.md's
- // confirmed DOM capture: `<th>Label:</th><td>N</td>` pairs for both the staff-skills table and
- // the facility-levels table on the same page.
- function parseStaffFacilitiesDOM(root) {
+  // Staff concentration/stress from StaffAndFacilities.asp - plain digit values, not level-dot bars.
+  // Field names match the real /StaffAndFacilities API response so DOM- and API-sourced data are
+  // interchangeable. Expanded 2026-07-19 to cover everything renderStaff needs (fixed init()
+  // fetching /Office instead of /StaffAndFacilities). Reads `<th>Label:</th><td>N</td>` pairs from
+  // both the staff-skills and facility-levels tables.
+  function parseStaffFacilitiesDOM(root) {
  root = root || document;
  try {
  const out = {};
@@ -1506,23 +1501,14 @@
  GM_setValue(gmKey + '_manual', '1');
  }
 
- // Estimates how many laps the (faster-paced) Elite race covers per 30-minute weather-forecast
- // period, for THIS specific track - added 2026-07-27 after confirming via the official GPRO wiki
- // that weather transitions land on the same ABSOLUTE lap number for every league on a track, not
- // a fraction of each race's own distance (see the rain-stop-window calc in renderRaceSetup).
- // Derived from the track's own "Average speed"/"Lap distance" (both on TrackDetails.asp,
- // confirmed real /TrackProfile API fields) rather than a single flat constant: lap time =
- // lapDistance/avgSpeed, laps/period = 1800s / lapTime. Cross-checked against the one real result
- // available (Losail: formula gives ~22.2 laps/period from 5.381km @ 239.08km/h, user's own
- // ground-truth calibration from a live race was 20) - the two aren't identical, so a correction
- // factor (LAPS_PER_PERIOD_CALIBRATION) derived from that one ratio is applied. This is a
- // two-point derivation (a physics-based per-track estimate, corrected by a single real result),
- // not a verified formula - it generalizes far better than reusing Losail's flat "20" for every
- // other track, but the correction factor itself could be wrong; revisit if a result on a
- // different track falls outside the resulting window. Falls back to the flat Losail-calibrated
- // constant when avgSpeed/lapDistance aren't available (e.g. before TrackDetails.asp has ever
- // been visited this race weekend).
- const LAPS_PER_PERIOD_FALLBACK = 20;
+  // Estimates Elite laps per 30-min weather period for THIS track (weather transitions land on
+  // the same ABSOLUTE lap for every league, not a fraction of each race's distance). Derived per-
+  // track from TrackDetails.asp "Average speed"/"Lap distance": lapTime = lapDistance/avgSpeed,
+  // laps/period = 1800s/lapTime, then corrected by a single real calibration ratio (Losail:
+  // formula ~22.2 vs user's ground-truth 20). Two-point derivation, not verified - revisit if a
+  // different track falls outside the window. Falls back to the flat Losail constant when the
+  // track details aren't available.
+  const LAPS_PER_PERIOD_FALLBACK = 20;
  const LAPS_PER_PERIOD_CALIBRATION = 20 / ((1800 / (5.381 / 239.08 * 3600)));
  function estimateLapsPerWeatherPeriod(track) {
  let avgSpeed = track && parseFloat(track.avgSpeed);
@@ -2949,28 +2935,12 @@
  let runCash = cash;
  const recs = [];
 
- // Real bug fixed 2026-07-27 (part 1): budget is spent on `actionable` parts strictly in array
- // order, so whichever part sorts first claims cash first and can starve out everything after
- // it. The old comparator chained willFail/critical/flagged as INDEPENDENT tie-breaks ahead of
- // the static `priority` (UPGRADE_PRIORITY - Engine is explicitly priority 1, "most impactful
- // for Power PHA"), so a willFail-AND-critical part (very low remaining wear right now, e.g. 7%)
- // could jump ahead of a willFail-but-not-yet-critical Engine (e.g. 13% remaining) purely because
- // of its current wear buffer, not its actual importance. First fix: static `priority` became the
- // sole tie-breaker within a tier.
- //
- // Real bug fixed 2026-07-27 (part 2, found in a follow-up report): that first fix over-corrected.
- // A user's actual car had Gearbox already at 0% remaining wear (100% wear used, BEFORE the race
- // even starts - not just "projected to fail mid-race" like every other flagged part, but already
- // at maximum failure risk from lap 1). Priority-only ordering let Engine/Brakes/Rear Wing (all
- // with real double-digit % wear buffer still left) claim the whole budget first purely on static
- // importance, leaving the objectively most urgent part on the car ("no affordable option")
- // unfunded. Neither pure static-priority-first nor pure current-wear-first is correct alone - an
- // ultra-urgent carve-out is needed for parts that are essentially ALREADY failed (not merely
- // "critical" at <=10% remaining, but at or near true exhaustion), which should always be
- // addressed before anything else regardless of its static importance rank. Below that extreme,
- // priority still governs (this doesn't reopen part 1's bug: the earlier real-world case had
- // remaining=7%, above this narrower ultra-urgent cutoff, so it still correctly defers to Engine).
- const ULTRA_URGENT_WEAR = 5; // remaining % - essentially already fully worn, not just "will wear out later"
+  // Real bug fixed 2026-07-27: within a tier, static `priority` is the sole tie-breaker (the old
+  // willFail/critical/flagged chaining let a low-wear part starve a more important Engine). But
+  // priority-only over-corrected: a part already at ~0% remaining wear (essentially failed before
+  // the race) must always be funded first, before static importance. So an ultra-urgent carve-out
+  // (remaining <= ULTRA_URGENT_WEAR) wins regardless; below that extreme, priority still governs.
+  const ULTRA_URGENT_WEAR = 5; // remaining % - essentially already fully worn, not just "will wear out later"
  const tierOf = (p) => {
  if (p.willFail) return p.remaining <= ULTRA_URGENT_WEAR ? 0 : 1;
  if (p.critical) return 2;
@@ -3180,22 +3150,15 @@
  return { parts, recs, cash, projectedCash: runCash, trackWear: trackWearStr, laps, league: league || 'Amateur', leagueNotes: leagueTargets.notes || '', upgradePhaEfficiency: upgradeRecs, leagueUpgradeNotes };
  }
 
- // ============================================================
- // PHA BARS
- // ============================================================
- // Rank-based PHA match, following the pattern of our "PHA match" badge ():
- // 'perfect' = car and track agree on the full Power/Handling/Accel priority order, 'top' = they
- // at least agree on which one matters most, 'none' = no alignment. Deterministic, no thresholds
- // borrowed from anywhere secret - just a rank comparison over data we already have.
- // Rewritten 2026-07-19 against our actual current PhaMatchService::matchLevel()
- // source (previous version used naive Array.sort()-based ranking, which is wrong on ties - two
- // equal values get an arbitrary, unstable order from sort(), so "perfect" could silently
- // misfire whenever a car or track had two equal PHA values, e.g. a fresh car at 6/6/6).
- // Competition ranking (ties share a rank, e.g. 1,1,3) is the correct comparison: 'perfect' =
- // every attribute at the same rank on both sides (ties included); 'top' = the track has a
- // single, unambiguous #1 attribute that's also the car's single #1 (a tied #1 on either side
- // can only ever be 'perfect', never 'top' - matches the source's stated design exactly).
- function calcPhaMatch(carData, trackPha) {
+  // ============================================================
+  // PHA BARS
+  // ============================================================
+  // Rank-based PHA match: 'perfect' = car and track agree on the full Power/Handling/Accel
+  // priority order, 'top' = they agree on which matters most, 'none' = no alignment. Uses
+  // competition ranking (ties share a rank, e.g. 1,1,3) because the old Array.sort()-based
+  // ranking was wrong on ties - equal values got an arbitrary order, so 'perfect' could misfire
+  // on e.g. a fresh 6/6/6 car. A tied #1 on either side can only ever be 'perfect', never 'top'.
+  function calcPhaMatch(carData, trackPha) {
  if (!carData || !trackPha) return null;
  const competitionRank = (vals) => {
  const entries = Object.entries(vals);
@@ -3705,18 +3668,11 @@
   const segs = analyze.segs;
   let drySegIdx = segs.findIndex(s => s.rainMax < 20);
   if (drySegIdx === -1) drySegIdx = segs.length;
-  // Real fix 2026-07-27 (superseding the previous same-day fix, which was still wrong): the
-  // official GPRO wiki states explicitly, verbatim: "All weather changes (temperature, humidity,
-  // rain) happen on the same lap in all races, not dependent on time." Confirmed directly: an
-  // 80-lap race and a 57-lap race on the same track/week see a weather transition at the SAME
-  // ABSOLUTE LAP NUMBER, tied to the Elite race's pace - NOT at the same FRACTION of each race's
-  // own distance. Dividing THIS race's own total laps by 4 (the previous version of this code)
-  // was therefore never correct - it produced 29 for a real Losail (57-lap) race whose actual,
-  // user-confirmed correct window was 40-46 (rain stopped on lap 45). Now uses
-  // estimateLapsPerWeatherPeriod(track) - derived per-track from Average speed/Lap distance
-  // (TrackDetails.asp), corrected by the one real calibration ratio available - instead of
-  // reusing Losail's flat "20" for every other track. Both bounds capped to this race's own
-  // total laps (can't run past the actual finish).
+  // Real fix 2026-07-27: weather transitions land on the same ABSOLUTE lap for every league on a
+  // track (per GPRO wiki), NOT a fraction of each race's own distance - so dividing this race's
+  // laps by 4 was wrong (gave 29 for a real Losail 57-lap race whose true window was 40-46).
+  // Now uses estimateLapsPerWeatherPeriod(track) instead of Losail's flat "20". Bounds capped to
+  // this race's own total laps.
   const TRANSITION_WINDOW_LAPS = 6;
   const lapsPerPeriod = estimateLapsPerWeatherPeriod(track);
   const earliestStopLap = drySegIdx > 0 ? Math.min(laps, drySegIdx * lapsPerPeriod) : 0;
@@ -4088,7 +4044,7 @@
  setupHtml += `<button id="gpro-copy-q2" style="background:#8b5cf6;color:#fff;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;">📋 Copy Q2</button>`;
  setupHtml += `</div>`;
  h += mkSection('Car Setup', setupHtml +
- `<span style="font-size:9px;color:#6b7280;">Track-adjusted (P=${trackPower}). 🌧️=Wet modifiers applied. Setup source: ${setup.source === 'gapp' ? 'driver+car-aware (per-track)' : 'temperature-only (legacy, Jim Buller deltas=0)'}.</span>` +
+  `<span style="font-size:9px;color:#6b7280;">Track-adjusted (P=${trackPower}). 🌧️=Wet modifiers applied. Setup source: ${setup.source === 'gapp' ? 'driver+car-aware (per-track)' : 'temperature-only (legacy)'}.</span>` +
  wingSplitLabel(setup.Race) + mkHappyRangeLabel(driver), 'gpro-sec-setup');
  }
 
@@ -5822,27 +5778,17 @@
  }
  }
 
- // ============================================================
- // RENDER: DRIVER & TD MARKET (menu command, /AvailDrivers + /AvailTDs)
- // ============================================================
- // Read-only market browser ("Driver & TD Market", our "Drivers
- // market"/"TD market", our RecruitmentService/IdealPilotService all cover this area -
- // ). Default (unauthenticated-filter) response only: /AvailDrivers and
- // /AvailTDs support extensive skill/range filtering but those extra query params are
- // GPRO-Supporters-only per the API spec, so this shows GPRO's own default page (OA-descending,
- // ~20 results, capped at the token account's league) rather than guess at filter access. Value
- // column is plain arithmetic (OA per $1M salary), not a game-mechanic guess.
- // idKey ('driId'/'tdId') links each name to its profile page for closer inspection - safe to do
- // now that runPassiveCapture() (see 2026-07-19 fix) won't let visiting a scouted driver's profile
- // corrupt the account's own cached driver data anymore.
- // DOM-only market list parser for AvailDrivers.asp/AvailTechDirectors.asp - per user request,
- // these must never call the API. Per docs/page-structures.md the table row shape is: name link
- // (`DriverProfile.asp?ID=N` for drivers - TD profile link pattern unconfirmed, so the id is
- // pulled from whatever numeric ID param the row's link has, not a hardcoded href pattern),
- // Overall, Age, Minimal signing fee, Minimal salary, Offers count. Column order/label wording
- // hasn't been captured live for every league, so this matches by header text (multiple fallback
- // spellings) rather than a fixed column index - UNVERIFIED against a live page, flag if wrong.
- function parseAvailListDOM(root, idKey) {
+  // ============================================================
+  // RENDER: DRIVER & TD MARKET (menu command, /AvailDrivers + /AvailTDs)
+  // ============================================================
+  // Read-only market browser. Default (unauthenticated-filter) response only: /AvailDrivers and
+  // /AvailTDs support skill/range filtering but those query params are GPRO-Supporters-only per
+  // the API spec, so this shows GPRO's own default page (OA-descending, ~20 results, capped at
+  // the token account's league). Value column is plain arithmetic (OA per $1M salary).
+  // DOM-only parser - per user request these must never call the API. Matches table columns by
+  // header text (multiple fallback spellings) since column order/labels haven't been captured
+  // live for every league. UNVERIFIED against a live page, flag if wrong.
+  function parseAvailListDOM(root, idKey) {
  root = root || document;
  try {
  const table = Array.from(root.querySelectorAll('table')).find(t => /Overall|OA/i.test(t.textContent) && t.querySelector('a[href*="ID="]'));
@@ -6001,18 +5947,13 @@
  return capped.map((r, i) => Object.assign({}, r, { fullStats: results[i].status === 'fulfilled' ? results[i].value : null }));
  }
 
- // Weighted-sum match score from real scraped attributes, weighted by the league's own priority
- // order (D.driverSelection[league].attributes / D.tdSelection[league].skills - both sourced, see
- // gpro-data.js). This is a RELATIVE ranking tool only (higher = better fit among these specific
- // candidates), not a normalized percentage or a verified game formula - attribute scales differ
- // (concentration can run past 300, some TD skills much lower), so the raw number has no absolute
- // meaning by itself.
- // GPRO-Hub / pitwall-style recruitment match score (0-100).
- // Weighs each real attribute against this league's ideal target (priority-weighted), then
- // applies age + weight penalties exactly as pitwall's RecruitmentService does:
- //   age  -2/yr over ideal, +0.5/yr under ; weight -0.5/kg over ideal, +0.125/kg under.
- // Returns null if no usable data. Higher is a better fit for the league's ideal driver.
- function recruitmentScore(row, priorityEntries, league) {
+  // Weighted-sum match score (0-100) of real scraped attributes against this league's ideal
+  // target, weighted by priority order (D.driverSelection[league].attributes /
+  // D.tdSelection[league].skills). Applies age + weight penalties like pitwall's
+  // RecruitmentService: age -2/yr over ideal, +0.5/yr under; weight -0.5/kg over ideal,
+  // +0.125/kg under. RELATIVE ranking tool only (higher = better fit), not a verified game
+  // formula; raw number has no absolute meaning. Returns null if no usable data.
+  function recruitmentScore(row, priorityEntries, league) {
  if (!row || !priorityEntries || !priorityEntries.length) return null;
  const stats = row.fullStats;
  if (!stats) return null;

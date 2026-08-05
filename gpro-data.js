@@ -1,17 +1,13 @@
 ﻿// GPRO Strategy Tool - Data Configuration
-// Made with ❤ by Tushant Sharma | Astraiva
+// Made with ❤ by Tushant Sharma
 // League caps, car part targets, facility targets, and strategy data.
 
 var GPRO_DATA = {
  // ============================================================
  // LEAGUE STRUCTURE & LIMITS
  // ============================================================
- // driverMaxOA corrected 2026-07-27 - a prior pass sourced these from the GPRO wiki
- // (wiki.gpro.net/index.php/Driver_Contract), but that page's numbers turned out to be wrong
- // (likely stale - GPRO revises these ~seasonally per an official forum thread titled "New Season
- // Maximum Driver Overall Levels for groups", which is login-gated and couldn't be fetched here).
- // User caught the error live in-game (Amateur showed 80, actual current cap is 110) and provided
- // the real current values directly - these are now the authoritative source, not a wiki guess.
+ // driverMaxOA corrected 2026-07-27 - wiki caps were stale (showed Amateur 80, real is 110);
+ // user confirmed live in-game and supplied the authoritative current values below.
  leagues: {
  Rookie: {
  driverMaxOA: 85,
@@ -619,23 +615,9 @@ var GPRO_DATA = {
  '35C': { q1: { fw: 844, rw: 928, e: 675, b: 483, g: 320, s: 334 }, q2: { fw: 849, rw: 931, e: 679, b: 503, g: 280, s: 329 }, race: { fw: 855, rw: 935, e: 682, b: 523, g: 240, s: 324 } },
  },
  },
- // Key insights from our calibrated model data:
- // 1. Best dry strategy at Spa is always 2-stop Hard (124.20s at baseline)
- // 2. Rain is always fastest (72.05s) - 1-stop
- // 3. Engine level has significant impact: Engine 6→9 reduces total by ~3s
- // 4. Suspension 6→9 reduces by ~1.4s (less impact)
- // 5. Electronics 4→9 reduces by ~3s (significant)
- // 6. Experience 33→150 reduces by ~1.7s
- // 7. TI 123→200 reduces by ~2.5s
- // 8. Aggression 8→100 increases by ~0.6s; 8→200 increases by ~1.1s
- // 9. Concentration 161→110 increases by ~0.3s
- // 10. CTR 0→50 increases by ~0.5s
- // 11. TD Experience: Each point reduces pit time by ~0.2s per stop (Exp 0→5 saves ~1.4s total)
- // 12. TD Pit Coordination: Each point reduces pit time by ~0.1s per stop (Coord 0→5 saves ~1.0s total)
- // 13. High aggr (200) + low Exp (50) = 221.65s (extra soft); high aggr + high Exp (150) = 221.13s
- // 14. Aggr 8→50 costs ~0.11s; 8→100 costs ~0.25s; 8→150 costs ~0.57s; 8→200 costs ~0.71s (on Hard)
- // 15. Pit strategy: Extra Soft needs 6 stints, Hard/Rain need 2-3 stints at Spa
- // 16. Car setup: Higher temp → lower Engine/FW/RW values, higher Brakes/Susp values
+ // Calibration reference data (Spa): dry best is 2-stop Hard, Rain always fastest (1-stop),
+ // Higher temp lowers Engine/FW/RW and raises Brakes/Susp; the numbered deltas below were trimmed.
+ // See this track's original strategy sweep for the per-engine/driver/TD effect sizes.
  },
  'Kaunas GP': {
  laps: 80,
@@ -688,22 +670,12 @@ var GPRO_DATA = {
  // ============================================================
  // From established analysis
  // Target driver attributes for Rookie/Amateur:
- // targetOA bands corrected 2026-07-27 - see the driverMaxOA comment above `leagues:` for why
- // (wiki-sourced caps were wrong, user provided real current values: Rookie 85/Amateur 110/
- // Pro 135/Master 160/Elite uncapped). Each band's min is this tool's own "worth shortlisting"
- // heuristic width below the real cap (not sourced) - deliberately a RANGE, not a single point
- // equal to the cap, since requiring an exact-OA match against a ~20-row market listing was too
- // strict to ever return results (the original bug report: "No listings match OA 80-80").
- //
- // IMPORTANT (2026-07-27): the numeric `target` values below (e.g. concentration '200+') are
- // NOT meant to all be required simultaneously when shortlisting. GPRO's own official Newbie
- // Guide (gpro.net/gb/GPRONoobGuide.asp) says directly: "You will not find a driver who has a
- // good rating for all his skills whilst in Rookie, but a driver with one or two skills will
- // suffice and provide you with a promotion-worthy driver." The shortlist logic in
- // GPRO_Strategy_Tool.user.js (`mkFullStatsTable`) only gates on the single top-priority
- // attribute (priority 1, concentration in every league here) for exactly this reason - treat
- // the rest of each league's `attributes` block as a priority-ordered reference for manual
- // judgement, not a checklist every candidate must fully clear.
+ // targetOA bands corrected 2026-07-27 - see driverMaxOA note above `leagues:`. Each band's min is
+ // this tool's own "worth shortlisting" heuristic (a RANGE, not an exact-cap point - matching exact
+ // OA was too strict, per the original "No listings match OA 80-80" bug). The `target` attribute
+ // numbers are NOT all required at once: per GPRO's Newbie Guide a driver with one or two good
+ // skills suffices, so the shortlist (`mkFullStatsTable`) only gates on the single top-priority
+ // attribute; the rest are a priority-ordered reference, not a full checklist.
  driverSelection: {
  Rookie: {
  // Rookie: Car resets each season. Focus on cheap, balanced driver.
@@ -799,20 +771,13 @@ var GPRO_DATA = {
  // ============================================================
  // TD SELECTION ADVICE (Pro/Master/Elite only - TDs unavailable below Pro)
  // ============================================================
- // Added 2026-07-27, sourced from the official GPRO wiki (wiki.gpro.net/index.php/
- // Technical_Director): TD OA caps per league as stated there (Pro 90, Master 120, Elite no stated
- // cap). **CAUTION - NOT independently confirmed**: this project's driver OA caps came from the
- // same wiki and turned out to be wrong/stale (real Amateur driver cap is 110, not the wiki's 80 -
- // corrected 2026-07-27 from live user confirmation). The wiki may revise these numbers seasonally
- // (see the driverMaxOA comment above `leagues:`), so treat these TD figures as unverified against
- // the current season until confirmed the same way the driver caps were. Skill priority order is
- // based on the wiki's own direct quotes: "leadership skill lifts everything" (multiplier over all
- // other skills) and "Pit Coordination affects the time it takes for your pit staff to service your
- // car" (direct, measurable pit-time effect) - both explicitly described, so ranked above the R&D
- // skills (Aerodynamics/Mechanics/Electronics), which the wiki only says "affect the setup of your
- // car" without specifying relative importance. TDs are not trainable and don't decay with age
- // (also wiki-confirmed) - unlike drivers, signing is a one-time decision for the life of the
- // contract (no renewal allowed either, per the wiki).
+ // Added 2026-07-27, wiki-sourced (wiki.gpro.net/index.php/Technical_Director). **CAUTION - NOT
+ // independently confirmed**: the same wiki gave wrong driver OA caps (see driverMaxOA note above),
+ // so treat these TD caps (Pro 90, Master 120, Elite none) as unverified against the current season.
+ // Skill ranking from the wiki's own quotes: leadership ("lifts everything", a multiplier) and Pit
+ // Coordination (direct pit-time effect) rank above the R&D skills, whose relative importance the
+ // wiki doesn't specify. TDs aren't trainable, don't decay with age, and contracts can't be renewed
+ // - signing is a one-time decision for the contract's life.
  tdSelection: {
  Pro: {
  targetOA: { min: 80, max: 90 },
@@ -1211,14 +1176,10 @@ var GPRO_DATA = {
  // ============================================================
  // STAFF SKILLS (rendering data)
  // ============================================================
- // Real bug fixed 2026-07-27: this used to rank all 6 attributes as if all were trainable
- // "priorities". Confirmed against the official GPRO wiki (wiki.gpro.net/index.php?title=
- // Staff_and_Facilities) that only Concentration, Stress Handling, and Efficiency are actually
- // purchasable training - Technical Skill/Experience/Motivation are real attributes shown on the
- // page but have no training-session purchase option at all, so recommending "train Technical
- // Skill first" was advice for something the player literally cannot buy. `trainable: true/false`
- // added so the UI can separate "here's your staff overview" from "here's what you can actually
- // train, in order". Cost figures are the wiki's confirmed per-session prices.
+ // Bug fixed 2026-07-27: only Concentration, Stress Handling, and Efficiency are actually
+ // purchasable training (wiki-confirmed); Technical Skill/Experience/Motivation are real but have
+ // no training option. `trainable: true/false` lets the UI separate overview from what's trainable.
+ // Costs are the wiki's confirmed per-session prices.
  staffSkills: [
  { key: 'concentration', label: 'Concentration', priority: 1, trainable: true, cost: 750000, weight: 'High - reduces errors in pitstops & strategy' },
  { key: 'stressHandling', label: 'Stress Handling', priority: 2, trainable: true, cost: 1200000, weight: 'High - affects pit-time consistency under pressure' },
@@ -1231,14 +1192,10 @@ var GPRO_DATA = {
  // ============================================================
  // DRIVER TRAINING SESSION EFFECTS (community-sourced, not a GPRO formula)
  // ============================================================
- // GPRO's own wiki (wiki.gpro.net/index.php/Driver_Training) explicitly states training effects
- // are NOT perfectly deterministic ("the same training will not always affect your drivers
- // statistics in exactly the same way every time") - so this can never be a verified formula, only
- // a community-consensus direction. Sourced from gproracers.forumotion.com/t65-driver-stats
- // (2026-07-27) - each entry lists the attribute(s) that session is reported to move and which
- // direction. `spa` has no community source found for its effects (our old table guessed
- // stamina/charisma/motivation with no citation) - left with an empty effects list and flagged
- // unconfirmed rather than keeping the unsourced guess.
+ // GPRO's wiki says training effects aren't fully deterministic, so these are community-consensus
+ // directions (from gproracers.forumotion.com/t65-driver-stats, 2026-07-27), not verified formulas.
+ // `spa` has no community-confirmed source for its effects - left with an empty list and flagged
+ // unconfirmed rather than keeping the old unsourced guess.
  trainingSessionEffects: {
  fitness: { up: ['stamina'], down: ['motivation'], source: 'gproracers.forumotion.com/t65-driver-stats' },
  yoga: { up: ['concentration'], down: ['aggressiveness', 'stamina'], source: 'gproracers.forumotion.com/t65-driver-stats' },
@@ -1300,7 +1257,7 @@ var GPRO_DATA = {
  },
  // Scraped race data from gproanalyzer.info (Season 111, authenticated scrape 2026-07-29)
  scrapedRaceData: {
- season: 111, manager: 'Tushant Sharma (ID 49036)', league: 'Amateur', supplier: 'Pipirelli',
+ season: 111, manager: 'scraped', league: 'Amateur', supplier: 'Pipirelli',
  races: [
  { race: 1, track: 'Barcelona', laps: 65, fuelLkm: 0.729, tyrePkm: 0.779, qPos: 27, rPos: 27, pits: 2, temp: 40.37, humidity: 57.03, dryLaps: 65, rainLaps: 0, setup: { fw: 631, rw: 559, eng: 761, brakes: 550, gb: 609, susp: 447 } },
  { race: 2, track: 'Ahvenisto', laps: 80, fuelLkm: 0.535, tyrePkm: 0.308, qPos: 36, rPos: 36, pits: 1, temp: 23.50, humidity: 57.95, dryLaps: 80, rainLaps: 0, setup: { fw: 999, rw: 999, eng: 410, brakes: 690, gb: 617, susp: 447 } },

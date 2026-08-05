@@ -1,6 +1,6 @@
 # GPRO Strategy Tool
 
-Made with ❤ by Tushant Sharma | Astraiva
+Made with ❤ by Tushant Sharma
 
 > A Tampermonkey userscript that acts as your personal race engineer for [Grand Prix Racing Online](https://www.gpro.net). It runs directly on gpro.net and gives you data-driven recommendations for every decision you make during a race weekend — tyre strategy, car setup, fuel loads, car upgrades, and more.
 
@@ -161,4 +161,4 @@ This is a free, open-source project. Use it, modify it, share it — just don't 
 
 ---
 
-Made with ❤ by Tushant Sharma | Astraiva
+Made with ❤ by Tushant Sharma
