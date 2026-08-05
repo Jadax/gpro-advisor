@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.4.1
+// @version 6.4.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -28,7 +28,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.1.0
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.2.0
 // @run-at document-idle
 // ==/UserScript==
 
@@ -5943,6 +5943,19 @@
  ? `Will filter to candidates meeting ${topFloor[0]} ≥ ${topFloor[2]} (${league}'s top-priority attribute - not every attribute at once, per GPRO's own guide on realistic driver expectations)`
  : `No numeric minimum thresholds sourced for ${cfgLabel} at ${league} league yet - results will be ranked by Match Score instead of filtered to a hard cutoff.`;
  let h = `<div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">Target OA ${targetOA.min}-${targetOA.max} for ${league}${cash != null ? `, cash on hand $${cash.toLocaleString()}` : ' (cash balance unknown - visit UpdateCar.asp once to see it here)'}</div>`;
+ // League salary/age guidance (from D.driverSelection/tdSelection) - flags rows the manager
+ // likely can't sustain, matching competitor tools' salary/age filters without needing supporters.
+ const selCaps = (cfgLabel === 'driver' && (typeof GPRO_DATA !== 'undefined') && GPRO_DATA.driverSelection && GPRO_DATA.driverSelection[league]);
+ const capMaxSalary = selCaps ? selCaps.maxSalary : null;
+ const capMaxAge = selCaps ? selCaps.maxAge : null;
+ if (cfgLabel === 'driver' && (capMaxSalary || capMaxAge)) {
+  const overSal = capMaxSalary ? rows.filter(r => parseGproCash(r.salary) > capMaxSalary).length : 0;
+  const overAge = capMaxAge ? rows.filter(r => (parseInt(r.age) || 0) > capMaxAge).length : 0;
+  let capNotes = ['Per-league guidance:'];
+  if (capMaxSalary) capNotes.push(`salary ≤ $${(capMaxSalary/1e6).toFixed(1)}M (${overSal} over)`);
+  if (capMaxAge) capNotes.push(`age ≤ ${capMaxAge} (${overAge} over)`);
+  h += `<div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">${capNotes.join(' • ')}</div>`;
+ }
  // OA cap validation (from gpro-pitwall) - flag drivers above this league's max OA,
  // which GPRO will not let you sign, so they're interesting to look at but unusable.
  const leagueCap = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.leagues && GPRO_DATA.leagues[league]) ? GPRO_DATA.leagues[league].driverMaxOA : null;

@@ -136,6 +136,60 @@ var GPRO_DATA = {
  'Brakes': { power: 0, handling: 2.0, accel: 0 },
  'Suspension': { power: 0, handling: 1.6, accel: 1.2 },
  'Electronics': { power: 1.4, handling: 0, accel: 1.4 },
+  },
+
+ // Legacy temperature-based setup constants (used as fallback when GAPP setup data is missing).
+ // Q2/Race deltas are 0 for this account's driver (Jim Buller), matching live practice findings.
+ setupConstants: {
+ parts: ['Front Wing', 'Rear Wing', 'Engine', 'Brakes', 'Gearbox', 'Suspension'],
+ baseQ1: { 'Front Wing': 227, 'Rear Wing': 567, 'Engine': 809, 'Brakes': 334, 'Gearbox': 686, 'Suspension': 493 },
+ coeff: { 'Front Wing': 4.77, 'Rear Wing': 6.03, 'Engine': -3.13, 'Brakes': 6.0, 'Gearbox': -4.0, 'Suspension': -6.0 },
+ q2Delta: { 'Front Wing': 0, 'Rear Wing': 0, 'Engine': 0, 'Brakes': 0, 'Gearbox': 0, 'Suspension': 0 },
+ raceDelta: { 'Front Wing': 0, 'Rear Wing': 0, 'Engine': 0, 'Brakes': 0, 'Gearbox': 0, 'Suspension': 0 },
+ wetMod: { 'Front Wing': 68, 'Rear Wing': -44, 'Engine': -5, 'Brakes': 5, 'Gearbox': -206, 'Suspension': 6 },
+ trackAdj: { 'Front Wing': 54.6, 'Rear Wing': 19.2, 'Engine': 6.5, 'Brakes': -16.0, 'Gearbox': -13.5, 'Suspension': 20.0 },
+ montrealPower: 12,
+ },
+
+ // Base cost ($) to upgrade each part from level N-1 to N (Edit: first-entry = L1 cost).
+ // Used by calcUpgradeCostExact fallback when one specific part's level cost isn't DOM-scraped.
+ carCosts: {
+ partBaseCost: {
+  'Chassis': 1292539, 'Engine': 3311737, 'Front Wing': 1551354,
+  'Rear Wing': 1504126, 'Underbody': 510128, 'Sidepods': 459831,
+  'Cooling': 454545, 'Gearbox': 3098104, 'Brakes': 697674,
+  'Suspension': 1181545, 'Electronics': 938416,
+ },
+ },
+
+ // Per-part base race wear + track wear scale, used by the legacy (non-GAPP) wear model.
+ wearPerLap: {
+ base: {
+  'Chassis': 21, 'Engine': 37, 'Front Wing': 21, 'Rear Wing': 14,
+  'Underbody': 13, 'Sidepods': 12, 'Cooling': 13, 'Gearbox': 16,
+  'Brakes': 22, 'Suspension': 19, 'Electronics': 10,
+ },
+ scale: { 'Low': 0.6, 'Medium': 0.85, 'High': 1.0 },
+ },
+
+ // Part upgrade priority order (most impactful for Power PHA first).
+ upgradePriority: {
+  'Engine': 1, 'Brakes': 2, 'Chassis': 3, 'Front Wing': 3, 'Rear Wing': 3,
+  'Suspension': 4, 'Gearbox': 4, 'Electronics': 5, 'Underbody': 6, 'Sidepods': 6, 'Cooling': 6,
+ },
+
+ // Wear alert thresholds (% remaining) for fast- and slow-wearing parts.
+ wearConstants: {
+ fastWearParts: ['Chassis', 'Engine', 'Front Wing', 'Rear Wing', 'Gearbox'],
+ slowWearParts: ['Underbody', 'Sidepods', 'Cooling', 'Brakes', 'Suspension', 'Electronics'],
+ critical: 10, fastAlert: 30, slowAlert: 15,
+ },
+
+ // Legume: street circuits raise braking/susp stress, speedways raise engine stress.
+ trackTypeWear: {
+ street: { note: 'Street circuits stress brakes & suspension (×1.3-1.5) - prioritise those parts.', brakes: 1.4, susp: 1.4 },
+ speedway: { note: 'Speedways stress the engine (×1.4) and reduce braking wear (×0.7).', engine: 1.4, brakes: 0.7 },
+ road: { note: 'Road courses are the baseline for part wear.', brakes: 1.0, susp: 1.0, engine: 1.0 },
  },
 
  // ============================================================
@@ -655,6 +709,8 @@ var GPRO_DATA = {
  // Rookie: Car resets each season. Focus on cheap, balanced driver.
  // Priority: Concentration > Talent > Experience > Tech Insight
  targetOA: { min: 75, max: 85 },
+ maxSalary: 2000000, // per GPRO Newbie Guide: don't pay much over $2M/race in Rookie
+ maxAge: 36,
  attributes: {
  concentration: { target: '200+', priority: 1, note: 'Most impactful for race consistency and error reduction' },
  talent: { target: '60-150', priority: 2, note: 'Affects raw speed; 150+ is ideal but expensive' },
@@ -671,6 +727,8 @@ var GPRO_DATA = {
  // Amateur: Car carries over. Invest in driver + car balance.
  // Priority: Concentration > Experience > Tech Insight > Talent
  targetOA: { min: 90, max: 110 },
+ maxSalary: 2500000,
+ maxAge: 37,
  attributes: {
  concentration: { target: '200+', priority: 1, note: 'Reduces errors, affects tyre wear and fuel consumption' },
  experience: { target: '150-200', priority: 2, note: 'Affects strategy, tyre management, and setup precision' },
@@ -688,9 +746,11 @@ var GPRO_DATA = {
  // (concentration/consistency stays the top lever at every level), but no community source was
  // found giving precise numeric attribute targets this far up the ladder, unlike Rookie/Amateur -
  // so those are left as "as high as affordable" rather than inventing specific thresholds.
- Pro: {
- targetOA: { min: 110, max: 135 },
- attributes: {
+  Pro: {
+  targetOA: { min: 110, max: 135 },
+  maxSalary: 3500000,
+  maxAge: 38,
+  attributes: {
  concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
  experience: { target: 'as high as affordable', priority: 2, note: 'Strategy/tyre management/setup precision' },
  techInsight: { target: 'as high as affordable', priority: 3, note: 'Setup precision, margin of acceptance' },
@@ -702,9 +762,11 @@ var GPRO_DATA = {
  },
  budget: 'TD becomes available - budget for both driver and TD, don\'t overspend on either alone.',
  },
- Master: {
- targetOA: { min: 130, max: 160 },
- attributes: {
+  Master: {
+  targetOA: { min: 130, max: 160 },
+  maxSalary: 5000000,
+  maxAge: 39,
+  attributes: {
  concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
  experience: { target: 'as high as affordable', priority: 2, note: 'Strategy/tyre management/setup precision' },
  techInsight: { target: 'as high as affordable', priority: 3, note: 'Setup precision, margin of acceptance' },
@@ -716,9 +778,11 @@ var GPRO_DATA = {
  },
  budget: 'Facility level cap 80 - push facilities alongside driver quality.',
  },
- Elite: {
- targetOA: { min: 150, max: 999 },
- attributes: {
+  Elite: {
+  targetOA: { min: 150, max: 999 },
+  maxSalary: 8000000,
+  maxAge: 40,
+  attributes: {
  concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
  experience: { target: 'as high as affordable', priority: 2, note: 'Strategy/tyre management/setup precision' },
  techInsight: { target: 'as high as affordable', priority: 3, note: 'Setup precision, margin of acceptance' },
