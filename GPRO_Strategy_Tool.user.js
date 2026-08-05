@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.4.2
+// @version 6.4.3
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -5216,9 +5216,9 @@
  body(h);
  wireDecisionBoard();
  if (type === 'drivers' && sel) {
- wireScanFullStatsButton('drivers', 'driId', domRows || [], Object.entries(sel.attributes));
+ wireScanFullStatsButton('drivers', 'driId', domRows || [], Object.entries(sel.attributes), league);
  } else if (type === 'tds' && tdSel) {
- wireScanFullStatsButton('tds', 'tdId', domRows || [], Object.entries(tdSel.skills));
+ wireScanFullStatsButton('tds', 'tdId', domRows || [], Object.entries(tdSel.skills), league);
  }
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad'));
@@ -6007,15 +6007,30 @@
  // candidates), not a normalized percentage or a verified game formula - attribute scales differ
  // (concentration can run past 300, some TD skills much lower), so the raw number has no absolute
  // meaning by itself.
- function scoreCandidate(stats, priorityEntries) {
- if (!stats || !priorityEntries.length) return null;
+ // GPRO-Hub / pitwall-style recruitment match score (0-100).
+ // Weighs each real attribute against this league's ideal target (priority-weighted), then
+ // applies age + weight penalties exactly as pitwall's RecruitmentService does:
+ //   age  -2/yr over ideal, +0.5/yr under ; weight -0.5/kg over ideal, +0.125/kg under.
+ // Returns null if no usable data. Higher is a better fit for the league's ideal driver.
+ function recruitmentScore(row, priorityEntries, league) {
+ if (!row || !priorityEntries || !priorityEntries.length) return null;
+ const stats = row.fullStats;
+ if (!stats) return null;
  const maxP = Math.max(...priorityEntries.map(([, info]) => info.priority));
- let score = 0, counted = 0;
+ const maxWeighted = priorityEntries.reduce((s, [, info]) => s + 250 * (maxP - info.priority + 1), 0);
+ let hit = 0;
  priorityEntries.forEach(([key, info]) => {
- const v = stats[key];
- if (typeof v === 'number') { score += v * (maxP - info.priority + 1); counted++; }
+  const v = stats[key];
+  if (typeof v === 'number') hit += Math.min(1, v / 250) * (maxP - info.priority + 1);
  });
- return counted ? Math.round(score) : null;
+ let base = maxWeighted > 0 ? (hit / maxWeighted) * 100 : 0;
+ // Age penalty: drivers too old are a worse long-term bet (pitwall -2/yr). Ideal age ~28.
+ const age = parseInt(row.age) || 0;
+ if (age > 0) base -= Math.max(0, age - 28) * 2;
+ // Weight penalty: heavier drivers wear tyres/car faster (pitwall -0.5/kg over 78 ideal).
+ const weight = parseInt(stats.weight) || 0;
+ if (weight > 78) base -= (weight - 78) * 0.5;
+ return Math.round(Math.max(0, Math.min(100, base)));
  }
 
  // Driver performance scores (concept from gprohub.net "Performance Scores").
@@ -6049,16 +6064,19 @@
  }
 
  // Renders one scored table (used for both the "meets the floor" and "below the floor" groups).
- function mkScoredTable(rows, idKey, priorityEntries) {
- const scored = rows.map(r => ({ row: r, score: scoreCandidate(r.fullStats, priorityEntries) }));
+ function mkScoredTable(rows, idKey, priorityEntries, league) {
+ const scored = rows.map(r => ({ row: r, score: recruitmentScore(r, priorityEntries, league) }));
  scored.sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity));
  let t = `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:10px;">`;
- t += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Name</td><td>OA</td><td>Salary</td><td>Match</td>${idKey === 'driId' ? '<td colspan="4" style="text-align:center;font-size:9px;">Perf Scores (Dry/Wet/Quali/Race/OVT/Tyre/CarWear)</td>' : ''}</tr>`;
+ t += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Name</td><td>OA</td><td>Salary</td><td>Age</td><td>Fit</td>${idKey === 'driId' ? '<td colspan="4" style="text-align:center;font-size:9px;">Perf (Dry/Wet/Qua/Rac/OVT/Tyr/Wear)</td>' : ''}</tr>`;
  scored.forEach(({ row: r, score }) => {
  const nameCell = (idKey === 'driId' && r.driId)
  ? `<a href="DriverProfile.asp?ID=${r.driId}" style="color:#d1d5db;text-decoration:underline;">${esc(r.name)}</a>`
  : esc(r.name);
+ const scoreColor = score == null ? '#6b7280' : score >= 70 ? '#10b981' : score >= 40 ? '#f59e0b' : '#ef4444';
  const scoreCell = score != null ? `<strong>${score}</strong>` : `<span style="color:#6b7280;">unavailable</span>`;
+ const fold = score == null ? '0' : `${Math.round(score / 10) * 10}%`;
+ const barCell = `<div style="width:40px;height:4px;background:#1f2937;border-radius:2px;margin:3px auto 0;overflow:hidden;"><div style="height:100%;width:${Math.min(100,score||0)}%;background:${scoreColor};"></div></div>`;
  let perfCell = '';
  if (idKey === 'driId') {
  const ps = calcDriverPerformanceScores(r.fullStats);
@@ -6068,7 +6086,7 @@
   perfCell = `<td colspan="4" style="text-align:center;color:#6b7280;font-size:8px;">scan to see ratings</td>`;
  }
  }
- t += `<tr><td style="padding:3px;color:#d1d5db;">${nameCell}</td><td style="text-align:center;color:#10b981;font-weight:700;">${r.OA}</td><td style="text-align:center;color:#9ca3af;">${r.salary}</td><td style="text-align:center;color:#60a5fa;">${scoreCell}</td>${perfCell}</tr>`;
+ t += `<tr><td style="padding:3px;color:#d1d5db;">${nameCell}</td><td style="text-align:center;color:#10b981;font-weight:700;">${r.OA}</td><td style="text-align:center;color:#9ca3af;">${r.salary}</td><td style="text-align:center;color:#9ca3af;">${r.age ?? ''}</td><td style="text-align:center;color:${scoreColor};font-weight:600;font-size:10px;">${scoreCell}${score != null ? barCell : ''}</td>${perfCell}</tr>`;
  });
  t += `</table></div>`;
  return t;
@@ -6083,12 +6101,12 @@
  // being right. Now requires meeting the floor for the SINGLE highest-priority attribute only
  // (Concentration, in every league's data) - matching "one or two skills will suffice" without
  // being so loose it stops meaning anything.
- function mkFullStatsTable(rows, idKey, priorityEntries) {
+ function mkFullStatsTable(rows, idKey, priorityEntries, league) {
  const floors = (priorityEntries || []).map(([key, info]) => [key, info.priority, parseMinFromTarget(info.target)]).filter(([, , min]) => min != null && min > 0);
  let h = '';
  if (!floors.length) {
- h += mkScoredTable(rows, idKey, priorityEntries);
- h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">No numeric minimum thresholds sourced for this league - ranked by Match Score only, not filtered to a hard cutoff.</div>`;
+ h += mkScoredTable(rows, idKey, priorityEntries, league);
+ h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">No numeric minimum thresholds sourced for this league - ranked by Fit Score (age/weight-adjusted), not filtered to a hard cutoff.</div>`;
  return h;
  }
  // Only the single highest-priority (lowest priority number) floor gates the split - per GPRO's
@@ -6103,12 +6121,12 @@
  const floorStr = `${topKey} ≥ ${topMin}`;
  if (meets.length) {
  h += `<div style="font-size:9px;color:#10b981;margin-bottom:4px;">Meets ${floorStr} (this league's top-priority attribute): ${meets.length} of ${rows.length}</div>`;
- h += mkScoredTable(meets, idKey, priorityEntries);
+ h += mkScoredTable(meets, idKey, priorityEntries, league);
  } else {
  h += mkRec(`None of the ${rows.length} scanned candidates meet ${floorStr} - see below. Per GPRO's own Newbie Guide, don't expect every attribute to clear its floor at once; this only gates on the single top-priority one.`, 'warn');
  }
  if (below.length) {
- h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#6b7280;font-size:10px;padding:4px 0;">Show ${below.length} that didn't meet ${floorStr}</summary>${mkScoredTable(below, idKey, priorityEntries)}</details>`;
+ h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#6b7280;font-size:10px;padding:4px 0;">Show ${below.length} that didn't meet ${floorStr}</summary>${mkScoredTable(below, idKey, priorityEntries, league)}</details>`;
  }
  h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Match Score = weighted sum of each candidate's real attributes (scraped from their profile page), weighted by this league's priority order. Relative ranking only, not a percentage or verified formula.</div>`;
  return h;
@@ -6118,7 +6136,7 @@
  // rendered it. rows = the FULL row list shown (mkShortlistSection/scanCandidatesFullStats apply
  // their own 30-candidate cap); priorityEntries = Object.entries of
  // D.driverSelection[league].attributes or D.tdSelection[league].skills.
- function wireScanFullStatsButton(sectionId, idKey, rows, priorityEntries) {
+ function wireScanFullStatsButton(sectionId, idKey, rows, priorityEntries, league) {
  const btn = document.getElementById(`gpro-scan-${sectionId}`);
  if (!btn) return;
  btn.addEventListener('click', async () => {
@@ -6128,7 +6146,7 @@
  try {
  const enriched = await scanCandidatesFullStats(rows, idKey);
  const container = document.getElementById(`gpro-shortlist-${sectionId}`);
- if (container) container.innerHTML = mkFullStatsTable(enriched, idKey, priorityEntries);
+ if (container) container.innerHTML = mkFullStatsTable(enriched, idKey, priorityEntries, league);
  const gotStats = enriched.filter(r => r.fullStats).length;
  if (statusEl) statusEl.textContent = `Scanned ${enriched.length} candidates - got real stats for ${gotStats}.` + (gotStats < enriched.length ? ' Some profile pages could not be read (parser may need verifying against real markup).' : '');
  btn.remove();
@@ -6204,8 +6222,8 @@
 
  body(h);
  wireDecisionBoard();
- if (sel) wireScanFullStatsButton('drivers', 'driId', drivers, Object.entries(sel.attributes));
- if (tdSel) wireScanFullStatsButton('tds', 'tdId', tds, Object.entries(tdSel.skills));
+ if (sel) wireScanFullStatsButton('drivers', 'driId', drivers, Object.entries(sel.attributes), league);
+ if (tdSel) wireScanFullStatsButton('tds', 'tdId', tds, Object.entries(tdSel.skills), league);
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad'));
  }
