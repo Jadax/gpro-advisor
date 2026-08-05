@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.4.0
+// @version 6.4.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1042,14 +1042,36 @@
   }
  });
 
- // Sponsor characteristics (if exposed on the page) - finances/expectations/patience/etc.
+ // Sponsor characteristics (exposed on NegotiateSponsor.asp as th(label)+td(value) pairs:
+ // Finances / Expectations / Patience / Reputation / Image / Negotiation, each a 1-7 scale).
+ // Walk every label cell and read the ADJACENT value cell (not the same cell).
  const charLabels = { 'finances': 'finances', 'expectations': 'expectations', 'patience': 'patience', 'reputation': 'reputation', 'image': 'image', 'negotiation': 'negotiation' };
  root.querySelectorAll('th,td').forEach(el => {
-  const txt = (el.textContent || '').trim().toLowerCase();
-  for (const [label, key] of Object.entries(charLabels)) {
-   if (txt.includes(label) && /^\d+$/.test(txt.replace(/\D/g, '') || '')) {
-    const v = parseInt(txt.replace(/[^\d]/g, ''));
-    out.characteristics[key] = v;
+  const raw = (el.textContent || '').trim();
+  const label = raw.replace(/[:\s]/g, '').toLowerCase();
+  for (const [lbl, key] of Object.entries(charLabels)) {
+   if (label === lbl) {
+    // Read adjacent cell value in the same row
+    const row = el.closest('tr');
+    let valCell = el.nextElementSibling;
+    if (!valCell && row) valCell = row.querySelector('td');
+    const valTxt = valCell ? (valCell.textContent || '').trim() : '';
+    const m = valTxt.match(/\d{1,2}/);
+    if (m) out.characteristics[key] = parseInt(m[0]);
+    break;
+   }
+  }
+ });
+ // Best-effort: some layouts put the number right after the label in one cell.
+ ['finances','expectations','patience','reputation','image','negotiation'].forEach(key => {
+  if (out.characteristics[key] == null) {
+   const el = Array.from(root.querySelectorAll('th,td')).find(e => {
+    const t = (e.textContent || '').toLowerCase().replace(/[:\s]/g, '');
+    return t.startsWith(key) && /\d/.test(t);
+   });
+   if (el) {
+    const m = (el.textContent || '').match(/\d{1,2}/);
+    if (m) { const v = parseInt(m[0]); if (v >= 1 && v <= 7) out.characteristics[key] = v; }
    }
   }
  });
@@ -5621,8 +5643,27 @@
   return;
  }
  let h = '';
+ const sc = data.characteristics || {};
  h += mkSection('Sponsor', mkRow('Sponsor', data.sponsorName || '?') +
   (data.progress ? mkRow('Negotiation Progress', `${data.progress}%`) : ''));
+
+ // Show all 6 sponsor characteristics up front so the user can see they drive the advice.
+ const charOrder = [
+  ['finances', 'Finances'], ['expectations', 'Expectations'], ['patience', 'Patience'],
+  ['reputation', 'Reputation'], ['image', 'Image'], ['negotiation', 'Negotiation'],
+ ];
+ const hasChars = charOrder.some(([k]) => sc[k] != null);
+ if (hasChars) {
+  let charHtml = '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
+  charOrder.forEach(([k, label]) => {
+   const v = sc[k];
+   const color = v == null ? '#6b7280' : v >= 6 ? '#10b981' : v >= 4 ? '#f59e0b' : '#ef4444';
+   charHtml += `<div style="padding:3px 7px;background:#1e293b;border-radius:4px;font-size:9px;border:1px solid #334155;"><span style="color:#9ca3af;">${label}:</span> <span style="color:${color};font-weight:700;">${v ?? '?'}</span><span style="color:#6b7280;">/7</span></div>`;
+  });
+  charHtml += '</div>';
+  h += mkSection('Sponsor Profile (characteristics)', charHtml +
+   `<span style="font-size:9px;color:#6b7280;">Each is a 1-7 scale. Higher finances/reputation = deeper pockets/prestige; higher negotiation = tougher to please; higher expectations = wants more from you; lower patience = answer & move fast. These drive every reply below.</span>`);
+ }
 
  // Manager's realistic season goal (context for "what to expect next season").
  // Trains off current league + its target OA / promotion posture so the pick is
@@ -5633,11 +5674,11 @@
   ? 'Promotion / top 4 / championship win'
   : 'Mid table position / consolidate';
  const sa = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.sponsorAnswers) || {};
+ const c = data.characteristics || {};
 
  h += mkSection('Recommended Answers',
   data.questions.map(q => {
    // Map sponsor characteristics -> chosen answer, adjusted by manager context.
-   const c = data.characteristics || {};
    let answer = '';
    let why = '';
    if (q.question.includes('Which area of the car')) {
@@ -5650,23 +5691,25 @@
    const exp = c.expectations;
    answer = (exp && sa.expectations && sa.expectations[exp]) ? sa.expectations[exp] : managerGoal;
    why = exp
-   ? `Sponsor's expectation level is ${exp} - answer to match so the negotiation keeps progressing.`
+   ? `Sponsor's expectation level is ${exp}/7 - answer to match so the negotiation keeps progressing.${c.finances >= 6 ? ' They have deep pockets (finances ' + c.finances + '/7), so promising a strong finish is credible.' : ''}`
    : `Based on your ${league} league posture: ${answer.toLowerCase()} is a realistic, credible goal.`;
    } else if (q.question.includes('popular is your driver')) {
-   const popularity = 4; // best-effort without live driver charisma
+   // Reputation + driver charisma weigh how the sponsor perceives your driver's appeal.
+   const popularity = c.image || 4;
    answer = (sa.popularity && sa.popularity[popularity]) || 'My driver is not very popular with the fans';
-   why = 'Rated against typical driver charisma; choose according to how the fans actually see your driver.';
+   const reputationNote = c.reputation >= 6 ? ` High sponsor reputation (${c.reputation}/7) means they care about image - frame your driver positively.` : (c.reputation != null ? ` Sponsor reputation ${c.reputation}/7.` : '');
+   why = `Chosen from the sponsor's image/perception rating.${reputationNote}`;
    } else if (q.question.includes('amount per race')) {
    const pat = c.patience;
    answer = (sa.amount && sa.amount[pat]) || 'A bit too low';
-   why = `Sponsor patience is ${pat}; the amount answer tracks their patience to keep the deal alive.`;
+   why = `Sponsor patience is ${pat}/7; the amount answer tracks their patience to keep the deal alive. Mixture of finances ${c.finances ?? '?'} and negotiation ${c.negotiation ?? '?'} shows how hard you can push on money.`;
    } else if (q.question.includes('contract duration')) {
    const pat = c.patience;
    answer = (sa.duration && sa.duration[pat]) || 'OK';
-   why = `Sponsor patience is ${pat}; the duration answer tracks their patience.`;
+   why = `Sponsor patience is ${pat}/7; a patient sponsor accepts longer terms, an impatient one wants a short commitment. Negotiation ${c.negotiation ?? '?'}/7 shows how much room you have.`;
    } else {
-   answer = 'Match the sponsor\u2019s stated preference';
-   why = 'No specific guidance matched this question - answer honestly and consistently.';
+   answer = 'Match the sponsor\u2019s stated preference (consistent with your plans)';
+   why = 'No specific guidance matched this question - answer honestly and consistently to protect reputation.';
    }
    return `<div style="margin:6px 0;padding:6px;background:#1e293b;border-radius:4px;">` +
     `<div style="font-size:10px;color:#60a5fa;font-weight:700;margin-bottom:2px;">${q.question}</div>` +
