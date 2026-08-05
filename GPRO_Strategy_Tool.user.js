@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.3.3
+// @version 6.4.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -18,6 +18,7 @@
 // @match https://www.gpro.net/gb/AvailDrivers.asp*
 // @match https://www.gpro.net/gb/AvailTechDirectors.asp*
 // @match https://www.gpro.net/gb/NegotiationsOverview.asp
+// @match https://www.gpro.net/gb/NegotiateSponsor.asp*
 // @match https://app.gpro.net/*
 // @grant GM_xmlhttpRequest
 // @grant GM_getValue
@@ -353,6 +354,7 @@
  if (h.includes('AvailDrivers.asp')) return 'marketDrivers';
  if (h.includes('AvailTechDirectors.asp')) return 'marketTDs';
  if (h.includes('NegotiationsOverview.asp')) return 'negotiations';
+ if (h.includes('NegotiateSponsor.asp')) return 'negotiateSponsor';
  return null;
  }
 
@@ -986,6 +988,70 @@
  if (text && text.length > 5 && text.length < 500) {
   out.comms.push({ msg: text, dt: '' });
  }
+ });
+
+ return out;
+ } catch (e) { return null; }
+ }
+
+ // Parses NegotiateSponsor.asp — the page where a single sponsor's negotiation is conducted.
+ // Extracts the sponsor's identity, the negotiation progress, and any questions the sponsor
+ // is currently asking (each question + its answer options). Replaces the /NegotiateSponsor
+ // API call with zero-budget DOM scraping so the advisor works on the live page directly.
+ function parseNegotiateSponsorDOM(root) {
+ root = root || document;
+ try {
+ const out = { sponsorName: '', negotiation: 0, progress: 0, questions: [], characteristics: {} };
+
+ const h1 = root.querySelector('h1.block');
+ if (h1) out.sponsorName = h1.textContent.replace(/negotiat.*with/i, '').replace(/sponsor/i, '').trim();
+
+ // Negotiation progress is often a "progress" figure or percentage on the page.
+ const progEl = Array.from(root.querySelectorAll('td,th,p,span')).find(el => /progress/i.test(el.textContent || ''));
+ if (progEl) {
+  const p = (progEl.parentElement ? progEl.parentElement.textContent : progEl.textContent) || '';
+  const m = p.match(/(\d+)\s*%|\b(\d{1,2})\s*\/\s*(\d{1,2})\b/);
+  if (m) out.progress = parseInt(m[1] || m[2] || '0');
+ }
+
+ // Negotiation questions: GPRO asks up to 5. Each is a question string with radio/answer options.
+ // Detect by looking for the known question stems.
+ const questionStems = [
+  'Which area of the car would our advertisement be placed on?',
+  'What are you expecting to achieve next season?',
+  'How popular is your driver with the fans?',
+  'What do you think of the amount per race we proposed?',
+  'What do you think of the contract duration we proposed?',
+ ];
+ questionStems.forEach(q => {
+  const found = root.querySelectorAll('td,th,label,p,span');
+  for (const el of found) {
+   if ((el.textContent || '').trim().includes(q)) {
+    // Gather nearby answer options (labels next to inputs)
+    const options = [];
+    const container = el.closest('tr') || el.parentElement || root;
+    container.querySelectorAll('input[type="radio"], input[type="checkbox"], label, td').forEach(opt => {
+     const t = (opt.textContent || opt.value || '').trim();
+     if (t && t.length > 2 && t.length < 120 && !t.includes(q) && options.length < 10) {
+      if (!options.includes(t)) options.push(t);
+     }
+    });
+    out.questions.push({ question: q, options });
+    break;
+   }
+  }
+ });
+
+ // Sponsor characteristics (if exposed on the page) - finances/expectations/patience/etc.
+ const charLabels = { 'finances': 'finances', 'expectations': 'expectations', 'patience': 'patience', 'reputation': 'reputation', 'image': 'image', 'negotiation': 'negotiation' };
+ root.querySelectorAll('th,td').forEach(el => {
+  const txt = (el.textContent || '').trim().toLowerCase();
+  for (const [label, key] of Object.entries(charLabels)) {
+   if (txt.includes(label) && /^\d+$/.test(txt.replace(/\D/g, '') || '')) {
+    const v = parseInt(txt.replace(/[^\d]/g, ''));
+    out.characteristics[key] = v;
+   }
+  }
  });
 
  return out;
@@ -5234,7 +5300,8 @@
  training: 'Training Advisor',
  marketDrivers: 'Driver Market Advisor',
  marketTDs: 'TD Market Advisor',
- negotiations: 'Sponsor Advisor',
+  negotiations: 'Sponsor Advisor',
+  negotiateSponsor: 'Sponsor Negotiation Advisor',
  };
  createPanel(PAGE_TITLES[page] || 'GPRO Strategy Tool');
  // Show loading progress
@@ -5328,9 +5395,11 @@
  renderTraining(detectLeagueFromMenu(menu));
   } else if (page === 'marketDrivers' || page === 'marketTDs') {
   renderMarketPage(page === 'marketDrivers' ? 'drivers' : 'tds');
-  } else if (page === 'negotiations') {
-  renderSponsorOverview();
-  }
+   } else if (page === 'negotiations') {
+   renderSponsorOverview();
+   } else if (page === 'negotiateSponsor') {
+   renderNegotiateSponsor();
+   }
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad') +
  `<div style="margin-top:8px;display:flex;gap:6px;">` +
@@ -5524,9 +5593,94 @@
   'What are you expecting to achieve next season?': expectationFor(c.expectations),
   'How popular is your driver with the fans?': popularityFor(c.image),
   'What do you think of the amount per race we proposed?': amountFor(c.patience),
-  'What do you think of the contract duration we proposed?': durationFor(c.patience),
-  },
- };
+   'What do you think of the contract duration we proposed?': durationFor(c.patience),
+   },
+  };
+ }
+
+ // ============================================================
+ // RENDER: NEGOTIATE SPONSOR (NegotiateSponsor.asp)
+ // ============================================================
+ // Live-advisor shown when the manager is actually on a single sponsor's
+ // negotiation page. Reads the questions the sponsor is asking (DOM parse),
+ // then recommends the ideal answer for each, weighing:
+ //   * the sponsor's own characteristics (finances/expectations/patience/image)
+ //   * the manager's league ambition (from current league + where promotion/
+ //     relegation sit) so e.g. "what do you expect next season?" matches a
+ //     realistic goal rather than a generic pick.
+ // Backend reason, simple copy-answer UI.
+ async function renderNegotiateSponsor() {
+ createPanel('Sponsor Negotiation Advisor');
+ body(`<div style="${ST.loading}">Reading negotiation...</div>`);
+ try {
+ const data = parseNegotiateSponsorDOM(document);
+ if (!data || !data.questions.length) {
+  body(mkRec('No negotiation questions found on this page. If this just loaded, wait a moment and click Retry.', 'warn') +
+   `<div style="margin-top:8px;"><button id="gpro-retry" style="background:#374151;color:#d1d5db;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;">Retry</button></div>`);
+  setTimeout(() => { document.getElementById('gpro-retry')?.addEventListener('click', () => location.reload()); }, 100);
+  return;
+ }
+ let h = '';
+ h += mkSection('Sponsor', mkRow('Sponsor', data.sponsorName || '?') +
+  (data.progress ? mkRow('Negotiation Progress', `${data.progress}%`) : ''));
+
+ // Manager's realistic season goal (context for "what to expect next season").
+ // Trains off current league + its target OA / promotion posture so the pick is
+ // grounded in the manager's own ambition, not a coin-flip.
+ const league = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.currentLeague) || 'Amateur';
+ const lgCfg = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.leagues) ? GPRO_DATA.leagues[league] : null;
+ const managerGoal = lgCfg && lgCfg.resetsEachSeason
+  ? 'Promotion / top 4 / championship win'
+  : 'Mid table position / consolidate';
+ const sa = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.sponsorAnswers) || {};
+
+ h += mkSection('Recommended Answers',
+  data.questions.map(q => {
+   // Map sponsor characteristics -> chosen answer, adjusted by manager context.
+   const c = data.characteristics || {};
+   let answer = '';
+   let why = '';
+   if (q.question.includes('Which area of the car')) {
+   const image = c.image || 4;
+   answer = (sa.carSpot && sa.carSpot[image]) || (image <= 1 ? 'Front wing' : image === 2 ? 'Rear wing' : image === 3 ? 'Nose' : image <= 5 ? 'Sidepods' : 'Engine cover');
+   why = `Sponsor's image characteristic is ${image}; place the ad where they want it to maximise the deal.`;
+   } else if (q.question.includes('expecting to achieve')) {
+   // Match the answer to the sponsor's expectation characteristic where available,
+   // else fall back to the manager's realistic goal.
+   const exp = c.expectations;
+   answer = (exp && sa.expectations && sa.expectations[exp]) ? sa.expectations[exp] : managerGoal;
+   why = exp
+   ? `Sponsor's expectation level is ${exp} - answer to match so the negotiation keeps progressing.`
+   : `Based on your ${league} league posture: ${answer.toLowerCase()} is a realistic, credible goal.`;
+   } else if (q.question.includes('popular is your driver')) {
+   const popularity = 4; // best-effort without live driver charisma
+   answer = (sa.popularity && sa.popularity[popularity]) || 'My driver is not very popular with the fans';
+   why = 'Rated against typical driver charisma; choose according to how the fans actually see your driver.';
+   } else if (q.question.includes('amount per race')) {
+   const pat = c.patience;
+   answer = (sa.amount && sa.amount[pat]) || 'A bit too low';
+   why = `Sponsor patience is ${pat}; the amount answer tracks their patience to keep the deal alive.`;
+   } else if (q.question.includes('contract duration')) {
+   const pat = c.patience;
+   answer = (sa.duration && sa.duration[pat]) || 'OK';
+   why = `Sponsor patience is ${pat}; the duration answer tracks their patience.`;
+   } else {
+   answer = 'Match the sponsor\u2019s stated preference';
+   why = 'No specific guidance matched this question - answer honestly and consistently.';
+   }
+   return `<div style="margin:6px 0;padding:6px;background:#1e293b;border-radius:4px;">` +
+    `<div style="font-size:10px;color:#60a5fa;font-weight:700;margin-bottom:2px;">${q.question}</div>` +
+    `<div style="font-size:11px;color:#10b981;font-weight:600;">Ideal reply: ${answer}</div>` +
+    `<div style="font-size:9px;color:#6b7280;margin-top:2px;">${why}</div>` +
+    (q.options && q.options.length ? `<div style="font-size:9px;color:#9ca3af;margin-top:3px;">Options: ${q.options.join(' • ')}</div>` : '') +
+    `</div>`;
+  }).join('') +
+  `<span style="font-size:9px;color:#f59e0b;">Answering before the next race keeps the negotiation moving; answer honestly and consistently to protect reputation.</span>`);
+
+ body(h);
+ } catch (err) {
+ body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad'));
+ }
  }
 
  // ============================================================
