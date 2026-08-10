@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.11.1
+// @version 6.11.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -6516,7 +6516,7 @@
   // RecruitmentService: age -2/yr over ideal, +0.5/yr under; weight -0.5/kg over ideal,
   // +0.125/kg under. RELATIVE ranking tool only (higher = better fit), not a verified game
   // formula; raw number has no absolute meaning. Returns null if no usable data.
-  function recruitmentScore(row, priorityEntries, league) {
+  function recruitmentScore(row, priorityEntries, league, idKey) {
  if (!row || !priorityEntries || !priorityEntries.length) return null;
  const stats = row.fullStats;
  if (!stats) return null;
@@ -6526,10 +6526,25 @@
  // carried, so every score divided by ~250x too much and rounded to 0 for every candidate - found
  // live via a screenshot showing "Fit 0" on every row, making the "Top Pick" callout meaningless.
  const maxWeighted = priorityEntries.reduce((s, [, info]) => s + (maxP - info.priority + 1), 0);
+ // Direction bug fixed 2026-08-12 (same day, found while answering "what all needs to be taken
+ // into account"): every attribute was normalized as "higher raw value = better fit" - backwards
+ // for aggressiveness/stamina, both documented "keep low" attributes (Rookie/Amateur targets
+ // '0-49'/'0-45' in gpro-data.js - high values mean MORE tyre/parts wear, not less). A driver with
+ // terrible (high) aggressiveness was scoring HIGHER than one with ideal (low) aggressiveness on
+ // that attribute. Now looks up each attribute's real direction via filterFieldsFor(idKey) (the
+ // same dir:'min'/'max' already used by the filter bar) and inverts the normalized fraction for
+ // dir:'max' ("keep low") attributes. `idKey` is optional for backward compatibility - if omitted,
+ // falls back to the old (wrong-for-2-of-8-attributes) uniform "higher is better" behavior, so
+ // don't drop it from a call site without a good reason.
+ const attrFieldDefs = filterFieldsFor(idKey || 'driId');
  let hit = 0;
  priorityEntries.forEach(([key, info]) => {
   const v = stats[key];
-  if (typeof v === 'number') hit += Math.min(1, v / 250) * (maxP - info.priority + 1);
+  if (typeof v !== 'number') return;
+  const fieldDef = attrFieldDefs.find(f => f.key === key);
+  const frac = Math.min(1, Math.max(0, v / 250));
+  const normalized = (fieldDef && fieldDef.dir === 'max') ? (1 - frac) : frac;
+  hit += normalized * (maxP - info.priority + 1);
  });
  let base = maxWeighted > 0 ? (hit / maxWeighted) * 100 : 0;
  // Age penalty: drivers too old are a worse long-term bet (pitwall -2/yr). Ideal age ~28.
@@ -6584,7 +6599,7 @@
 
  // Renders one scored table (used for both the "meets the floor" and "below the floor" groups).
  function mkScoredTable(rows, idKey, priorityEntries, league) {
- const scored = rows.map(r => ({ row: r, score: recruitmentScore(r, priorityEntries, league) }));
+ const scored = rows.map(r => ({ row: r, score: recruitmentScore(r, priorityEntries, league, idKey) }));
  scored.sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity));
  let t = `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:10px;">`;
  t += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Name</td><td>OA</td><td>Salary</td><td>Age</td><td>Fit</td>${idKey === 'driId' ? '<td colspan="4" style="text-align:center;font-size:9px;">Perf (Dry/Wet/Qua/Rac/OVT/Tyr/Wear)</td>' : ''}</tr>`;
@@ -6627,7 +6642,7 @@
   // this league's priority order, with age/weight penalties modeled on pitwall's
   // RecruitmentService) - not a separate heuristic, just surfaced more prominently so the single
   // best-fitting scanned candidate doesn't require scanning down a table to find.
-  const scored = rows.map(r => ({ row: r, score: recruitmentScore(r, priorityEntries, league) }))
+  const scored = rows.map(r => ({ row: r, score: recruitmentScore(r, priorityEntries, league, idKey) }))
   .filter(s => s.score != null)
   .sort((a, b) => b.score - a.score);
   let h = '';

@@ -293,6 +293,23 @@ the sourced per-league default (e.g. Rookie 75-85) usually won't match any singl
 no highlight is the normal/expected state there - the inputs are still correctly pre-filled either
 way.
 
+**recruitmentScore direction bug fixed (2026-08-12, fifteenth pass, v6.11.2)**: user asked "what all
+needs to be taken into account (talent as well)" about Top Pick still not feeling right. Talent was
+already weighted correctly (priority 2, real weight in the sum) - the actual bug was that EVERY
+attribute was normalized as "higher raw value = better fit," which is backwards for aggressiveness
+and stamina, both documented "keep low" attributes (Rookie/Amateur targets `'0-49'`/`'0-45'` - high
+values mean MORE tyre/parts wear). A driver with terrible (high) aggressiveness was scoring HIGHER
+on that attribute than one with ideal (low) aggressiveness - actively rewarding the wrong drivers on
+2 of the 8 weighted attributes. Fixed by threading `idKey` into `recruitmentScore` (both call sites
+in `mkScoredTable`/`mkFullStatsTable` now pass it) and looking up each attribute's real direction
+via `filterFieldsFor(idKey)` (the same `dir:'min'`/`'max'` the filter bar already uses), inverting
+the normalized fraction for `dir:'max'` attributes. Known remaining gaps, not fixed here since they'd
+need either a sourced weight (`reputation` has no numeric target in `D.driverSelection`, so it's
+scraped/filterable but NOT scored) or live DOM verification (`row.retiring`/`row.natCode` are
+referenced in `mkMarketTable`'s display template but `parseAvailListDOM` never actually sets them -
+the 🕐 retiring-soon icon and nationality code have silently never rendered; unverified against a
+live page, flag if revisited).
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.
