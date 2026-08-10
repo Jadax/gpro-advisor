@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.8.0
+// @version 6.8.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1421,14 +1421,19 @@
  return results;
  }
  const NET_CONCURRENCY = 4;
- // Market full-stat scan cap. Raised from 30 to 60 (2026-08-11, explicit user request): OA is an
- // aggregate stat, so pre-filtering to the top-N by OA before scanning could silently exclude a
- // candidate who clears the REAL attribute floor (e.g. concentration) that this scan exists to
- // check, purely because some other attribute drags their OA down. 60 comfortably covers a full
- // ~50-row market page with headroom, so in practice this now scans everyone listed rather than
- // pre-selecting a subset - the OA sort below is now just scan ORDER (strongest first), not a
- // filter.
+ // Pre-scan preview table cap only (mkShortlistSection's initial mkMarketTable, before any profile
+ // fetch has happened) - purely a display truncation, not a filtering decision.
  const MARKET_SCAN_MAX = 60;
+ // Real full-stat scan safety cap (2026-08-11, v6.8.1): since whole-market auto-pagination (v6.8.0)
+ // a "market" can now be 700+ candidates, so scanning must be narrowed by the CHEAP filter-bar
+ // fields (Age/Salary/Offers - no profile fetch needed) BEFORE any expensive per-candidate scan
+ // runs (see cheapFilteredRows) - that's the real reduction. This is only the hard backstop for
+ // whatever's left after that narrowing, so scanning never fetches an unbounded number of profile
+ // pages if the user clears every cheap filter on a huge market. Raised from 60 (2026-08-11,
+ // explicit user request: "I want the advisor to automatically filter all the drivers... giving me
+ // all drivers that fulfil the filter requirements" - a 60-cap silently dropped valid candidates
+ // even after cheap pre-filtering).
+ const MARKET_FULL_SCAN_MAX = 300;
 
  // Fetches an arbitrary same-site page's HTML in the background (no navigation) so its DOM can be
  // parsed the same way as a real visit. Used by "Update All Data" to reach DriverProfile.asp/
@@ -6380,7 +6385,12 @@
  h += `<div style="font-size:9px;color:#9ca3af;margin-bottom:6px;">${floorNote}</div>`;
  h += mkFilterBar(sectionId, idKey, filterDefaults);
  h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(capped, idKey, targetOA)}</div>`;
- h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (${rows.length > capped.length ? `top ${capped.length} of ${rows.length} listed, by OA` : `all ${capped.length} listed`} - fetches each candidate's profile page)</button>`;
+ // Scanning is now narrowed by the CHEAP (no-scan) filter bar fields - Age/Salary/Offers - BEFORE
+ // any profile page gets fetched (see cheapFilteredRows), so a 700+ candidate market becomes
+ // scannable without fetching hundreds of pages. Preview the count using today's pre-filled
+ // defaults so the button is honest about roughly how many profile fetches it's about to do.
+ const cheapPreview = applyCustomFilters(rows, idKey, { age: filterDefaults.age, salary: filterDefaults.salary });
+ h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (~${cheapPreview.length} of ${rows.length} match today's Age/Salary filter above - edit those first to narrow further, then this fetches each match's profile page)</button>`;
  h += `<div id="gpro-scan-status-${sectionId}" style="font-size:9px;color:#6b7280;margin-top:4px;"></div>`;
  return h;
  }
@@ -6405,15 +6415,19 @@
  } catch (e) { logError(`full-stat fetch failed for ${kind} ${id}:`, e.message); return null; }
  }
 
-  // Bounded to MARKET_SCAN_MAX real page fetches per scan (matches the cap shown to the user in
-  // mkShortlistSection's button label - kept in sync so "scan these N" actually scans N). Same
-  // sort-by-OA-before-slice as mkShortlistSection, so the scanned set is exactly the displayed set -
-  // the sort is scan ORDER only now, not a pre-filter (see MARKET_SCAN_MAX comment above).
+  // `rows` is expected to already be narrowed by the cheap filter-bar fields (see
+  // cheapFilteredRows) - MARKET_FULL_SCAN_MAX here is only a hard backstop for whatever's left
+  // after that, sorted by OA-desc so any truncation keeps the strongest candidates. Returns
+  // `truncated: true` on the result so the caller can tell the user honestly if not everyone got
+  // scanned, instead of silently dropping candidates.
   async function scanCandidatesFullStats(rows, idKey) {
   const kind = idKey === 'driId' ? 'driver' : 'td';
-  const capped = [...rows].sort((a, b) => (parseFloat(b.OA) || 0) - (parseFloat(a.OA) || 0)).slice(0, MARKET_SCAN_MAX);
+  const sorted = [...rows].sort((a, b) => (parseFloat(b.OA) || 0) - (parseFloat(a.OA) || 0));
+  const capped = sorted.slice(0, MARKET_FULL_SCAN_MAX);
   const results = await mapLimit(capped, NET_CONCURRENCY, (r) => fetchCandidateFullStats(kind, r[idKey], r.profileHref));
-  return capped.map((r, i) => Object.assign({}, r, { fullStats: results[i].status === 'fulfilled' ? results[i].value : null }));
+  const scanned = capped.map((r, i) => Object.assign({}, r, { fullStats: results[i].status === 'fulfilled' ? results[i].value : null }));
+  scanned.truncatedFrom = sorted.length > capped.length ? sorted.length : null;
+  return scanned;
   }
 
   // Weighted-sum match score (0-100) of real scraped attributes against this league's ideal
@@ -6517,17 +6531,40 @@
   return h;
   }
 
+ // Narrows `rows` to only the CHEAP filter-bar fields (Age/Salary/Offers - already on the market
+ // row, no profile fetch needed) using whatever's CURRENTLY in the bar, before any expensive
+ // per-candidate scan runs. Added 2026-08-11 (v6.8.1) alongside whole-market auto-pagination
+ // (v6.8.0): once a "market" can be 700+ candidates, scanning everyone unconditionally isn't
+ // practical, but the cheap fields alone (e.g. Rookie's sourced salary ≤$2M/age ≤36 defaults)
+ // typically cut that down by more than half before a single network request goes out - real
+ // reduction happens here, MARKET_FULL_SCAN_MAX is only the backstop for what's left.
+ function cheapFilteredRows(sectionId, idKey, rows) {
+ const bar = document.getElementById(`gpro-filterbar-${sectionId}`);
+ if (!bar) return rows;
+ const fields = filterFieldsFor(idKey);
+ const cheapValues = {};
+ bar.querySelectorAll('[data-filter-field]').forEach((inp) => {
+ const fieldDef = fields.find(f => f.key === inp.getAttribute('data-filter-field'));
+ if (fieldDef && !fieldDef.needsScan && inp.value !== '') cheapValues[fieldDef.key] = inp.value;
+ });
+ return applyCustomFilters(rows, idKey, cheapValues);
+ }
+
  // Runs the real profile scan (shared by both entry points below) and updates `state`/`container`
  // in place. Cheap to call more than once - scanCandidatesFullStats caches per candidate ID, so a
  // second scan (e.g. triggered by Apply Filters after the standalone button already ran one) just
- // reads the cache instead of re-fetching.
+ // reads the cache instead of re-fetching. `rows` should already be cheap-filtered by the caller
+ // (see cheapFilteredRows) - this only applies the MARKET_FULL_SCAN_MAX backstop on top.
  async function runMarketScan(idKey, rows, container, state, priorityEntries, league, statusEl) {
- if (statusEl) statusEl.textContent = '⏳ Fetching candidate profiles...';
+ if (statusEl) statusEl.textContent = `⏳ Fetching ${Math.min(rows.length, MARKET_FULL_SCAN_MAX)} candidate profiles (narrowed by today's Age/Salary/Offers filter)...`;
  const enriched = await scanCandidatesFullStats(rows, idKey);
  state.rows = enriched;
  state.hasScanned = true;
  const gotStats = enriched.filter(r => r.fullStats).length;
- if (statusEl) statusEl.textContent = `Scanned ${enriched.length} candidates - got real stats for ${gotStats}.` + (gotStats < enriched.length ? ' Some profile pages could not be read (parser may need verifying against real markup).' : '');
+ let msg = `Scanned ${enriched.length} candidates - got real stats for ${gotStats}.`;
+ if (gotStats < enriched.length) msg += ' Some profile pages could not be read (parser may need verifying against real markup).';
+ if (enriched.truncatedFrom) msg += ` Only the top ${enriched.length} by OA were scanned out of ${enriched.truncatedFrom} that matched your Age/Salary/Offers filter - narrow those further (e.g. lower the salary cap) to bring the rest into range.`;
+ if (statusEl) statusEl.textContent = msg;
  return enriched;
  }
 
@@ -6565,7 +6602,8 @@
  if (needsScanNow) {
  if (applyBtn) applyBtn.disabled = true;
  try {
- await runMarketScan(idKey, rows, container, state, priorityEntries, league, statusEl);
+ const narrowed = cheapFilteredRows(sectionId, idKey, rows);
+ await runMarketScan(idKey, narrowed, container, state, priorityEntries, league, statusEl);
  } catch (e) {
  if (statusEl) statusEl.textContent = `Scan failed: ${e.message}`;
  if (applyBtn) applyBtn.disabled = false;
@@ -6599,7 +6637,8 @@
  btn.disabled = true;
  const statusEl = document.getElementById(`gpro-scan-status-${sectionId}`);
  try {
- await runMarketScan(idKey, rows, container, state, priorityEntries, league, statusEl);
+ const narrowed = cheapFilteredRows(sectionId, idKey, rows);
+ await runMarketScan(idKey, narrowed, container, state, priorityEntries, league, statusEl);
  filterAndRenderMarket(sectionId, idKey, container, state, priorityEntries, league);
  btn.remove();
  } catch (e) {

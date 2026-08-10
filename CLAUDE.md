@@ -148,6 +148,22 @@ stop signal, backstopped by a hard `MARKET_PAGE_FETCH_MAX = 15` safety cap. `ren
 awaits this before rendering, so `domRows`/`drivers`/`tds` (and therefore the filter bar and
 shortlist) now always cover the FULL current market, not one page of it.
 
+**Cheap-filter-first scanning (2026-08-11, fifth pass, v6.8.1)**: once a market can be 700+
+candidates (after the above), the full-profile scan's old flat `MARKET_SCAN_MAX = 60` (top-60-by-OA)
+became a real bug, not just a politeness cap - a screenshot showed "0 of 60 scanned candidates
+matching your filters" because the 60 highest-OA candidates were nowhere near the Rookie salary/age
+caps, so the OA-based pre-selection excluded everyone who could actually pass the user's filter
+before scanning even started. Fixed with `cheapFilteredRows(sectionId, idKey, rows)`: narrows the
+row set using only the CHEAP filter-bar fields (Age/Salary/Offers - already on the market row, zero
+profile fetches needed) *before* any scan runs - both `applyFilterBar` and the standalone "Scan Full
+Stats" button call this first. `MARKET_SCAN_MAX` (60) is now display-only (the pre-scan preview
+table); the real scan uses a separate, much larger `MARKET_FULL_SCAN_MAX = 300` purely as a
+backstop against an unbounded fetch count if the user clears every cheap filter on a huge market -
+`scanCandidatesFullStats` reports `.truncatedFrom` when that backstop actually bites, surfaced
+honestly in `runMarketScan`'s status text rather than silently dropping candidates. The
+"Scan Full Stats & Filter" button's label previews roughly how many profiles today's default
+Age/Salary values will trigger, computed with the same `applyCustomFilters` used at scan time.
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.
