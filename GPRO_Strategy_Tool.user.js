@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.6.3
+// @version 6.6.4
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1415,6 +1415,14 @@
  return results;
  }
  const NET_CONCURRENCY = 4;
+ // Market full-stat scan cap. Raised from 30 to 60 (2026-08-11, explicit user request): OA is an
+ // aggregate stat, so pre-filtering to the top-N by OA before scanning could silently exclude a
+ // candidate who clears the REAL attribute floor (e.g. concentration) that this scan exists to
+ // check, purely because some other attribute drags their OA down. 60 comfortably covers a full
+ // ~50-row market page with headroom, so in practice this now scans everyone listed rather than
+ // pre-selecting a subset - the OA sort below is now just scan ORDER (strongest first), not a
+ // filter.
+ const MARKET_SCAN_MAX = 60;
 
  // Fetches an arbitrary same-site page's HTML in the background (no navigation) so its DOM can be
  // parsed the same way as a real visit. Used by "Update All Data" to reach DriverProfile.asp/
@@ -6166,7 +6174,7 @@
   // desc BEFORE capping so accumulation never pushes the best candidates out of scan range - GPRO
   // lists pages OA-descending, but merged rows arrive in page-visit order, which can interleave.
   const sortedByOA = [...rows].sort((a, b) => (parseFloat(b.OA) || 0) - (parseFloat(a.OA) || 0));
-  const capped = sortedByOA.slice(0, 30);
+  const capped = sortedByOA.slice(0, MARKET_SCAN_MAX);
   const floors = (priorityEntries || []).map(([key, info]) => [key, info.priority, parseMinFromTarget(info.target)]).filter(([, , min]) => min != null && min > 0);
   // Per explicit user request (2026-08-10): every attribute with a sourced numeric minimum must
   // clear it - not just a single top-priority one. "0-xx" keep-low targets parse to a 0 floor and
@@ -6199,7 +6207,7 @@
  }
  h += `<div style="font-size:9px;color:#9ca3af;margin-bottom:6px;">${floorNote}</div>`;
  h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(capped, idKey, targetOA)}</div>`;
- h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (top ${capped.length}${rows.length > capped.length ? ` of ${rows.length} listed, by OA` : ''} - fetches each candidate's profile page)</button>`;
+ h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (${rows.length > capped.length ? `top ${capped.length} of ${rows.length} listed, by OA` : `all ${capped.length} listed`} - fetches each candidate's profile page)</button>`;
  h += `<div id="gpro-scan-status-${sectionId}" style="font-size:9px;color:#6b7280;margin-top:4px;"></div>`;
  return h;
  }
@@ -6224,12 +6232,13 @@
  } catch (e) { logError(`full-stat fetch failed for ${kind} ${id}:`, e.message); return null; }
  }
 
-  // Bounded to 30 real page fetches per scan (matches the cap already shown to the user in
+  // Bounded to MARKET_SCAN_MAX real page fetches per scan (matches the cap shown to the user in
   // mkShortlistSection's button label - kept in sync so "scan these N" actually scans N). Same
-  // sort-by-OA-before-slice as mkShortlistSection, so the scanned set is exactly the displayed set.
+  // sort-by-OA-before-slice as mkShortlistSection, so the scanned set is exactly the displayed set -
+  // the sort is scan ORDER only now, not a pre-filter (see MARKET_SCAN_MAX comment above).
   async function scanCandidatesFullStats(rows, idKey) {
   const kind = idKey === 'driId' ? 'driver' : 'td';
-  const capped = [...rows].sort((a, b) => (parseFloat(b.OA) || 0) - (parseFloat(a.OA) || 0)).slice(0, 30);
+  const capped = [...rows].sort((a, b) => (parseFloat(b.OA) || 0) - (parseFloat(a.OA) || 0)).slice(0, MARKET_SCAN_MAX);
   const results = await mapLimit(capped, NET_CONCURRENCY, (r) => fetchCandidateFullStats(kind, r[idKey], r.profileHref));
   return capped.map((r, i) => Object.assign({}, r, { fullStats: results[i].status === 'fulfilled' ? results[i].value : null }));
   }
