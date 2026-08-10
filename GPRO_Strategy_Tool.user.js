@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.9.0
+// @version 6.9.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1433,10 +1433,15 @@
  // number of profile pages if the user clears every cheap filter on a huge market. Raised from 60
  // (2026-08-11, explicit user request: "I want the advisor to automatically filter all the
  // drivers... giving me all drivers that fulfil the filter requirements" - a 60-cap silently
- // dropped valid candidates even after cheap pre-filtering), then from 300 to 500 the same day once
- // real market sizes turned out to be far larger than assumed - `scanCandidatesFullStats` reports
- // `.truncatedFrom` when this cap is actually hit, surfaced honestly rather than silently dropped.
- const MARKET_FULL_SCAN_MAX = 500;
+ // dropped valid candidates even after cheap pre-filtering), then 300 to 500 the same day, then to
+ // 3000 the day after (2026-08-12) once a live 4571-driver Rookie market with cheap Age/Salary
+ // filters still left far more than 500 candidates behind an OA-sorted cutoff - explicit user
+ // request: "why only 500 scanned" / wants every filter-matching driver actually checked, not a
+ // convenient subset. `scanCandidatesFullStats` reports `.truncatedFrom` when this cap is actually
+ // hit, surfaced honestly (with live scan progress - see onProgress) rather than silently dropped.
+ // Scanning thousands of profile pages takes real minutes; that's an accepted, communicated
+ // tradeoff for actual completeness over speed, per this user's explicit preference.
+ const MARKET_FULL_SCAN_MAX = 3000;
 
  // Fetches an arbitrary same-site page's HTML in the background (no navigation) so its DOM can be
  // parsed the same way as a real visit. Used by "Update All Data" to reach DriverProfile.asp/
@@ -6435,11 +6440,20 @@
   // after that, sorted by OA-desc so any truncation keeps the strongest candidates. Returns
   // `truncated: true` on the result so the caller can tell the user honestly if not everyone got
   // scanned, instead of silently dropping candidates.
-  async function scanCandidatesFullStats(rows, idKey) {
+  // `onProgress(done, total)` (optional) fires after each candidate completes - scanning several
+  // thousand profile pages takes real minutes, and a static status message left no way to tell that
+  // apart from being stuck (same reasoning as fetchRemainingMarketPages's onProgress).
+  async function scanCandidatesFullStats(rows, idKey, onProgress) {
   const kind = idKey === 'driId' ? 'driver' : 'td';
   const sorted = [...rows].sort((a, b) => (parseFloat(b.OA) || 0) - (parseFloat(a.OA) || 0));
   const capped = sorted.slice(0, MARKET_FULL_SCAN_MAX);
-  const results = await mapLimit(capped, NET_CONCURRENCY, (r) => fetchCandidateFullStats(kind, r[idKey], r.profileHref));
+  let done = 0;
+  const results = await mapLimit(capped, NET_CONCURRENCY, async (r) => {
+  const stats = await fetchCandidateFullStats(kind, r[idKey], r.profileHref);
+  done++;
+  if (onProgress) onProgress(done, capped.length);
+  return stats;
+  });
   const scanned = capped.map((r, i) => Object.assign({}, r, { fullStats: results[i].status === 'fulfilled' ? results[i].value : null }));
   scanned.truncatedFrom = sorted.length > capped.length ? sorted.length : null;
   return scanned;
@@ -6456,7 +6470,11 @@
  const stats = row.fullStats;
  if (!stats) return null;
  const maxP = Math.max(...priorityEntries.map(([, info]) => info.priority));
- const maxWeighted = priorityEntries.reduce((s, [, info]) => s + 250 * (maxP - info.priority + 1), 0);
+ // Real bug fixed 2026-08-12: this previously multiplied maxWeighted by an extra 250 that `hit`
+ // (already normalized to a 0-1 fraction per attribute via Math.min(1, v/250) below) never
+ // carried, so every score divided by ~250x too much and rounded to 0 for every candidate - found
+ // live via a screenshot showing "Fit 0" on every row, making the "Top Pick" callout meaningless.
+ const maxWeighted = priorityEntries.reduce((s, [, info]) => s + (maxP - info.priority + 1), 0);
  let hit = 0;
  priorityEntries.forEach(([key, info]) => {
   const v = stats[key];
@@ -6469,6 +6487,17 @@
  // Weight penalty: heavier drivers wear tyres/car faster (pitwall -0.5/kg over 78 ideal).
  const weight = parseInt(stats.weight) || 0;
  if (weight > 78) base -= (weight - 78) * 0.5;
+ // Salary/value penalty (2026-08-12, explicit user request: "shouldn't lower salary etc be
+ // better... taking everything we've learned about this game into account"). Rookie/Amateur
+ // guidance in D.driverSelection explicitly emphasizes tight budgets ("save as much as possible" /
+ // "never go into debt"), so at similar attribute fit, a cheaper driver IS the practically better
+ // pick. Scaled as a fraction of this league's own sourced maxSalary (not a flat dollar amount) so
+ // it stays proportionate across leagues with very different budgets - up to -20 points at exactly
+ // the league cap, more if a loosened filter let a candidate through above it.
+ const leagueSel = (typeof GPRO_DATA !== 'undefined') && GPRO_DATA.driverSelection && GPRO_DATA.driverSelection[league];
+ const leagueMaxSalary = leagueSel ? leagueSel.maxSalary : null;
+ const salary = typeof row.salary === 'string' ? parseGproCash(row.salary) : 0;
+ if (leagueMaxSalary && salary > 0) base -= (salary / leagueMaxSalary) * 20;
  return Math.round(Math.max(0, Math.min(100, base)));
  }
 
@@ -6592,8 +6621,11 @@
  // reads the cache instead of re-fetching. `rows` should already be cheap-filtered by the caller
  // (see cheapFilteredRows) - this only applies the MARKET_FULL_SCAN_MAX backstop on top.
  async function runMarketScan(idKey, rows, container, state, priorityEntries, league, statusEl) {
- if (statusEl) statusEl.textContent = `⏳ Fetching ${Math.min(rows.length, MARKET_FULL_SCAN_MAX)} candidate profiles (narrowed by today's Age/Salary/Offers filter)...`;
- const enriched = await scanCandidatesFullStats(rows, idKey);
+ const willScan = Math.min(rows.length, MARKET_FULL_SCAN_MAX);
+ if (statusEl) statusEl.textContent = `⏳ Fetching ${willScan} candidate profiles (narrowed by today's Age/Salary/Offers filter)${willScan > 200 ? ' - this may take a few minutes for a market this size' : ''}...`;
+ const enriched = await scanCandidatesFullStats(rows, idKey, (done, total) => {
+ if (statusEl) statusEl.textContent = `⏳ Scanning candidate profiles: ${done} of ${total}...`;
+ });
  state.rows = enriched;
  state.hasScanned = true;
  const gotStats = enriched.filter(r => r.fullStats).length;

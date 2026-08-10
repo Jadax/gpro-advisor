@@ -204,6 +204,30 @@ surfaced prominently instead of requiring the user to scan down a table for the 
 concentration-floor fix above, which was found WHILE debugging why so few candidates were reaching
 this ranking in the first place.
 
+**recruitmentScore math bug + salary factor (2026-08-12, ninth pass, v6.9.1)**: the Top Pick
+callout above shipped showing "Fit 0" for every single scanned candidate - `recruitmentScore`'s
+`maxWeighted` denominator carried a stray `250 *` factor that `hit` (already normalized to a 0-1
+fraction per attribute via `Math.min(1, v/250)`) never had, so every score divided by ~250x too
+much and rounded to 0 for everyone, making the "best" pick meaningless/arbitrary. Fixed by dropping
+the stray `250 *`. Also added a salary/value penalty (explicit user request: "shouldn't lower
+salary etc be better... taking everything we've learned about this game into account") - up to -20
+points scaled as a fraction of the league's own sourced `maxSalary` (not a flat dollar figure, so it
+stays proportionate across leagues), reflecting the Rookie/Amateur budget guidance already
+documented in `D.driverSelection[league].budget` ("save as much as possible" / "never go into
+debt"). TDs have no `driverSelection` entry so this penalty is a no-op for them, not a crash.
+
+**MARKET_FULL_SCAN_MAX raised again, live scan progress added (same pass, v6.9.1)**: 500 was still
+too low - a live 4571-driver Rookie market's cheap Age/Salary filters barely narrowed anything (188
+over the age cap, only 6 over the salary cap out of 4571 - Rookie league inherently skews young and
+cheap already), so the OA-sorted top-500 cutoff was still silently excluding thousands of
+filter-matching candidates. Raised to 3000 - a real, communicated tradeoff (scanning thousands of
+profile pages takes real minutes) rather than a false claim of full completeness; `runMarketScan`
+now shows live "Scanning candidate profiles: N of M" progress (via a new `onProgress` callback
+threaded through `scanCandidatesFullStats`) so a multi-minute scan doesn't look stuck. If 3000 is
+ever genuinely insufficient for a market that large, the honest fix is narrowing the filter bar's
+own fields further (attribute floors, not just age/salary) - not silently raising this cap forever,
+since real HTTP request volume against gpro.net is a genuine politeness constraint.
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.
