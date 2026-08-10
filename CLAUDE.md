@@ -107,6 +107,23 @@ filtering - one button, one step. `BASE_FILTER_FIELDS`/`DRIVER_ATTR_FILTER_FIELD
 `dir: 'min'` = higher is better/keep above) - add new filterable fields there, not by hand-rolling
 another filter UI elsewhere.
 
+**Autofill + single source of truth (2026-08-11, same day again)**: `mkShortlistSection` now builds
+a `filterDefaults` object (sourced attribute floors from `priorityEntries`, plus driver
+salary/age caps) and passes it into `mkFilterBar(sectionId, idKey, defaults)`, which pre-fills each
+input's `value` - so Rookie/Amateur drivers (the only tiers with real numeric targets today) open
+with the sourced minimums already showing, but every input is a plain `<input>` the user can freely
+edit or blank out. This fixed a real bug: `mkFullStatsTable` used to independently re-derive the
+*same* floors from `priorityEntries` and re-enforce them as a second, hidden, non-editable gate
+after the filter bar had already run - so a candidate who passed a user's edited/lowered filter-bar
+threshold could still get silently kicked into "below the floor" by the original sourced minimum
+underneath. User's exact words: "update the numbers as I want without it failing because in the
+backend we have the fixed minimums." Fixed by removing `mkFullStatsTable`'s own floor logic
+entirely - it's now a thin ranking wrapper around `mkScoredTable`, and a new `filterAndRenderMarket`
+helper (used by both the standalone "Scan Full Stats" button and the filter bar's Apply button) is
+the ONLY place filtering happens, always reading the filter bar's current on-screen values. If you
+add a new sourced numeric floor anywhere in this flow, it must reach the user through the filter
+bar's `defaults`, not as a separate enforced check elsewhere.
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.

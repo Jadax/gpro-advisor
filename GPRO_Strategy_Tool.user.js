@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.7.1
+// @version 6.7.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -6204,14 +6204,25 @@
  // fillable; Apply Filters (see applyFilterBar below) scans automatically the first time it's
  // needed, so filling in e.g. a Concentration minimum and clicking Apply just works in one step
  // instead of requiring a separate scan-then-filter sequence.
- function mkFilterBar(sectionId, idKey) {
+ // `defaults` (added 2026-08-11, per explicit user request) pre-fills each field's starting value
+ // from this league's sourced minimums (D.driverSelection[league].attributes / maxSalary / maxAge
+ // etc, built by the caller) - but every input stays a plain editable <input>, so the user can
+ // change or blank out any value before clicking Apply. This replaces the old behaviour where those
+ // same sourced minimums were silently re-enforced as a fixed, non-editable backend gate (see
+ // mkFullStatsTable).
+ function mkFilterBar(sectionId, idKey, defaults) {
  const fields = filterFieldsFor(idKey);
- const inputs = fields.map((f) => `<div style="display:flex;flex-direction:column;gap:1px;min-width:52px;">
+ const d = defaults || {};
+ const inputs = fields.map((f) => {
+ const dv = d[f.key];
+ const valueAttr = (dv != null && isFinite(dv)) ? ` value="${dv}"` : '';
+ return `<div style="display:flex;flex-direction:column;gap:1px;min-width:52px;">
  <label style="font-size:8px;color:${PALETTE.textDim};">${esc(f.label)} ${f.dir === 'max' ? '≤' : '≥'}</label>
- <input type="number" data-filter-field="${f.key}" placeholder="any" style="width:100%;background:${PALETTE.bgCard};color:${PALETTE.text};border:1px solid ${PALETTE.border};border-radius:4px;padding:2px 4px;font-size:10px;">
- </div>`).join('');
+ <input type="number" data-filter-field="${f.key}" placeholder="any"${valueAttr} style="width:100%;background:${PALETTE.bgCard};color:${PALETTE.text};border:1px solid ${PALETTE.border};border-radius:4px;padding:2px 4px;font-size:10px;">
+ </div>`;
+ }).join('');
  return `<div id="gpro-filterbar-${sectionId}" style="margin:6px 0;padding:7px 8px;background:${PALETTE.bgCard};border:1px solid ${PALETTE.borderSoft};border-radius:8px;">
- <div style="font-size:9px;color:${PALETTE.textDim};margin-bottom:5px;">Custom filters (replaces GPRO's Supporter-only market filters - free here). Con/Tal/etc trigger a one-time profile scan automatically the first time you use one.</div>
+ <div style="font-size:9px;color:${PALETTE.textDim};margin-bottom:5px;">Custom filters (replaces GPRO's Supporter-only market filters - free here). Pre-filled with this league's sourced minimums where known - change any value freely, or clear it to drop that constraint. Con/Tal/etc trigger a one-time profile scan automatically the first time you apply one.</div>
  <div style="display:flex;flex-wrap:wrap;gap:6px;">${inputs}</div>
  <button id="gpro-filterapply-${sectionId}" style="width:100%;margin-top:6px;background:${PALETTE.accent};color:#fff;border:none;padding:5px;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600;">Apply Filters</button>
  <div id="gpro-filterstatus-${sectionId}" style="font-size:9px;color:${PALETTE.textDim};margin-top:4px;"></div>
@@ -6261,8 +6272,8 @@
   // clear it - not just a single top-priority one. "0-xx" keep-low targets parse to a 0 floor and
   // impose no lower bound, so they never block. See mkFullStatsTable.
   const floorNote = floors.length
-  ? `Will filter to candidates meeting ALL minimums: ${floors.map(([k, , m]) => `${k} ≥ ${m}`).join(', ')}`
-  : `No numeric minimum thresholds sourced for ${cfgLabel} at ${league} league yet - results will be ranked by Match Score instead of filtered to a hard cutoff.`;
+  ? `Filter bar below is pre-filled with this league's sourced minimums (${floors.map(([k, , m]) => `${k} ≥ ${m}`).join(', ')}) - edit any value freely, or clear it to drop that constraint.`
+  : `No numeric minimum thresholds sourced for ${cfgLabel} at ${league} league yet - filter bar below starts empty; results rank by Match Score once you scan.`;
  let h = `<div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">Target OA ${targetOA.min}-${targetOA.max} for ${league}${cash != null ? `, cash on hand $${cash.toLocaleString()}` : ' (cash balance unknown - visit UpdateCar.asp once to see it here)'}</div>`;
  // League salary/age guidance (from D.driverSelection/tdSelection) - flags rows the manager
  // likely can't sustain, matching competitor tools' salary/age filters without needing supporters.
@@ -6286,8 +6297,15 @@
   h += `<div style="font-size:9px;color:#ef4444;margin-bottom:4px;">⚠️ ${overCap.length} listed above ${league}'s driver OA cap (${leagueCap}) - GPRO won't let you sign these, so they're look-don't-touch.</div>`;
  }
  }
+ // Filter bar defaults: sourced attribute floors (Rookie/Amateur drivers today - see
+ // gpro-data.js), plus salary/age caps for drivers. All pre-filled but user-editable - see
+ // mkFilterBar. Per-league guidance note above already explains these to the user in prose.
+ const filterDefaults = {};
+ floors.forEach(([k, , m]) => { filterDefaults[k] = m; });
+ if (cfgLabel === 'driver' && capMaxSalary) filterDefaults.salary = Math.round(capMaxSalary / 1000);
+ if (cfgLabel === 'driver' && capMaxAge) filterDefaults.age = capMaxAge;
  h += `<div style="font-size:9px;color:#9ca3af;margin-bottom:6px;">${floorNote}</div>`;
- h += mkFilterBar(sectionId, idKey);
+ h += mkFilterBar(sectionId, idKey, filterDefaults);
  h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(capped, idKey, targetOA)}</div>`;
  h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (${rows.length > capped.length ? `top ${capped.length} of ${rows.length} listed, by OA` : `all ${capped.length} listed`} - fetches each candidate's profile page)</button>`;
  h += `<div id="gpro-scan-status-${sectionId}" style="font-size:9px;color:#6b7280;margin-top:4px;"></div>`;
@@ -6411,42 +6429,18 @@
  return t;
  }
 
-  // Market shortlist filtering (2026-08-10, per explicit user request): candidates must meet ALL
-  // numeric minima sourced for their league - not just the single top-priority one that was the
-  // previous behaviour. Requirement: every attribute with a numeric floor (min > 0) must clear it,
-  // and candidates that pass every floor are shown separately from those that don't (with the
-  // specific floor(s) they missed called out). Range targets like "60-150" are treated as "meet the
-  // lower bound" (parseMinFromTarget reads the leading integer); "0-49"-style keep-low targets parse
-  // to a 0 floor and therefore don't impose a lower bound, so they never block a candidate.
+  // Renders scanned results as a single ranked table. Real bug fixed 2026-08-11: this function used
+  // to re-derive its OWN fixed floor set from priorityEntries (D.driverSelection[league].attributes)
+  // and re-apply it as a hard, non-editable "meets ALL minimums" gate on top of whatever the caller
+  // already filtered - so a candidate who passed the user's own (possibly lowered/edited) filter-bar
+  // threshold could still get silently bucketed into "below" by the original sourced minimum
+  // underneath. User's exact complaint: "update the numbers as I want without it failing because in
+  // the backend we have the fixed minimums." Filtering is now entirely the filter bar's job (see
+  // applyCustomFilters / filterAndRenderMarket, pre-filled from these same sourced minimums but
+  // fully editable) - rows arriving here have already been filtered, so this just ranks them.
   function mkFullStatsTable(rows, idKey, priorityEntries, league) {
-  const floors = (priorityEntries || []).map(([key, info]) => [key, info.priority, parseMinFromTarget(info.target)]).filter(([, , min]) => min != null && min > 0);
-  let h = '';
-  if (!floors.length) {
-  h += mkScoredTable(rows, idKey, priorityEntries, league);
-  h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">No numeric minimum thresholds sourced for this league - ranked by Fit Score (age/weight-adjusted), not filtered to a hard cutoff.</div>`;
-  return h;
-  }
-  const meets = [], below = [];
-  rows.forEach(r => {
-  const stats = r.fullStats;
-  const fails = floors.filter(([key, , min]) => !(stats && typeof stats[key] === 'number' && stats[key] >= min));
-  (fails.length ? below : meets).push(Object.assign({}, r, { __misses: fails.map(([k, , m]) => `${k}<${m}`) }));
-  });
-  const floorStr = floors.map(([k, , m]) => `${k} ≥ ${m}`).join(' AND ');
-  if (meets.length) {
-  h += `<div style="font-size:9px;color:#10b981;margin-bottom:4px;">Meets ALL minimums (${floorStr}): ${meets.length} of ${rows.length}</div>`;
-  h += mkScoredTable(meets, idKey, priorityEntries, league);
-  } else {
-  h += mkRec(`None of the ${rows.length} scanned candidates meet every minimum (${floorStr}). If this is stubbornly empty, some thresholds are likely too high for the current market - consider trimming the top-priority floor.`, 'warn');
-  }
-  if (below.length) {
-  h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#6b7280;font-size:10px;padding:4px 0;">⚠ Show ${below.length} that missed at least one minimum</summary>`;
-  h += `<div style="font-size:9px;color:#ef4444;margin-bottom:4px;">🚫 = attribute below its floor (each candidate shows which floor it failed):</div>`;
-  h += mkScoredTable(below, idKey, priorityEntries, league);
-  h += `<div style="font-size:9px;color:#6b7280;margin-top:2px;">${below.map(r => `${esc(r.name)}: ${(r.__misses || []).join(', ')}`).join(' • ')}</div>`;
-  h += '</details>';
-  }
-  h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Match Score = weighted sum of each candidate's real attributes (scraped from their profile page), weighted by this league's priority order. Relative ranking only, not a percentage or verified formula.</div>`;
+  let h = mkScoredTable(rows, idKey, priorityEntries, league);
+  h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Match Score = weighted sum of each candidate's real attributes (scraped from their profile page), weighted by this league's priority order. Relative ranking only, not a percentage or verified formula. Filtering (including any minimums) is controlled by the filter bar above.</div>`;
   return h;
   }
 
@@ -6462,6 +6456,22 @@
  const gotStats = enriched.filter(r => r.fullStats).length;
  if (statusEl) statusEl.textContent = `Scanned ${enriched.length} candidates - got real stats for ${gotStats}.` + (gotStats < enriched.length ? ' Some profile pages could not be read (parser may need verifying against real markup).' : '');
  return enriched;
+ }
+
+ // Reads the filter bar's CURRENT values (whatever the user has typed/edited, pre-filled from
+ // sourced minimums but never overridden by them - see mkFilterBar) and (re)renders the container
+ // with rows narrowed to those matching every filled-in field. Shared by both entry points below so
+ // scanning from either one filters identically afterwards - only the visible filter bar decides
+ // what "passes", never a hidden fixed backend minimum (that was the exact bug fixed 2026-08-11).
+ function filterAndRenderMarket(sectionId, idKey, container, state, priorityEntries, league) {
+ const bar = document.getElementById(`gpro-filterbar-${sectionId}`);
+ const statusEl = document.getElementById(`gpro-filterstatus-${sectionId}`);
+ if (!bar || !container) return;
+ const values = {};
+ bar.querySelectorAll('[data-filter-field]').forEach((inp) => { values[inp.getAttribute('data-filter-field')] = inp.value; });
+ const filtered = applyCustomFilters(state.rows, idKey, values);
+ container.innerHTML = state.hasScanned ? mkFullStatsTable(filtered, idKey, priorityEntries, league) : mkMarketTable(filtered, idKey, null);
+ if (statusEl) statusEl.textContent = `Showing ${filtered.length} of ${state.rows.length}${state.hasScanned ? ' scanned' : ' listed'} candidates matching your filters.`;
  }
 
  // Real bug fixed 2026-08-11: attribute filters (Con/Tal/etc) used to only work AFTER a separate
@@ -6490,14 +6500,13 @@
  }
  if (applyBtn) applyBtn.disabled = false;
  }
- const filtered = applyCustomFilters(state.rows, idKey, values);
- container.innerHTML = state.hasScanned ? mkFullStatsTable(filtered, idKey, priorityEntries, league) : mkMarketTable(filtered, idKey, null);
- if (statusEl) statusEl.textContent = `Showing ${filtered.length} of ${state.rows.length}${state.hasScanned ? ' scanned' : ' listed'} candidates matching your filters.`;
+ filterAndRenderMarket(sectionId, idKey, container, state, priorityEntries, league);
  }
 
  // Wires both entry points for one market section (drivers or TDs) after body(h) has rendered it:
- // the standalone "Scan Full Stats & Filter" button (scans immediately, no filter values needed)
- // and the filter bar's Apply button (scans only if a filled-in field needs it - see
+ // the standalone "Scan Full Stats & Filter" button (scans immediately, then applies whatever's
+ // currently in the filter bar - pre-filled with sourced minimums, but respects any edits already
+ // made) and the filter bar's Apply button (scans only if a filled-in field needs it - see
  // applyFilterBar). rows = the FULL row list shown; priorityEntries = Object.entries of
  // D.driverSelection[league].attributes or D.tdSelection[league].skills.
  function wireScanFullStatsButton(sectionId, idKey, rows, priorityEntries, league) {
@@ -6517,8 +6526,8 @@
  btn.disabled = true;
  const statusEl = document.getElementById(`gpro-scan-status-${sectionId}`);
  try {
- const enriched = await runMarketScan(idKey, rows, container, state, priorityEntries, league, statusEl);
- if (container) container.innerHTML = mkFullStatsTable(enriched, idKey, priorityEntries, league);
+ await runMarketScan(idKey, rows, container, state, priorityEntries, league, statusEl);
+ filterAndRenderMarket(sectionId, idKey, container, state, priorityEntries, league);
  btn.remove();
  } catch (e) {
  if (statusEl) statusEl.textContent = `Scan failed: ${e.message}`;
