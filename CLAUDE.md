@@ -164,6 +164,23 @@ honestly in `runMarketScan`'s status text rather than silently dropping candidat
 "Scan Full Stats & Filter" button's label previews roughly how many profiles today's default
 Age/Salary values will trigger, computed with the same `applyCustomFilters` used at scan time.
 
+**Auto-run on page load (2026-08-11, sixth pass, v6.8.2)**: per explicit user request ("all drivers
+within this OA range must meet the filters we have - that's the automated search and filtering I
+want you to do when I open the driver market up"), `renderMarketPage` no longer waits for a click.
+`wireScanFullStatsButton` takes a new `autoStart` param (passed `true` for Rookie/Amateur drivers
+where sourced targets exist) - the cheap-filter-then-scan-then-render pipeline (extracted into
+`runScanAndFilter`, shared by the button's click handler and this auto-run path) now fires
+immediately once the full market has loaded, so the first thing the user sees on `AvailDrivers.asp`
+is already a real, scanned, filtered shortlist - no click required. Considered but explicitly did
+NOT implement: passing GPRO's own supporter-gated query params (`con`/`tal`/`agr`/.../`MinOA`/
+`MaxOA`) into `fetchRemainingMarketPages`'s background page fetches to get server-side filtering for
+free. Risk: if GPRO silently ignores those params for non-supporters by returning a differently-
+shaped or truncated response instead of the normal full table, `parseAvailListDOM`/the pagination
+stop-condition could misread that as "end of market" and silently under-fetch - reintroducing
+exactly the kind of silent candidate-exclusion bug fixed twice already this session (v6.7.2's hidden
+floor gate, v6.8.1's OA-capped scan). Not worth the risk without a live-confirmed test of what those
+params actually do for a non-supporter account.
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.

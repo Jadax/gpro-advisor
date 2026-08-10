@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.8.1
+// @version 6.8.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -5368,9 +5368,9 @@
  body(h);
  wireDecisionBoard();
  if (type === 'drivers' && sel) {
- wireScanFullStatsButton('drivers', 'driId', domRows || [], Object.entries(sel.attributes), league);
+ wireScanFullStatsButton('drivers', 'driId', domRows || [], Object.entries(sel.attributes), league, true);
  } else if (type === 'tds' && tdSel) {
- wireScanFullStatsButton('tds', 'tdId', domRows || [], Object.entries(tdSel.skills), league);
+ wireScanFullStatsButton('tds', 'tdId', domRows || [], Object.entries(tdSel.skills), league, true);
  }
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad'));
@@ -6614,13 +6614,37 @@
  filterAndRenderMarket(sectionId, idKey, container, state, priorityEntries, league);
  }
 
+ // Cheap-filters, scans, and renders in one step - the body of the standalone "Scan Full Stats &
+ // Filter" button's click handler, pulled out so it can also fire automatically on page load (see
+ // autoStart below) without a synthetic click.
+ async function runScanAndFilter(sectionId, idKey, rows, container, state, priorityEntries, league, btn) {
+ if (btn) btn.disabled = true;
+ const statusEl = document.getElementById(`gpro-scan-status-${sectionId}`);
+ try {
+ const narrowed = cheapFilteredRows(sectionId, idKey, rows);
+ await runMarketScan(idKey, narrowed, container, state, priorityEntries, league, statusEl);
+ filterAndRenderMarket(sectionId, idKey, container, state, priorityEntries, league);
+ if (btn) btn.remove();
+ } catch (e) {
+ if (statusEl) statusEl.textContent = `Scan failed: ${e.message}`;
+ if (btn) { btn.disabled = false; btn.textContent = '🔍 Retry scan'; }
+ }
+ }
+
  // Wires both entry points for one market section (drivers or TDs) after body(h) has rendered it:
  // the standalone "Scan Full Stats & Filter" button (scans immediately, then applies whatever's
  // currently in the filter bar - pre-filled with sourced minimums, but respects any edits already
  // made) and the filter bar's Apply button (scans only if a filled-in field needs it - see
  // applyFilterBar). rows = the FULL row list shown; priorityEntries = Object.entries of
  // D.driverSelection[league].attributes or D.tdSelection[league].skills.
- function wireScanFullStatsButton(sectionId, idKey, rows, priorityEntries, league) {
+ // `autoStart` (2026-08-11, explicit user request - "that's the automated search and filtering I
+ // want you to do when I open the driver market up"): when the league has sourced numeric targets
+ // pre-filled into the filter bar (Rookie/Amateur drivers today), the scan+filter now runs
+ // immediately on page load instead of waiting for a click - the user's very first view of the
+ // market is already narrowed to real, scanned candidates matching those defaults. Leagues with no
+ // sourced targets (filter bar starts empty) skip auto-start, since there'd be nothing to filter by
+ // and it would just burn requests scanning the entire market unfiltered.
+ function wireScanFullStatsButton(sectionId, idKey, rows, priorityEntries, league, autoStart) {
  const btn = document.getElementById(`gpro-scan-${sectionId}`);
  const container = document.getElementById(`gpro-shortlist-${sectionId}`);
  // Filter state: starts as the FULL unfiltered row list (Age/Salary/Offers filters need no scan
@@ -6632,21 +6656,11 @@
  const state = { rows, hasScanned: false };
  const applyBtn = document.getElementById(`gpro-filterapply-${sectionId}`);
  if (applyBtn) applyBtn.addEventListener('click', () => applyFilterBar(sectionId, idKey, rows, container, state, priorityEntries, league));
- if (!btn) return;
- btn.addEventListener('click', async () => {
- btn.disabled = true;
- const statusEl = document.getElementById(`gpro-scan-status-${sectionId}`);
- try {
- const narrowed = cheapFilteredRows(sectionId, idKey, rows);
- await runMarketScan(idKey, narrowed, container, state, priorityEntries, league, statusEl);
- filterAndRenderMarket(sectionId, idKey, container, state, priorityEntries, league);
- btn.remove();
- } catch (e) {
- if (statusEl) statusEl.textContent = `Scan failed: ${e.message}`;
- btn.disabled = false;
- btn.textContent = '🔍 Retry scan';
- }
- });
+ // Click listener wired regardless of autoStart, so a failed auto-scan's "Retry scan" button (see
+ // runScanAndFilter's catch branch) still works - autoStart only decides whether the FIRST run
+ // fires immediately or waits for a click.
+ if (btn) btn.addEventListener('click', () => runScanAndFilter(sectionId, idKey, rows, container, state, priorityEntries, league, btn));
+ if (autoStart && rows.length) runScanAndFilter(sectionId, idKey, rows, container, state, priorityEntries, league, btn);
  }
 
  async function renderMarketOverview() {
