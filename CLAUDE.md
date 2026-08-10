@@ -239,6 +239,17 @@ pure backstop against a runaway bug rather than a real practical truncation poin
 size actually observed. The politeness/time tradeoff from the previous pass still applies - scanning
 a market this large takes real minutes, communicated via the live scan-progress status text.
 
+**OA range was never actually a filter (2026-08-12, eleventh pass, v6.10.0)**: user asked to confirm
+scanning only happens for "OA range and other filter numbers we have" - it turned out OA range
+(`targetOA`, the sourced per-league target like Rookie 75-85) was ONLY ever used to color/label the
+preview table's Match column (`mkMarketTable`'s ✅/⚠️/❌), never actually applied as a filter or used
+to narrow the scan - a driver at OA 60 or OA 150 went through the exact same scan/filter path as one
+at OA 80. Added `oaMin`/`oaMax` to `BASE_FILTER_FIELDS` (cheap - OA is already on every row, no scan
+needed), pre-filled from `targetOA.min`/`targetOA.max` in `mkShortlistSection`'s `filterDefaults`
+(same editable-not-fixed pattern as every other autofilled field). Since OA doesn't correlate much
+with age/salary (which barely narrowed the Rookie market previously), this is a genuinely useful
+free narrowing step before the expensive per-candidate scan runs.
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.

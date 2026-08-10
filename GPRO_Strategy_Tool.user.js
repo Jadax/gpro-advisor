@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.9.2
+// @version 6.10.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -6263,7 +6263,14 @@
  // GPRO's own UI implies for each column and D.driverSelection's existing keep-low/keep-high
  // targets (e.g. aggressiveness '0-49').
  // ============================================================
+ // oaMin/oaMax added 2026-08-12 - real gap found via user question: the sourced per-league OA
+ // target (targetOA, e.g. Rookie 75-85) was ONLY ever used to color/label the preview table's Match
+ // column, never actually applied as a filter - a driver at OA 60 or OA 150 went through the exact
+ // same scan/filter path as one at OA 80. OA is already on every row (no scan needed), so this is a
+ // free, meaningful narrowing field - unlike Age/Salary, which barely narrow a Rookie market.
  const BASE_FILTER_FIELDS = [
+ { key: 'oaMin', label: 'OA min', dir: 'min', needsScan: false, get: (r) => parseFloat(r.OA) || null },
+ { key: 'oaMax', label: 'OA max', dir: 'max', needsScan: false, get: (r) => parseFloat(r.OA) || null },
  { key: 'age', label: 'Age', dir: 'max', needsScan: false, get: (r) => parseInt(r.age) || null },
  { key: 'salary', label: 'Salary ($k)', dir: 'max', needsScan: false, scale: 1000, get: (r) => { const v = parseGproCash(r.salary); return v > 0 ? v : null; } },
  { key: 'offers', label: 'Offers', dir: 'max', needsScan: false, get: (r) => parseInt(r.offers) },
@@ -6375,9 +6382,10 @@
   const val = fieldDef.dir === 'max' ? parseMaxFromTarget(info.target) : parseMinFromTarget(info.target);
   return (val != null && val > 0) ? [key, info.priority, val, fieldDef.dir] : null;
   }).filter(Boolean);
+  const oaNote = `OA ${targetOA.min}-${targetOA.max}`;
   const floorNote = floors.length
-  ? `Filter bar below is pre-filled with this league's sourced targets (${floors.map(([k, , m, dir]) => `${k} ${dir === 'max' ? '≤' : '≥'} ${m}`).join(', ')}) - edit any value freely, or clear it to drop that constraint.`
-  : `No numeric targets sourced for ${cfgLabel} at ${league} league yet - filter bar below starts empty; results rank by Match Score once you scan.`;
+  ? `Filter bar below is pre-filled with this league's sourced targets (${oaNote}, ${floors.map(([k, , m, dir]) => `${k} ${dir === 'max' ? '≤' : '≥'} ${m}`).join(', ')}) - edit any value freely, or clear it to drop that constraint.`
+  : `Filter bar below is pre-filled with this league's sourced OA range (${oaNote}) - no numeric attribute targets sourced for ${cfgLabel} at ${league} league yet, so those start empty and results rank by Match Score once you scan.`;
  let h = `<div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">Target OA ${targetOA.min}-${targetOA.max} for ${league}${cash != null ? `, cash on hand $${cash.toLocaleString()}` : ' (cash balance unknown - visit UpdateCar.asp once to see it here)'}</div>`;
  // League salary/age guidance (from D.driverSelection/tdSelection) - flags rows the manager
  // likely can't sustain, matching competitor tools' salary/age filters without needing supporters.
@@ -6401,22 +6409,24 @@
   h += `<div style="font-size:9px;color:#ef4444;margin-bottom:4px;">⚠️ ${overCap.length} listed above ${league}'s driver OA cap (${leagueCap}) - GPRO won't let you sign these, so they're look-don't-touch.</div>`;
  }
  }
- // Filter bar defaults: sourced attribute floors (Rookie/Amateur drivers today - see
- // gpro-data.js), plus salary/age caps for drivers. All pre-filled but user-editable - see
+ // Filter bar defaults: sourced OA target range + attribute floors (Rookie/Amateur drivers today
+ // - see gpro-data.js), plus salary/age caps for drivers. All pre-filled but user-editable - see
  // mkFilterBar. Per-league guidance note above already explains these to the user in prose.
- const filterDefaults = {};
+ // oaMin/oaMax added 2026-08-12 (real gap found via user question - targetOA was previously only
+ // used to color the preview table, never actually applied as a filter or narrowed the scan).
+ const filterDefaults = { oaMin: targetOA.min, oaMax: targetOA.max };
  floors.forEach(([k, , m]) => { filterDefaults[k] = m; });
  if (cfgLabel === 'driver' && capMaxSalary) filterDefaults.salary = Math.round(capMaxSalary / 1000);
  if (cfgLabel === 'driver' && capMaxAge) filterDefaults.age = capMaxAge;
  h += `<div style="font-size:9px;color:#9ca3af;margin-bottom:6px;">${floorNote}</div>`;
  h += mkFilterBar(sectionId, idKey, filterDefaults);
  h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(capped, idKey, targetOA)}</div>`;
- // Scanning is now narrowed by the CHEAP (no-scan) filter bar fields - Age/Salary/Offers - BEFORE
- // any profile page gets fetched (see cheapFilteredRows), so a 700+ candidate market becomes
- // scannable without fetching hundreds of pages. Preview the count using today's pre-filled
- // defaults so the button is honest about roughly how many profile fetches it's about to do.
- const cheapPreview = applyCustomFilters(rows, idKey, { age: filterDefaults.age, salary: filterDefaults.salary });
- h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (~${cheapPreview.length} of ${rows.length} match today's Age/Salary filter above - edit those first to narrow further, then this fetches each match's profile page)</button>`;
+ // Scanning is now narrowed by the CHEAP (no-scan) filter bar fields - OA range/Age/Salary/Offers -
+ // BEFORE any profile page gets fetched (see cheapFilteredRows), so a huge market becomes scannable
+ // without fetching thousands of pages. Preview the count using today's pre-filled defaults so the
+ // button is honest about roughly how many profile fetches it's about to do.
+ const cheapPreview = applyCustomFilters(rows, idKey, { oaMin: filterDefaults.oaMin, oaMax: filterDefaults.oaMax, age: filterDefaults.age, salary: filterDefaults.salary });
+ h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (~${cheapPreview.length} of ${rows.length} match today's OA/Age/Salary filters above - edit those first to narrow further, then this fetches each match's profile page)</button>`;
  h += `<div id="gpro-scan-status-${sectionId}" style="font-size:9px;color:#6b7280;margin-top:4px;"></div>`;
  return h;
  }
