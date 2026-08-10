@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.10.0
+// @version 6.10.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -5384,10 +5384,17 @@
  h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Value = OA per $1M salary. 🕐 = retiring soon. Skill/range filters are GPRO Supporters-only via the API.</div>`;
  body(h);
  wireDecisionBoard();
+ // autoStart reverted 2026-08-12 (explicit user request): "it shouldn't automatically start the
+ // search. I should click on apply filters and THEN it starts... because I'll put in OA, salary
+ // etc. which means [fewer] drivers... [need] to scan." Auto-scanning on load (v6.8.2) meant the
+ // scan already ran against default values before the user got a chance to tighten OA/salary
+ // first, wasting exactly the narrowing those edits were meant to provide. Full market pagination
+ // (fetchRemainingMarketPages) still runs automatically - only the scan+filter step now waits for
+ // an explicit Apply Filters / Scan click.
  if (type === 'drivers' && sel) {
- wireScanFullStatsButton('drivers', 'driId', domRows || [], Object.entries(sel.attributes), league, true);
+ wireScanFullStatsButton('drivers', 'driId', domRows || [], Object.entries(sel.attributes), league, false);
  } else if (type === 'tds' && tdSel) {
- wireScanFullStatsButton('tds', 'tdId', domRows || [], Object.entries(tdSel.skills), league, true);
+ wireScanFullStatsButton('tds', 'tdId', domRows || [], Object.entries(tdSel.skills), league, false);
  }
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad'));

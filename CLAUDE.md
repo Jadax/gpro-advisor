@@ -250,6 +250,18 @@ needed), pre-filled from `targetOA.min`/`targetOA.max` in `mkShortlistSection`'s
 with age/salary (which barely narrowed the Rookie market previously), this is a genuinely useful
 free narrowing step before the expensive per-candidate scan runs.
 
+**autoStart reverted (2026-08-12, twelfth pass, v6.10.1)**: v6.8.2's auto-run-on-load was explicitly
+undone the same day the OA filter field landed - exact user words: "it shouldn't automatically start
+the search. I should click on apply filters and THEN it starts... because I'll put in OA, salary
+etc. which means [fewer] drivers... to scan." Auto-scanning immediately on page load meant the scan
+already ran against default filter values before the user got a chance to tighten OA/salary first,
+defeating the whole point of those being editable pre-scan narrowing fields. `wireScanFullStatsButton`
+now called with `autoStart: false` from `renderMarketPage` - whole-market pagination
+(`fetchRemainingMarketPages`) still runs automatically on load, only the scan+filter step now waits
+for an explicit Apply Filters / Scan Full Stats click. If auto-run is ever wanted again, it needs to
+default to the user's OWN last-edited filter values, not the raw sourced defaults, to avoid
+reintroducing this exact complaint.
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.
