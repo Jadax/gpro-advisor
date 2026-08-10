@@ -703,7 +703,7 @@ var GPRO_DATA = {
   maxAge: 36,
   attributes: {
   concentration: { target: 'as high as affordable', priority: 1, note: 'Consistency + error reduction. No trustworthy numeric floor sourced (the old "200+" was empirically unreachable - 0 of 100 sampled max-OA Rookie drivers had it). Train toward 200 via Yoga once owned.' },
-  talent: { target: '60-150', priority: 2, note: 'Raw speed; untrainable. Naturally 200+ in most of the market - treat <150 as a red flag' },
+  talent: { target: '150+', priority: 2, note: 'Raw speed; untrainable - the ONE attribute with no training path, so market pick is your only chance to get it right. Naturally 200+ in most of the market - treat <150 as a red flag. Real bug fixed 2026-08-12: the sourced floor used to read 60 (a market-median artifact), directly contradicting this note - a 69-talent driver was clearing it and getting recommended as Top Pick.' },
   experience: { target: '90-150', priority: 3, note: 'Grows +1/race; affects strategy and tyre management' },
   techInsight: { target: '80-150', priority: 4, note: 'Setup precision and fuel consumption. Train toward 125 via Technical training' },
   aggressiveness:{ target: '0-49', priority: 5, note: 'Keep low to reduce tyre/parts wear; 100 via Ninja training if raising intentionally' },
@@ -721,7 +721,7 @@ var GPRO_DATA = {
   maxAge: 37,
   attributes: {
   concentration: { target: 'as high as affordable', priority: 1, note: 'Consistency + error reduction. No trustworthy numeric floor sourced (only ~20% of max-OA Amateur drivers cleared the old "200+"). Train toward 200 via Yoga once owned.' },
-  talent: { target: '60-150', priority: 2, note: 'Raw speed, untrainable; market median ~205, prefer high' },
+  talent: { target: '200+', priority: 2, note: 'Raw speed, untrainable; market median ~205, prefer high. Real bug fixed 2026-08-12: the sourced floor used to read 60, far below this same note\'s own ~205 median - fixed to actually match it.' },
   experience: { target: '90-150', priority: 3, note: 'Grows +1/race; strategy, tyre management, setup precision' },
   techInsight: { target: '80-150', priority: 4, note: 'Setup precision, margin of acceptance, fuel. Train toward 125 via Technical training' },
   aggressiveness:{ target: '0-49', priority: 5, note: 'Keep low to reduce wear; 100 via Ninja training if raising intentionally' },

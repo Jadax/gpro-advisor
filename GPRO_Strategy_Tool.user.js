@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.11.2
+// @version 6.12.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -28,7 +28,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.5.0
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.5.1
 // @run-at document-idle
 // ==/UserScript==
 
@@ -478,25 +478,6 @@
  return `<span style="display:inline-block;width:${w}px;height:4px;background:${PALETTE.borderSoft};border-radius:3px;overflow:hidden;vertical-align:middle;margin-right:3px;"><span style="display:block;height:100%;width:${Math.round(Math.min(1, Math.max(0, ratio)) * 100)}%;background:${color};border-radius:3px;transition:width 0.3s ease;"></span></span>`;
  }
 
- // GAPP's stop counts are primary; this shows our own calibrated stop counts alongside for
- // visibility (a numeric check at Spa found GAPP runs ~2x fewer stops for dry compounds than
- // our calibrated numbers - worth keeping visible even though GAPP now drives the rec).
- function mkGappStopsCrossCheck(tyre) {
- if (!tyre || !tyre.ownCrossCheck) return '';
- const parts = Object.entries(tyre.ownCrossCheck).map(([name, stops]) => `${name}=${stops}`).join(', ');
- return `<div style="font-size:9px;color:#6b7280;margin-top:2px;">own-calibration stop-count cross-check: ${parts}</div>`;
- }
-
- // Visibility into whether TD/staff pit-time influence is actually active. Amateur league can't
- // sign a TD at all, so this will read "no TD" until the account is promoted to Pro+.
- function mkTdStatusNote(staffTd) {
- if (!staffTd) return '';
- const status = staffTd.hasTd
- ? `TD active (exp=${staffTd.tdExperience}, pitCoord=${staffTd.tdPitCoordination})`
- : 'no TD (Amateur league, or none signed)';
- return `<div style="font-size:9px;color:#6b7280;margin-top:2px;">Pit-time influence: staff conc=${staffTd.staffConcentration}, stress=${staffTd.staffStress} | ${status}</div>`;
- }
-
  // Which model actually drove this tyre recommendation - priority is per-track formula >
  // calibrated data (fallback only, not ground truth) > generic own formula.
  function mkTyreSourceNote(tyre) {
@@ -516,33 +497,18 @@
 
  // Shared weather-forecast section, used by both renderQualify and renderRaceSetup.
  // rainLabel/showAvg let each call site keep its existing summary-line wording.
+ // Real bug/trim 2026-08-13 (explicit user request, Q1/Q2 and Race Setup all named): the raw
+ // per-segment breakdown (temp/rain% per quarter, with bars) was "not needed publicly... probably
+ // better used internally by you" - same "UI stays copy-paste-simple" precedent as other advisors.
+ // `analyze.segs` is still fully computed and drives the one-line verdict below (and everything
+ // downstream that reads `analyze` directly) - only the raw segment table is gone.
  function mkWeatherForecastSection(analyze, opts) {
  if (!analyze) return '';
  opts = opts || {};
  const rainLabel = opts.rainLabel || 'RAIN PLAN';
  const avgSuffix = opts.showAvg === false ? '' : ` | Avg: ${analyze.avgTemp.toFixed(0)}°C`;
- let segHtml = '';
- analyze.segs.forEach(s => {
- const c = s.rainMax >= 40 ? '#ef4444' : s.rainMax >= 15 ? '#f59e0b' : '#10b981';
- segHtml += mkRow(`${s.name}`, `${s.tempAvg.toFixed(0)}°C | Rain ${s.rainMin}-${s.rainMax}%`) +
- `<div style="${ST.barOuter}"><div style="${barStyle(Math.min(100, s.rainMax), c)}"></div></div>`;
- });
- return mkSection('Weather Forecast', segHtml +
+ return mkSection('Weather Forecast',
  mkRec(`${analyze.commitRain ? rainLabel : 'DRY PLAN'} - Max rain: ${analyze.maxRain}%${avgSuffix}`, analyze.commitRain ? 'bad' : 'good'), opts.id);
- }
-
- // Shared compound-comparison table, used by both renderQualify and renderRaceSetup (was
- // byte-identical copy-pasted markup in both).
- function mkTyreResultsTable(results) {
- let t = `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:10px;">`;
- t += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Compound</td><td>Stops</td><td>Fuel</td><td>TCD</td><td>FLD</td><td>Pits</td><td>Total</td></tr>`;
- results.forEach((r, i) => {
- const best = i === 0;
- const bg = best ? '#10b98122' : 'transparent';
- t += `<tr style="background:${bg};${best ? 'font-weight:700;color:#10b981;' : ''}"><td style="padding:3px;">${r.name}</td><td>${r.stops}</td><td>${r.fuelPerStint}L</td><td>${r.tcd}s</td><td>${r.fld}s</td><td>${r.pits}s</td><td>${r.total}s</td></tr>`;
- });
- t += `</table></div>`;
- return t;
  }
 
  // Wing split ("gadget" calculator from our toolset, ): half
@@ -2738,6 +2704,18 @@
  });
  let currentLevel = 0;
  let currentWear = 0;
+ // Real bug fixed 2026-08-13: `currentWear === 0` was used as the "not found yet, keep trying"
+ // signal both within this row parse and in the page-wide text fallback below - but 0% is a
+ // completely legitimate, common wear value (freshly-bought/replaced part, or start of a new
+ // Rookie season where every part is Level 1 at 0% wear - confirmed live via a screenshot showing
+ // exactly that state). Treating "found 0%" the same as "found nothing" meant a correctly-parsed
+ // 0% got silently overwritten by a second, greedier check (or the page-wide regex fallback further
+ // down) that could latch onto an unrelated number-then-percent elsewhere on the page (an upgrade
+ // option's cost, a performance stat, etc) - explaining wildly wrong wear numbers on a car that was
+ // actually untouched. `wearFound`/`levelFound` now track discovery explicitly, independent of
+ // what the discovered value happens to be.
+ let wearFound = false;
+ let levelFound = false;
  const row = sel.closest('tr');
  if (row) {
  const cells = row.querySelectorAll('td');
@@ -2745,15 +2723,15 @@
  if (td.querySelector('select')) return; // skip the dropdown cell - its option text contains stray "%" matches
  const t = td.textContent.trim();
  const wearFont = td.querySelector('font[color]');
- if (wearFont) {
+ if (!wearFound && wearFont) {
  const wm = wearFont.textContent.match(/(\d+)%/);
- if (wm) currentWear = parseInt(wm[1]) || 0;
+ if (wm) { currentWear = parseInt(wm[1]) || 0; wearFound = true; }
  }
- if (currentWear === 0) {
+ if (!wearFound) {
  const wm2 = t.match(/(\d{1,3})%/);
  if (wm2) {
  const val = parseInt(wm2[1]);
- if (val >= 0 && val <= 100) currentWear = val;
+ if (val >= 0 && val <= 100) { currentWear = val; wearFound = true; }
  }
  }
  });
@@ -2762,9 +2740,9 @@
  const prevTd = selectCell.previousElementSibling;
  const lvlText = prevTd.textContent.trim();
  const lvlM = lvlText.match(/(\d+)/);
- if (lvlM) currentLevel = parseInt(lvlM[1]) || 0;
+ if (lvlM) { currentLevel = parseInt(lvlM[1]) || 0; levelFound = true; }
  }
- if (currentLevel === 0) {
+ if (!levelFound) {
  const allCells = Array.from(cells);
  for (let ci = 0; ci < allCells.length; ci++) {
  const t = allCells[ci].textContent.trim();
@@ -2772,45 +2750,50 @@
  const nextCell = allCells[ci + 1];
  if (nextCell && nextCell.querySelector('select')) {
  currentLevel = parseInt(t) || 0;
+ levelFound = true;
  break;
  }
  }
  }
  }
  }
- result.parts.push({ name: partName, opts, currentLevel, currentWear });
+ result.parts.push({ name: partName, opts, currentLevel, currentWear, wearFound, levelFound });
  });
 
  if (result.parts.length > 0) {
- const zeroLvl = result.parts.filter(p => p.currentLevel === 0).length;
- const zeroWear = result.parts.filter(p => p.currentWear === 0).length;
- logDebug(`DOM parse: ${result.parts.length} parts found, ${zeroLvl} missing levels, ${zeroWear} missing wear`);
+ const missingLvl = result.parts.filter(p => !p.levelFound).length;
+ const missingWear = result.parts.filter(p => !p.wearFound).length;
+ logDebug(`DOM parse: ${result.parts.length} parts found, ${missingLvl} missing levels, ${missingWear} missing wear`);
  } else {
  logError('DOM parse: NO selects found with name/id starting with "Buy"');
  logDebug('All selects on page:', Array.from(document.querySelectorAll('select')).map(s => s.name || s.id || '(unnamed)').join(', '));
  }
 
- // Text-based fallback: if levels or wear are still 0, scan page text for "PartName: <level>" patterns
- const textFallbackParts = result.parts.filter(p => p.currentLevel === 0 || p.currentWear === 0);
+ // Text-based fallback: only for parts where the primary parse genuinely found nothing
+ // (levelFound/wearFound false) - NOT wherever the found value happens to be 0, which is a
+ // legitimate real reading (see wearFound comment above). Using `=== 0` here previously let a
+ // correct 0% wear get silently clobbered by whatever number-then-percent this greedy regex
+ // happened to match next on the page.
+ const textFallbackParts = result.parts.filter(p => !p.levelFound || !p.wearFound);
  if (textFallbackParts.length > 0) {
  const allText = document.body.innerText;
  for (const p of textFallbackParts) {
- if (p.currentLevel === 0) {
+ if (!p.levelFound) {
  const nameEsc = p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  const lvlRe = new RegExp(nameEsc + '[:\\s]+(\\d{1,2})\\b', 'i');
  const m = allText.match(lvlRe);
  if (m) {
  const v = parseInt(m[1]);
- if (v > 0 && v <= 10) { p.currentLevel = v; logDebug(`Text fallback: ${p.name} level ${v}`); }
+ if (v > 0 && v <= 10) { p.currentLevel = v; p.levelFound = true; logDebug(`Text fallback: ${p.name} level ${v}`); }
  }
  }
- if (p.currentWear === 0) {
+ if (!p.wearFound) {
  const nameEsc = p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  const wearRe = new RegExp(nameEsc + '.*?(\\d{1,3})%', 'is');
  const m = allText.match(wearRe);
  if (m) {
  const v = parseInt(m[1]);
- if (v >= 0 && v <= 100) { p.currentWear = v; logDebug(`Text fallback: ${p.name} wear ${v}%`); }
+ if (v >= 0 && v <= 100) { p.currentWear = v; p.wearFound = true; logDebug(`Text fallback: ${p.name} wear ${v}%`); }
  }
  }
  }
@@ -2837,8 +2820,8 @@
  if (sel && numbers.length > 0) {
  const lvl = numbers.find(n => n > 0 && n <= 10);
  if (lvl !== undefined) {
- if (existing) existing.currentLevel = lvl;
- else result.parts.push({ name, opts: [], currentLevel: lvl, currentWear: 0 });
+ if (existing) { existing.currentLevel = lvl; existing.levelFound = true; }
+ else result.parts.push({ name, opts: [], currentLevel: lvl, currentWear: 0, levelFound: true, wearFound: false });
  logDebug(`Table fallback: ${name} level ${lvl}`);
  }
  }
@@ -3455,13 +3438,11 @@
  h += `<div data-first-stint-fuel>${mkRec(`<strong>First Stint Fuel: ${chosen.fuelPerStint}L</strong><br><span style="font-size:10px;">Enter this in Q2's "First stint fuel" field - covers ${chosen.lapsPerStint} laps on ${chosen.name} before the first planned pit</span>`, 'good')}</div>`;
  }
  }
- h += mkSection('Tyre Details',
- mkRow('Fuel/Lap', `${tyre.fuelPerLap}L`) +
- mkRow('Total Fuel', `${tyre.totalFuel}L`) +
- `<div data-wear-factor>` + mkRow('Wear Factor', tyre.combinedWearMult !== null ? `${tyre.combinedWearMult}x` : 'N/A') + `</div>` +
- mkGappStopsCrossCheck(tyre) + mkTdStatusNote(staffTd)
- );
- h += `<div data-tyre-table>${mkTyreResultsTable(tyre.results)}</div>`;
+ // "Tyre Details" breakdown (fuel/lap, total fuel, wear factor, per-compound comparison table)
+ // removed 2026-08-13 from Q1/Q2 (explicit user request: "I don't need to see this publicly...
+ // probably better used internally by you") - the recommendation line above already gives the
+ // actionable answer; this was the backend numbers behind it. Still fully computed in `tyre` and
+ // used elsewhere (Race Setup, cross-checks) - only this page's display of it is gone.
 
  // Tyre strategy insights (from Elite tyre analysis)
  if (tyre.results && tyre.results.length > 0) {
@@ -3937,19 +3918,12 @@
   strategyHtml += `</div>`;
   }
 
-  // 7. Expandable details: Push-or-Hold signals + Tyre table + Cross-checks
-  if (pushHold && pushHold.signals.length) {
-  strategyHtml += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#60a5fa;font-size:10px;font-weight:700;">Push-or-Hold Signals</summary>`;
-  pushHold.signals.forEach(s => { strategyHtml += mkRow(`${s.met ? '✅' : '❌'} ${s.label}`, s.detail); });
-  strategyHtml += `</details>`;
-  }
-  if (tyre && tyre.results) {
-  strategyHtml += `<div style="margin-top:8px;" data-tyre-table>`;
-  strategyHtml += mkTyreResultsTable(tyre.results);
-  strategyHtml += `</div>`;
-  strategyHtml += mkGappStopsCrossCheck(tyre) + mkTdStatusNote(staffTd);
-  }
-  if (tyre) strategyHtml += mkTyreSourceNote(tyre);
+  // 7. Backend detail (Push-or-Hold raw signals, tyre compound comparison table, GAPP/calibrated
+  // cross-checks, recommendation-source note) removed 2026-08-13 from the public Race Setup panel
+  // (explicit user request: "I don't need to see this publicly... used internally by you"). The
+  // verdict banner (item 1) and Weather/Compound/Stops/Laps badges (item 2) above already surface
+  // the actual recommendation these numbers produce - pushHold/tyre are still fully computed and
+  // drive those, only this raw-detail dump is gone.
    if (fuel && fuel.fromDomFuelStart) {
    strategyHtml += `<div style="font-size:9px;color:#f59e0b;margin-top:4px;">Start fuel locked from Q2 — simple dry-race split. If rain changes compound mid-race, fuel/lap changes too.</div>`;
    }
@@ -4297,25 +4271,21 @@
  // authoritative source available - it should simply win, not just when it happens to be bigger.
  if (domData.cash > 100 && car) car.cash = domData.cash;
 
- // Merge DOM-parsed levels/wear with API data (DOM is authoritative)
+ // Merge DOM-parsed levels/wear with API data (DOM is authoritative). Real bug fixed 2026-08-13,
+ // same class as the 2026-07-31 cash-merge fix: this used to gate on `dp.currentWear > 0` /
+ // `dp.currentLevel > 0` before ever trusting the DOM reading - so a genuinely fresh part at a
+ // real, correct 0% wear (confirmed live via a screenshot: brand-new L1 parts, "Don't replace"
+ // across the board) could never overwrite a stale cached wear value from a previous race/season,
+ // leaving the panel showing wildly wrong numbers (83%, 96%...) for a car that was actually
+ // untouched. Now uses parseUpdateCarDOM's explicit `wearFound`/`levelFound` flags - a valid DOM
+ // reading wins outright whenever we genuinely found one, exactly like the cash fix, regardless of
+ // whether the value happens to be 0.
  if (car && domData.parts && domData.parts.length > 0) {
  domData.parts.forEach(dp => {
  const idx = PART_NAMES.indexOf(dp.name);
  if (idx >= 0) {
- // Use DOM level if API returned 0 or missing
- const apiLvl = parseInt(car[PART_LVL_KEYS[idx]]) || 0;
- if (dp.currentLevel > 0 && (apiLvl === 0 || apiLvl === undefined)) {
- car[PART_LVL_KEYS[idx]] = dp.currentLevel;
- } else if (dp.currentLevel > 0) {
- car[PART_LVL_KEYS[idx]] = dp.currentLevel; // DOM is authoritative
- }
- // Use DOM wear if API returned 0 or missing
- const apiWear = parseInt(car[PART_WEAR_KEYS[idx]]) || 0;
- if (dp.currentWear > 0 && (apiWear === 0 || apiWear === undefined)) {
- car[PART_WEAR_KEYS[idx]] = dp.currentWear;
- } else if (dp.currentWear > 0) {
- car[PART_WEAR_KEYS[idx]] = dp.currentWear; // DOM is authoritative
- }
+ if (dp.levelFound) car[PART_LVL_KEYS[idx]] = dp.currentLevel;
+ if (dp.wearFound) car[PART_WEAR_KEYS[idx]] = dp.currentWear;
  }
  });
  // Also merge car character from DOM
@@ -4774,13 +4744,10 @@
  (realRemaining !== null ? mkRow('GPRO-Reported Remaining', `<span style="color:${realColor};">${realRemaining}</span>`) : '')
  );
 
- // Data updated status with timestamp
- const now = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
- h += mkSection('Data Updated',
- mkRow('Time', `<span style="color:#10b981;">${now}</span>`) +
- mkRow('Sources', `${Object.keys(data).length}/${Object.keys(endpoints).length} loaded`) +
- `<div style="margin-top:6px;font-size:9px;color:#6b7280;">Navigate to other pages for strategy advice.</div>`
- );
+ // "Data Updated" section removed 2026-08-13 (explicit user request: "why data updated part
+ // since I can see the freshness above") - it duplicated the "Data Freshness" table above
+ // (same X/Y source count, plus a render-time timestamp that isn't per-source freshness info)
+ // without adding anything the detailed table didn't already show.
 
  // Upgrade the button section
  h += `<div style="margin-top:10px;">`;
@@ -5129,54 +5096,15 @@
  }
  let h = '';
 
- // Driver overview
- h += mkSection('Driver', mkRow('Name', esc(data.driverName) || '?') +
- mkRow('Overall', data.skills.overall || '?') +
- mkRow('Energy', data.energy != null ? `${data.energy}%` : '?') +
- (data.age ? mkRow('Age', data.age) : '') +
- (data.weight ? mkRow('Weight', `${data.weight} kg`) : ''));
-
- // Career stats
- if (data.career && Object.keys(data.career).length) {
- let careerHtml = '';
- if (data.career.gPs) careerHtml += mkRow('GPs', data.career.gPs);
- if (data.career.wins) careerHtml += mkRow('Wins', data.career.wins);
- if (data.career.podiums) careerHtml += mkRow('Podiums', data.career.podiums);
- if (data.career.points) careerHtml += mkRow('Points', data.career.points);
- if (data.career.poles) careerHtml += mkRow('Poles', data.career.poles);
- if (data.career.fastestLaps) careerHtml += mkRow('Fastest Laps', data.career.fastestLaps);
- if (data.career.avPtsRace) careerHtml += mkRow('Av Pts/Race', data.career.avPtsRace);
- if (data.career.trophies) careerHtml += mkRow('Trophies', data.career.trophies);
- if (careerHtml) h += mkSection('Career', careerHtml);
- }
-
- // Contract
- if (data.contract && Object.keys(data.contract).length) {
- let conHtml = '';
- if (data.contract.salary) conHtml += mkRow('Salary', '$' + data.contract.salary.toLocaleString());
- if (data.contract.racesLeft) conHtml += mkRow('Races Left', data.contract.racesLeft);
- if (data.contract.pointsBonus) conHtml += mkRow('Points Bonus', '$' + data.contract.pointsBonus.toLocaleString());
- if (data.contract.podiumBonus) conHtml += mkRow('Podium Bonus', '$' + data.contract.podiumBonus.toLocaleString());
- if (data.contract.winBonus) conHtml += mkRow('Win Bonus', '$' + data.contract.winBonus.toLocaleString());
- if (conHtml) h += mkSection('Contract', conHtml);
- }
-
- // Skills breakdown
+ // Driver/Career/Contract/Skills sections removed 2026-08-13 (explicit user request: "I don't
+ // really need to see all this, it should be used internally if required") - same "UI stays
+ // copy-paste-simple" precedent as the Driver Offer Advisor trim (CLAUDE.md). The user is
+ // physically on TrainingSession.asp already and can see their own driver's name/career/contract/
+ // skill bars directly on the page; re-displaying them added nothing. `data.skills`/`data.contract`
+ // etc are still fully parsed and drive everything below (session recommendations, optimal-training
+ // gaps, track focus, budget check) - only the raw restated cards are gone.
  const skillOrder = ['concentration', 'talent', 'aggressiveness', 'experience', 'techInsight', 'stamina', 'charisma', 'motivation'];
  const skillLabels = { concentration: 'Concentration', talent: 'Talent', aggressiveness: 'Aggressiveness', experience: 'Experience', techInsight: 'Technical Insight', stamina: 'Stamina', charisma: 'Charisma', motivation: 'Motivation' };
- let skillsHtml = '';
- skillOrder.forEach(sk => {
- const val = data.skills[sk];
- if (val != null) {
- const color = val >= 100 ? '#10b981' : val >= 50 ? '#f59e0b' : '#ef4444';
- skillsHtml += `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid #1f2937;font-size:11px;">
- <span style="width:120px;color:#d1d5db;">${skillLabels[sk]}</span>
- <div style="flex:1;"><div style="${ST.wearBar}"><div style="height:100%;border-radius:3px;background:${color};width:${Math.min(100, val / 2)}%"></div></div></div>
- <span style="width:30px;text-align:right;color:#f9fafb;font-weight:600;">${val}</span>
- </div>`;
- }
- });
- if (skillsHtml) h += mkSection('Skills', skillsHtml);
 
  // Session-to-skill mapping - was previously this project's own unsourced guess. Replaced
  // 2026-07-27 with D.trainingSessionEffects (gpro-data.js), sourced from a community reference
@@ -5186,25 +5114,11 @@
  const sessionEffects = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.trainingSessionEffects) || {};
 
  // Training sessions + recommendations
- if (data.sessions.length) {
- let sessHtml = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:10px;">';
- sessHtml += '<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Session</td><td style="text-align:center;">Cost</td><td style="padding:3px;">Reported effect</td></tr>';
- data.sessions.forEach(s => {
- const eff = sessionEffects[s.id];
- let effectStr = 'Unconfirmed';
- if (eff) {
- const upStr = eff.up.map(a => skillLabels[a] || a).join(', ');
- const downStr = eff.down.map(a => skillLabels[a] || a).join(', ');
- effectStr = [upStr ? `↑ ${upStr}` : '', downStr ? `↓ ${downStr}` : ''].filter(Boolean).join(', ') || 'Unconfirmed';
- }
- sessHtml += `<tr><td style="padding:3px;color:#d1d5db;">${s.label}</td><td style="text-align:center;color:#9ca3af;">$${s.cost.toLocaleString()}</td><td style="padding:3px;color:#6b7280;font-size:9px;">${effectStr}</td></tr>`;
- });
- sessHtml += '</table></div>';
-  h += mkSection('Available Training',
-  sessHtml + `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Community-reported effects (source: <a href="https://gproracers.forumotion.com/t65-driver-stats" target="_blank" style="color:#60a5fa;">gproracers.forumotion.com</a>), not a verified formula - GPRO's own wiki says the exact effect isn't perfectly consistent session to session.</div>`);
-  }
+ // Raw "Available Training" session/cost/effect table removed 2026-08-13 (same request as above -
+ // it's the game's own page content restated, not a recommendation). data.sessions still drives
+ // the Training Recommendation section below (cheapest session with a confirmed effect per skill).
 
-  // Optimal-training reference (user-provided 2026-08-10): target attribute levels to aim for and
+ // Optimal-training reference (user-provided 2026-08-10): target attribute levels to aim for and
   // the session that raises each one, shown against the driver's current skill values so the gap
   // to each target is visible at a glance. Guidance, not a verified formula.
   const optimalTraining = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.driverOptimalTraining) || [];
@@ -6547,8 +6461,30 @@
   hit += normalized * (maxP - info.priority + 1);
  });
  let base = maxWeighted > 0 ? (hit / maxWeighted) * 100 : 0;
- // Age penalty: drivers too old are a worse long-term bet (pitwall -2/yr). Ideal age ~28.
  const age = parseInt(row.age) || 0;
+ // Talent-specific penalty (2026-08-12, explicit user request after seeing a real "Top Pick" with
+ // talent=69: "the higher the better since you can't train this... think of this logic properly").
+ // Talent is the ONE attribute with no training path at all (D.driverSelection's own note on this
+ // key: "Raw speed; untrainable... treat <150 as a red flag") - market selection is the only chance
+ // to get it right, unlike concentration/techInsight/stamina which can be trained up after signing.
+ // The sourced '60-150' floor (used for filter-bar autofill) is a market MEDIAN, not a "good" bar -
+ // the "<150" red-flag threshold, already documented in that same data entry, is the real one.
+ // Applied as an explicit steep penalty on top of the weighted average (not folded into `hit`'s
+ // priority weighting) so bad talent can't be smoothed over by strong scores elsewhere - up to -45
+ // points at talent=0, scaling to 0 right at the 150 threshold.
+ //
+ // Age-scaled (2026-08-13, explicit user request): "there's a difference between buying an older
+ // driver for a season or 2 for promotions vs a younger one for the long run - younger one will
+ // need higher talent to reach that potential." Talent's ceiling only pays off over a long
+ // development arc; an older driver reads as a more likely short-term/promotion-push pick who
+ // won't be around long enough for that ceiling to matter, so the penalty tapers down for them -
+ // full weight at age <=22, down to ~20% by age 40+. There's no way to read the manager's actual
+ // intent (rebuild vs. short-term push) from market data alone, so age is used as the best
+ // available proxy - a heuristic, not a verified game mechanic.
+ const talentPenaltyScale = age > 0 ? Math.max(0.2, Math.min(1, 1 - (age - 22) * 0.045)) : 1;
+ const talent = typeof stats.talent === 'number' ? stats.talent : null;
+ if (talent != null && talent < 150) base -= (150 - talent) * 0.3 * talentPenaltyScale;
+ // Age penalty: drivers too old are a worse long-term bet (pitwall -2/yr). Ideal age ~28.
  if (age > 0) base -= Math.max(0, age - 28) * 2;
  // Weight penalty: heavier drivers wear tyres/car faster (pitwall -0.5/kg over 78 ideal).
  const weight = parseInt(stats.weight) || 0;

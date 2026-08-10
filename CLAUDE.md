@@ -90,6 +90,50 @@ price as the account balance. A wrong number for a financial figure is worse tha
 own "Money:" row on every home-page visit (far more frequent than UpdateCar.asp visits), so it stays
 current even on race weekends where the user never opens the Car Advisor.
 
+## Part wear freshness — same bug class, part wear this time (real bug fixed 2026-08-13)
+
+Same root cause as the cash bug above, just never applied to part levels/wear. User reported the
+Car Advisor showing large wear percentages (Chassis 83%, Engine 96%...) on a car confirmed live (via
+a pasted screenshot of the actual UpdateCar.asp points-distribution table) to be brand-new Level 1
+parts at a genuine, correct 0% wear. Two compounding bugs: (1) `parseUpdateCarDOM` treated
+`currentWear === 0` as "not found yet" (same signal as a genuine parse failure), so a correctly-read
+0% got silently overwritten by a second, greedier text-regex fallback that could latch onto an
+unrelated number-then-percent anywhere else on the page. Fixed by adding explicit `wearFound`/
+`levelFound` booleans that track discovery separately from the discovered value. (2) `renderUpdateCar`'s
+DOM-vs-cached merge only ever trusted the DOM reading when `dp.currentWear > 0` - so even after (1)
+was fixed, a genuine 0% from the DOM could never overwrite a stale cached wear value from a previous
+race/season. Fixed to use the new `wearFound`/`levelFound` flags instead: a valid DOM reading wins
+outright whenever found, exactly matching the cash fix's "always wins outright" precedent - not
+gated on the value being nonzero. If you add new DOM-parsed numeric fields anywhere in this file,
+check whether 0 is a legitimate real value for that field before using `=== 0`/`> 0` as a "did we
+find it" signal - it silently isn't, twice now.
+
+## UI trims — training advisor, Q1/Q2 tyre/weather detail, race setup detail (2026-08-13)
+
+Same "UI stays copy-paste-simple" precedent as the Driver Offer Advisor trim (see Active Rules
+below), applied to three more pages per explicit user request ("I don't really need to see all
+this... probably better used internally by you"):
+- **Dashboard**: removed the "Data Updated" section (duplicated the "Data Freshness" table already
+  above it - same source count, plus a render-time timestamp that isn't per-source freshness info).
+  "API Token" panel was kept - the API is still a genuine last-resort fallback tier
+  (`getDataSmart`→`apiGet`), not fully retired, so its budget/status is still meaningful to show.
+- **Training Advisor** (`renderTraining`): removed the Driver/Career/Contract/Skills cards and the
+  raw "Available Training" session/cost/effect table - the user is physically on the page already
+  and can see all of that directly. `data.skills`/`data.sessions`/`data.contract` etc are still
+  fully parsed and drive the Training Recommendation, Driver Optimal Training, Track-Specific Focus,
+  and budget-check sections, which stayed (they're recommendations, not restated raw data).
+- **Q1/Q2** (`renderQualify`): removed the "Tyre Details" breakdown (fuel/lap, total fuel, wear
+  factor, per-compound comparison table) - the tyre recommendation line above it already gives the
+  actionable answer. `mkWeatherForecastSection` (shared with Race Setup) now shows only its one-line
+  DRY/RAIN PLAN verdict, not the raw per-quarter temp/rain% breakdown with bars.
+- **Race Setup** (`renderRaceSetup`): removed item 7's raw detail dump (Push-or-Hold signal list,
+  tyre compound comparison table, GAPP/calibrated cross-checks, recommendation-source note) - the
+  verdict banner and Weather/Compound/Stops/Laps badges (items 1-2, rendered earlier) already surface
+  the actual recommendation.
+`mkTyreResultsTable`, `mkGappStopsCrossCheck`, `mkTdStatusNote` became genuinely dead code once their
+only call sites were removed and were deleted (verified via grep - zero remaining references beyond
+their own definitions) rather than left as unused functions.
+
 ## Market custom filter bar (2026-08-11, revised same day)
 
 `AvailDrivers.asp`/`AvailTechDirectors.asp` gate their own per-attribute filters (Con/Tal/Agr/Exp/
@@ -309,6 +353,33 @@ scraped/filterable but NOT scored) or live DOM verification (`row.retiring`/`row
 referenced in `mkMarketTable`'s display template but `parseAvailListDOM` never actually sets them -
 the 🕐 retiring-soon icon and nationality code have silently never rendered; unverified against a
 live page, flag if revisited).
+
+**Talent floor was wrong + no untrainability penalty (2026-08-12, sixteenth pass, v6.11.3)**: the
+previous pass's claim that "talent was already weighted correctly" was incomplete - a live example
+surfaced a Top Pick with talent=69 that a real player immediately flagged: "the higher the better
+since you can't train this." Two real, sourced (not guessed) fixes: (1) `D.driverSelection.Rookie/
+Amateur.attributes.talent.target` was `'60-150'`, directly contradicting that SAME entry's own note
+("Naturally 200+ in most of the market - treat <150 as a red flag" for Rookie; "market median ~205"
+for Amateur) - the 60 floor was a leftover market-median artifact from the 2026-08-10 recalibration
+that never got reconciled with the note sitting right next to it. Fixed to `'150+'` (Rookie) /
+`'200+'` (Amateur), matching each entry's own already-documented number - this also fixes the filter
+bar's autofilled Talent minimum, previously far too permissive. (2) `recruitmentScore` had no
+explicit talent-specific handling - a bad talent could still be "washed out" by strong scores on
+other (trainable) attributes in the weighted average. Added a steep additive penalty (up to -45 at
+talent=0, scaling to 0 at the 150 red-flag threshold) reflecting that talent is the ONE attribute
+with zero training path - unlike concentration/techInsight/stamina which can be trained up after
+signing, a bad talent pick is permanent, so it deserves to dominate the score rather than average
+into it. No-op for TDs (no `talent` skill).
+
+**Talent penalty scaled by age (2026-08-13, seventeenth pass, same v6.11.3)**: explicit user
+request - "there's a difference between buying an older driver for a season or 2 for promotions vs
+a younger one for the long run - younger one will need higher talent to reach that potential."
+Talent's ceiling only pays off over a long development arc; an older driver reads as a more likely
+short-term/promotion-push pick who won't be around long enough for that ceiling to matter. The
+talent penalty above now tapers by age (full weight at ≤22, ~20% by 40+) rather than applying
+uniformly - there's no way to read the manager's actual intent (rebuild vs. push-and-move-on) from
+market data alone, so age is used as the best available proxy. Clearly a heuristic, not a verified
+game mechanic - flagged as such in the code comment.
 
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
