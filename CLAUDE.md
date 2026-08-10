@@ -90,6 +90,20 @@ price as the account balance. A wrong number for a financial figure is worse tha
 own "Money:" row on every home-page visit (far more frequent than UpdateCar.asp visits), so it stays
 current even on race weekends where the user never opens the Car Advisor.
 
+## Market custom filter bar (2026-08-11)
+
+`AvailDrivers.asp`/`AvailTechDirectors.asp` gate their own per-attribute filters (Con/Tal/Agr/Exp/
+TechI/Sta/Cha/Mot/Rep/Wei/Age/Min salary/Offers) behind GPRO Supporter status. `mkFilterBar`/
+`applyCustomFilters`/`applyFilterBar` replicate the same filtering client-side, for free, in
+`mkShortlistSection`/`wireScanFullStatsButton`. Age/Salary/Offers filters work immediately (already
+on the base market row, no scan needed) and can reach the FULL row list, not just the OA-capped
+scan subset. Attribute filters (Con/Tal/etc) are disabled until a Full Stats scan has run, then
+apply only to the scanned pool - the filter bar is rebuilt (not just re-wired) after a scan to
+flip those inputs from disabled to enabled. `BASE_FILTER_FIELDS`/`DRIVER_ATTR_FILTER_FIELDS`/
+`TD_ATTR_FILTER_FIELDS` define each field's direction (`dir: 'max'` = lower is better/keep below,
+`dir: 'min'` = higher is better/keep above) - add new filterable fields there, not by hand-rolling
+another filter UI elsewhere.
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.

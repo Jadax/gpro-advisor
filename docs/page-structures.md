@@ -35,7 +35,7 @@ Already parsed by `parseUpdateCarDOM()` in the script. Confirmed still accurate:
 **Confirmed live 2026-07-19 (Jim Buller, ID=29986) — `parseDriverProfileDOM()` in the script now scrapes this passively whenever the page is visited (script `@match`es it), caching into the `/DriProfile` stale-fallback slot for use on other pages when the API token is dead.**
 - Skills table `#dvSkillsTable`, each stat in `<td id="Conc"|"Talent"|"Aggr"|"Experience"|"TechI"|"Stamina"|"Charisma"|"Motivation">value&nbsp;</td>` (id attrs are literally these short names — trim the `&nbsp;`).
 - Overall: `<th>Overall:</th><td nowrap>87</td>` (no id).
-- Reputation: same row pattern, no id.
+- Reputation: same row pattern, no id. **Now parsed (2026-08-11)** by `parseDriverProfileDOM` via the same `<th>` label-text match used for Weight(kg) below - feeds the market custom filter bar's "Rep" field (see CLAUDE.md).
 - Weight(kg) / Age: `<th>Weight(kg):</th><td nowrap>66&nbsp;</td>` rows (label in a real `<th>`, value in the sibling `<td>`).
 - Name: `<h1 class="block">Driver profile: Jim Buller</h1>`.
 - Contract table: `<th>Salary:</th><td>$967.942</td>`, `<th>Contract length:</th><td>9 races</td>`, `<th>Group:</th><td><a href="Standings.asp?...">Amateur - 3</a></td>`.

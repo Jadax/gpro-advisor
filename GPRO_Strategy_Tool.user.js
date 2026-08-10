@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.6.4
+// @version 6.7.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -714,16 +714,22 @@
  const conc = num('Conc'), talent = num('Talent'), aggr = num('Aggr'), experience = num('Experience'),
  techI = num('TechI'), stamina = num('Stamina'), charisma = num('Charisma'), motivation = num('Motivation');
  if (conc === null && talent === null && experience === null) return null;
- let weight = null;
+ let weight = null, reputation = null;
  root.querySelectorAll('th').forEach((th) => {
  if (/Weight\(kg\)/i.test(th.textContent)) {
  const td = th.parentElement.querySelector('td');
  if (td) weight = parseInt((td.textContent || '').replace(/[^\d]/g, '')) || null;
+ } else if (/^Reputation/i.test(th.textContent.trim())) {
+ // Added 2026-08-11 for the market custom-filter bar (matches GPRO's own Supporter-only
+ // "Rep" filter column) - same "<th> label, no id" pattern as Weight above, confirmed in
+ // docs/page-structures.md against both DriverProfile.asp and TrainingSession.asp.
+ const td = th.parentElement.querySelector('td');
+ if (td) reputation = parseInt((td.textContent || '').replace(/[^\d]/g, '')) || null;
  }
  });
   const h1 = root.querySelector('h1.block');
   const driverName = h1 ? h1.textContent.replace(/Driver profile:/i, '').trim() : '';
-  return { concentration: conc, talent, aggressiveness: aggr, experience, techInsight: techI, stamina, charisma, motivation, weight, driverName };
+  return { concentration: conc, talent, aggressiveness: aggr, experience, techInsight: techI, stamina, charisma, motivation, weight, reputation, driverName };
   } catch (e) { return null; }
   }
 
@@ -6153,6 +6159,82 @@
  return m ? parseInt(m[1]) : null;
  }
 
+ // ============================================================
+ // CUSTOM FILTER BAR (2026-08-11, explicit user request) - GPRO gates its own per-attribute
+ // market filters (Con/Tal/Agr/Exp/TechI/Sta/Cha/Mot/Rep/Wei/Age/Min salary/Offers, visible on
+ // AvailDrivers.asp/AvailTechDirectors.asp) behind Supporter status. This replicates the same
+ // filtering client-side, for free, over whatever's currently loaded - no Supporter account
+ // needed. `dir:'max'` fields (Age/Salary/Offers/Aggressiveness/Weight) are "lower is better,
+ // keep below"; `dir:'min'` fields are "higher is better, keep above" - matches the direction
+ // GPRO's own UI implies for each column and D.driverSelection's existing keep-low/keep-high
+ // targets (e.g. aggressiveness '0-49').
+ // ============================================================
+ const BASE_FILTER_FIELDS = [
+ { key: 'age', label: 'Age', dir: 'max', needsScan: false, get: (r) => parseInt(r.age) || null },
+ { key: 'salary', label: 'Salary ($k)', dir: 'max', needsScan: false, scale: 1000, get: (r) => { const v = parseGproCash(r.salary); return v > 0 ? v : null; } },
+ { key: 'offers', label: 'Offers', dir: 'max', needsScan: false, get: (r) => parseInt(r.offers) },
+ ];
+ const DRIVER_ATTR_FILTER_FIELDS = [
+ { key: 'concentration', label: 'Con', dir: 'min', needsScan: true },
+ { key: 'talent', label: 'Tal', dir: 'min', needsScan: true },
+ { key: 'aggressiveness', label: 'Agr', dir: 'max', needsScan: true },
+ { key: 'experience', label: 'Exp', dir: 'min', needsScan: true },
+ { key: 'techInsight', label: 'Tech', dir: 'min', needsScan: true },
+ { key: 'stamina', label: 'Sta', dir: 'min', needsScan: true },
+ { key: 'charisma', label: 'Cha', dir: 'min', needsScan: true },
+ { key: 'motivation', label: 'Mot', dir: 'min', needsScan: true },
+ { key: 'reputation', label: 'Rep', dir: 'min', needsScan: true },
+ { key: 'weight', label: 'Wei', dir: 'max', needsScan: true },
+ ];
+ const TD_ATTR_FILTER_FIELDS = [
+ { key: 'leadership', label: 'Lead', dir: 'min', needsScan: true },
+ { key: 'mechanics', label: 'Mech', dir: 'min', needsScan: true },
+ { key: 'electronics', label: 'Elec', dir: 'min', needsScan: true },
+ { key: 'aerodynamics', label: 'Aero', dir: 'min', needsScan: true },
+ { key: 'pitCoord', label: 'PitCo', dir: 'min', needsScan: true },
+ { key: 'motivation', label: 'Mot', dir: 'min', needsScan: true },
+ ];
+ function filterFieldsFor(idKey) {
+ return BASE_FILTER_FIELDS.concat(idKey === 'driId' ? DRIVER_ATTR_FILTER_FIELDS : TD_ATTR_FILTER_FIELDS);
+ }
+
+ // Renders the filter bar's number inputs. Attribute fields are shown greyed-out with a note
+ // until a Full Stats scan has run (they're real values from each candidate's own profile page,
+ // not something derivable from the market list alone) - Age/Salary/Offers work immediately since
+ // they're already on the base market row.
+ function mkFilterBar(sectionId, idKey, hasFullStats) {
+ const fields = filterFieldsFor(idKey);
+ const inputs = fields.map((f) => {
+ const disabled = f.needsScan && !hasFullStats;
+ return `<div style="display:flex;flex-direction:column;gap:1px;min-width:52px;">
+ <label style="font-size:8px;color:${disabled ? PALETTE.textMuted : PALETTE.textDim};">${esc(f.label)} ${f.dir === 'max' ? '≤' : '≥'}</label>
+ <input type="number" data-filter-field="${f.key}" ${disabled ? 'disabled' : ''} placeholder="any" style="width:100%;background:${disabled ? PALETTE.borderSoft : PALETTE.bgCard};color:${PALETTE.text};border:1px solid ${PALETTE.border};border-radius:4px;padding:2px 4px;font-size:10px;">
+ </div>`;
+ }).join('');
+ return `<div id="gpro-filterbar-${sectionId}" style="margin:6px 0;padding:7px 8px;background:${PALETTE.bgCard};border:1px solid ${PALETTE.borderSoft};border-radius:8px;">
+ <div style="font-size:9px;color:${PALETTE.textDim};margin-bottom:5px;">Custom filters (replaces GPRO's Supporter-only market filters - free here)${hasFullStats ? '' : ` - <span style="color:${PALETTE.warm};">Con/Tal/etc need a Full Stats scan first</span>`}</div>
+ <div style="display:flex;flex-wrap:wrap;gap:6px;">${inputs}</div>
+ <button id="gpro-filterapply-${sectionId}" style="width:100%;margin-top:6px;background:${PALETTE.accent};color:#fff;border:none;padding:5px;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600;">Apply Filters</button>
+ <div id="gpro-filterstatus-${sectionId}" style="font-size:9px;color:${PALETTE.textDim};margin-top:4px;"></div>
+ </div>`;
+ }
+
+ // Pure filter: keeps rows passing every field the user actually entered a value for. Fields
+ // needing a scan are skipped entirely for rows with no fullStats yet (rather than treating
+ // "unknown" as a fail, which would silently hide every un-scanned candidate).
+ function applyCustomFilters(rows, idKey, values) {
+ const fields = filterFieldsFor(idKey);
+ return rows.filter((r) => fields.every((f) => {
+ const raw = values[f.key];
+ if (raw === undefined || raw === null || raw === '') return true;
+ const threshold = parseFloat(raw) * (f.scale || 1);
+ if (isNaN(threshold)) return true;
+ const actual = f.get ? f.get(r) : (r.fullStats ? r.fullStats[f.key] : null);
+ if (actual === null || actual === undefined || isNaN(actual)) return true; // unknown -> don't exclude
+ return f.dir === 'max' ? actual <= threshold : actual >= threshold;
+ }));
+ }
+
  // Real bug fixed 2026-07-27: GPRO's own default market page is ALREADY sorted descending and
  // capped near the league's max OA ("A request with no query parameters will return... descending
  // order, with an OA range which upper limit is the maximum OA of the Token's account league" -
@@ -6206,6 +6288,7 @@
  }
  }
  h += `<div style="font-size:9px;color:#9ca3af;margin-bottom:6px;">${floorNote}</div>`;
+ h += mkFilterBar(sectionId, idKey, false);
  h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(capped, idKey, targetOA)}</div>`;
  h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (${rows.length > capped.length ? `top ${capped.length} of ${rows.length} listed, by OA` : `all ${capped.length} listed`} - fetches each candidate's profile page)</button>`;
  h += `<div id="gpro-scan-status-${sectionId}" style="font-size:9px;color:#6b7280;margin-top:4px;"></div>`;
@@ -6372,8 +6455,31 @@
  // rendered it. rows = the FULL row list shown (mkShortlistSection/scanCandidatesFullStats apply
  // their own 30-candidate cap); priorityEntries = Object.entries of
  // D.driverSelection[league].attributes or D.tdSelection[league].skills.
+ // Reads the filter bar's current input values and re-renders the shortlist container with
+ // whichever rows (from `state`) pass them. Shared by the initial pre-scan wiring and by the
+ // re-wiring that happens after a scan replaces the filter bar's DOM node (attribute inputs go
+ // from disabled to enabled at that point, so the bar itself is rebuilt, not just its listener).
+ function applyFilterBar(sectionId, idKey, container, state, priorityEntries, league) {
+ const bar = document.getElementById(`gpro-filterbar-${sectionId}`);
+ if (!bar || !container) return;
+ const values = {};
+ bar.querySelectorAll('[data-filter-field]').forEach((inp) => { values[inp.getAttribute('data-filter-field')] = inp.value; });
+ const filtered = applyCustomFilters(state.rows, idKey, values);
+ container.innerHTML = state.hasScanned ? mkFullStatsTable(filtered, idKey, priorityEntries, league) : mkMarketTable(filtered, idKey, null);
+ const statusEl = document.getElementById(`gpro-filterstatus-${sectionId}`);
+ if (statusEl) statusEl.textContent = `Showing ${filtered.length} of ${state.rows.length}${state.hasScanned ? ' scanned' : ' listed'} candidates matching your filters.`;
+ }
+
  function wireScanFullStatsButton(sectionId, idKey, rows, priorityEntries, league) {
  const btn = document.getElementById(`gpro-scan-${sectionId}`);
+ const container = document.getElementById(`gpro-shortlist-${sectionId}`);
+ // Filter state: starts as the FULL unfiltered row list (Age/Salary/Offers filters need no scan
+ // and can therefore reach beyond the OA-capped subset), then narrows to whatever the last scan
+ // returned once one runs (attribute filters can only ever cover the scanned pool). `hasScanned`
+ // decides which renderer (mkMarketTable vs mkFullStatsTable) the filtered view re-uses.
+ const state = { rows, hasScanned: false };
+ const applyBtn = document.getElementById(`gpro-filterapply-${sectionId}`);
+ if (applyBtn) applyBtn.addEventListener('click', () => applyFilterBar(sectionId, idKey, container, state, priorityEntries, league));
  if (!btn) return;
  btn.addEventListener('click', async () => {
  btn.disabled = true;
@@ -6381,10 +6487,22 @@
  const statusEl = document.getElementById(`gpro-scan-status-${sectionId}`);
  try {
  const enriched = await scanCandidatesFullStats(rows, idKey);
- const container = document.getElementById(`gpro-shortlist-${sectionId}`);
+ state.rows = enriched;
+ state.hasScanned = true;
  if (container) container.innerHTML = mkFullStatsTable(enriched, idKey, priorityEntries, league);
  const gotStats = enriched.filter(r => r.fullStats).length;
  if (statusEl) statusEl.textContent = `Scanned ${enriched.length} candidates - got real stats for ${gotStats}.` + (gotStats < enriched.length ? ' Some profile pages could not be read (parser may need verifying against real markup).' : '');
+ // Rebuild the filter bar with attribute fields now enabled (they were disabled/greyed until
+ // real scraped stats existed to filter against), and re-wire it against the same shared state.
+ const barWrap = document.getElementById(`gpro-filterbar-${sectionId}`);
+ if (barWrap && barWrap.parentElement) {
+ const tmp = document.createElement('div');
+ tmp.innerHTML = mkFilterBar(sectionId, idKey, true);
+ const newBar = tmp.firstElementChild;
+ barWrap.replaceWith(newBar);
+ const newApplyBtn = document.getElementById(`gpro-filterapply-${sectionId}`);
+ if (newApplyBtn) newApplyBtn.addEventListener('click', () => applyFilterBar(sectionId, idKey, container, state, priorityEntries, league));
+ }
  btn.remove();
  } catch (e) {
  if (statusEl) statusEl.textContent = `Scan failed: ${e.message}`;
