@@ -228,6 +228,17 @@ ever genuinely insufficient for a market that large, the honest fix is narrowing
 own fields further (attribute floors, not just age/salary) - not silently raising this cap forever,
 since real HTTP request volume against gpro.net is a genuine politeness constraint.
 
+**MARKET_FULL_SCAN_MAX removed as a practical limit (2026-08-12, tenth pass, v6.9.2)**: per explicit
+user request ("increase the cap... to all the drivers - it's easily less actually because we have
+OA ceilings per league") - the user's point being GPRO's own market response is already bounded by
+the token account's league OA ceiling (a no-params request tops out at "the maximum OA of the
+Token's account league" per `gpro-public-api.yml`), so the real candidate pool was never going to be
+"the entire game," just naturally capped well below that already. Raised from 3000 to 12500 (=
+`MARKET_PAGE_FETCH_MAX`'s own 250-page x 50-rows/page absolute ceiling), so it now functions as a
+pure backstop against a runaway bug rather than a real practical truncation point for any market
+size actually observed. The politeness/time tradeoff from the previous pass still applies - scanning
+a market this large takes real minutes, communicated via the live scan-progress status text.
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.

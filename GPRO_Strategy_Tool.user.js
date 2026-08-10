@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.9.1
+// @version 6.9.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1433,15 +1433,21 @@
  // number of profile pages if the user clears every cheap filter on a huge market. Raised from 60
  // (2026-08-11, explicit user request: "I want the advisor to automatically filter all the
  // drivers... giving me all drivers that fulfil the filter requirements" - a 60-cap silently
- // dropped valid candidates even after cheap pre-filtering), then 300 to 500 the same day, then to
- // 3000 the day after (2026-08-12) once a live 4571-driver Rookie market with cheap Age/Salary
- // filters still left far more than 500 candidates behind an OA-sorted cutoff - explicit user
- // request: "why only 500 scanned" / wants every filter-matching driver actually checked, not a
- // convenient subset. `scanCandidatesFullStats` reports `.truncatedFrom` when this cap is actually
+ // dropped valid candidates even after cheap pre-filtering), then 300 to 500 the same day, then
+ // 3000 the day after, then removed as a real practical limit entirely (2026-08-12, explicit user
+ // request: "increase the cap... to all the drivers - it's easily less actually because we have OA
+ // ceilings per league"). GPRO's own market response is already inherently bounded by the token
+ // account's league OA ceiling (per gpro-public-api.yml: a no-params request tops out at "the
+ // maximum OA of the Token's account league") and by MARKET_PAGE_FETCH_MAX's page-crawl cap - so
+ // the true candidate count is naturally bounded well below "the entire game", not literally
+ // unbounded. This is now only a hard backstop against a runaway bug (duplicate merge failure,
+ // parser loop, etc), set to match MARKET_PAGE_FETCH_MAX's own absolute ceiling (250 pages x 50
+ // rows/page) rather than an arbitrary smaller number that could still silently truncate a real
+ // market. `scanCandidatesFullStats` reports `.truncatedFrom` if this backstop is ever actually
  // hit, surfaced honestly (with live scan progress - see onProgress) rather than silently dropped.
  // Scanning thousands of profile pages takes real minutes; that's an accepted, communicated
  // tradeoff for actual completeness over speed, per this user's explicit preference.
- const MARKET_FULL_SCAN_MAX = 3000;
+ const MARKET_FULL_SCAN_MAX = 12500;
 
  // Fetches an arbitrary same-site page's HTML in the background (no navigation) so its DOM can be
  // parsed the same way as a real visit. Used by "Update All Data" to reach DriverProfile.asp/
