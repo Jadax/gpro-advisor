@@ -147,6 +147,29 @@ tiles ("Weather", "Strategy") lost their click-to-jump target since the sections
 longer exist - `wireDecisionBoard`'s handler already null-checks the target before calling
 `scrollIntoView`, so this degrades silently (tile just doesn't scroll) rather than erroring.
 
+**OA range buttons reverted, filter fields enlarged (2026-08-13, v6.12.2)**: the OA quick-select
+band buttons added the day before (v6.11.1) were removed again same-session per explicit user
+request - "we don't need this as I will put the numbers in the filters themselves." Separately, the
+filter bar's number inputs were called out as "tiny, needs to be more user friendly" - `mkFilterBar`
+now lays fields out in a `grid-template-columns:repeat(auto-fill,minmax(90px,1fr))` grid instead of a
+tightly-wrapped flex row of `min-width:52px` boxes, with larger font (14px vs 10px), padding, and
+label weight. `wireOaRangeBands`/`OA_RANGE_BANDS`/the `gpro-oabands-*` DOM hook were deleted entirely
+(verified via grep - zero remaining references) rather than left disabled - the underlying
+`oaMin`/`oaMax` filter fields and their cheap-filter/scan-narrowing behavior are unchanged, only the
+button convenience layer on top is gone.
+
+**Con=200 in a screenshot was a stale/leftover input value, not a code bug (2026-08-13)**: user
+reported 0 matches with the filter bar's OWN "pre-filled with..." summary text confirming
+concentration was correctly NOT among the autofilled fields - yet the Con input still showed 200.
+Since `filterDefaults` genuinely never sets `concentration` anymore (its target is qualitative, see
+the "Rookie/Amateur concentration has no trustworthy numeric floor" note above), the 200 could only
+have gotten into that input from something outside our render (typed earlier and left in place
+across an in-page Apply-Filters cycle, or restored by the browser's own form-history on reload) -
+`mkFilterBar` only ever sets a `value` attribute from `defaults`, never anything else. Worth
+remembering if a similar "field shows a value we never set" report comes in again: check the
+page's own rendered summary text first (it reflects the real current `filterDefaults`) before
+assuming a code regression.
+
 ## Market custom filter bar (2026-08-11, revised same day)
 
 `AvailDrivers.asp`/`AvailTechDirectors.asp` gate their own per-attribute filters (Con/Tal/Agr/Exp/
