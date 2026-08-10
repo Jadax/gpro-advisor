@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.11.0
+// @version 6.11.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -6305,6 +6305,29 @@
  return BASE_FILTER_FIELDS.concat(idKey === 'driId' ? DRIVER_ATTR_FILTER_FIELDS : TD_ATTR_FILTER_FIELDS);
  }
 
+ // GPRO's own OA range quick-select bands (screenshot-confirmed 2026-08-12 from the button bar atop
+ // AvailDrivers.asp/AvailTechDirectors.asp - "60-, 61-70, 71-77, 78-85, ... 201+"). Offered as
+ // clickable buttons above the oaMin/oaMax inputs (see mkFilterBar/wireOaRangeBands) so filtering by
+ // OA feels like GPRO's own Supporter-only UI, without needing Supporter status - clicking one just
+ // sets the two underlying inputs, which stay independently editable for a custom range.
+ const OA_RANGE_BANDS = [
+ { label: '60-', min: null, max: 60 },
+ { label: '61-70', min: 61, max: 70 },
+ { label: '71-77', min: 71, max: 77 },
+ { label: '78-85', min: 78, max: 85 },
+ { label: '86-100', min: 86, max: 100 },
+ { label: '101-110', min: 101, max: 110 },
+ { label: '111-125', min: 111, max: 125 },
+ { label: '126-135', min: 126, max: 135 },
+ { label: '136-150', min: 136, max: 150 },
+ { label: '151-160', min: 151, max: 160 },
+ { label: '161-170', min: 161, max: 170 },
+ { label: '171-180', min: 171, max: 180 },
+ { label: '181-190', min: 181, max: 190 },
+ { label: '191-200', min: 191, max: 200 },
+ { label: '201+', min: 201, max: null },
+ ];
+
  // Renders the filter bar's number inputs. Real bug fixed 2026-08-11: attribute fields used to be
  // disabled/unfillable until a SEPARATE "Scan Full Stats" button had already been clicked - "half
  // the filters can't even be filled out" was the exact complaint. Every field is now always
@@ -6320,6 +6343,7 @@
  function mkFilterBar(sectionId, idKey, defaults) {
  const fields = filterFieldsFor(idKey);
  const d = defaults || {};
+ const oaBandButtons = OA_RANGE_BANDS.map((b, i) => `<button type="button" data-oa-band="${i}" style="flex:1;min-width:38px;background:${PALETTE.bgCard};color:${PALETTE.text};border:1px solid ${PALETTE.border};border-radius:4px;padding:4px 2px;font-size:9px;cursor:pointer;">${esc(b.label)}</button>`).join('');
  const inputs = fields.map((f) => {
  const dv = d[f.key];
  const valueAttr = (dv != null && isFinite(dv)) ? ` value="${dv}"` : '';
@@ -6330,6 +6354,8 @@
  }).join('');
  return `<div id="gpro-filterbar-${sectionId}" style="margin:6px 0;padding:7px 8px;background:${PALETTE.bgCard};border:1px solid ${PALETTE.borderSoft};border-radius:8px;">
  <div style="font-size:9px;color:${PALETTE.textDim};margin-bottom:5px;">Custom filters (replaces GPRO's Supporter-only market filters - free here). Pre-filled with this league's sourced minimums where known - change any value freely, or clear it to drop that constraint. Con/Tal/etc trigger a one-time profile scan automatically the first time you apply one.</div>
+ <div style="font-size:8px;color:${PALETTE.textDim};margin-bottom:2px;">Overall range (click to set OA min/max below - same bands as GPRO's own market page)</div>
+ <div id="gpro-oabands-${sectionId}" style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:6px;">${oaBandButtons}</div>
  <div style="display:flex;flex-wrap:wrap;gap:6px;">${inputs}</div>
  <button id="gpro-filterapply-${sectionId}" style="width:100%;margin-top:6px;background:${PALETTE.accent};color:#fff;border:none;padding:5px;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600;">Apply Filters</button>
  <div id="gpro-filterstatus-${sectionId}" style="font-size:9px;color:${PALETTE.textDim};margin-top:4px;"></div>
@@ -6751,6 +6777,33 @@
  }
  }
 
+ // Wires the OA range quick-select buttons (see OA_RANGE_BANDS/mkFilterBar) - clicking one sets the
+ // oaMin/oaMax inputs to that band's bounds and highlights the active button; the inputs stay
+ // independently editable afterward for a custom range. Highlights whichever band (if any) matches
+ // the CURRENTLY-set oaMin/oaMax on initial render, so the sourced default is visually obvious.
+ function wireOaRangeBands(sectionId) {
+ const wrap = document.getElementById(`gpro-oabands-${sectionId}`);
+ const bar = document.getElementById(`gpro-filterbar-${sectionId}`);
+ if (!wrap || !bar) return;
+ const oaMinInput = bar.querySelector('[data-filter-field="oaMin"]');
+ const oaMaxInput = bar.querySelector('[data-filter-field="oaMax"]');
+ const buttons = Array.from(wrap.querySelectorAll('[data-oa-band]'));
+ const highlight = (activeBtn) => buttons.forEach((b) => {
+ b.style.background = (b === activeBtn) ? PALETTE.accent : PALETTE.bgCard;
+ b.style.color = (b === activeBtn) ? '#fff' : PALETTE.text;
+ });
+ buttons.forEach((b) => {
+ const band = OA_RANGE_BANDS[parseInt(b.getAttribute('data-oa-band'))];
+ if (!band) return;
+ if (oaMinInput && oaMaxInput && String(oaMinInput.value || '') === String(band.min ?? '') && String(oaMaxInput.value || '') === String(band.max ?? '')) highlight(b);
+ b.addEventListener('click', () => {
+ if (oaMinInput) oaMinInput.value = band.min ?? '';
+ if (oaMaxInput) oaMaxInput.value = band.max ?? '';
+ highlight(b);
+ });
+ });
+ }
+
  // Wires both entry points for one market section (drivers or TDs) after body(h) has rendered it:
  // the standalone "Scan Full Stats & Filter" button (scans immediately, then applies whatever's
  // currently in the filter bar - pre-filled with sourced minimums, but respects any edits already
@@ -6765,6 +6818,7 @@
  // sourced targets (filter bar starts empty) skip auto-start, since there'd be nothing to filter by
  // and it would just burn requests scanning the entire market unfiltered.
  function wireScanFullStatsButton(sectionId, idKey, rows, priorityEntries, league, autoStart) {
+ wireOaRangeBands(sectionId);
  const btn = document.getElementById(`gpro-scan-${sectionId}`);
  const container = document.getElementById(`gpro-shortlist-${sectionId}`);
  // Filter state: starts as page 1 + stale cache only (NOT the full market - see

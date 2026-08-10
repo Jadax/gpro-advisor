@@ -280,6 +280,19 @@ into a handful of pages - real, meaningful savings, not just "wait for the click
 `ensureFullMarketFetched`), never the original `rows` closure param, which after this change is only
 ever the small page-1-plus-cache snapshot from page load.
 
+**OA range quick-select buttons (2026-08-12, fourteenth pass, v6.11.1)**: per explicit user request
++ screenshot of GPRO's own OA band bar ("60-, 61-70, 71-77, 78-85, 86-100, ... 201+", visible atop
+`AvailDrivers.asp`/`AvailTechDirectors.asp`) - added `OA_RANGE_BANDS` (the same 15 bands) rendered as
+clickable buttons above the `oaMin`/`oaMax` inputs in `mkFilterBar`, wired via new
+`wireOaRangeBands(sectionId)` (called from `wireScanFullStatsButton`). Clicking a band just writes
+into the same two underlying inputs (`data-filter-field="oaMin"`/`"oaMax"`) that already drive
+filtering - it's a convenience UI layer, not a new filtering mechanism, so `cheapFilteredRows`/
+`applyCustomFilters`/`ensureFullMarketFetched`'s OA-descending crawl cutoff all keep working
+unchanged. The active band (if the current oaMin/oaMax exactly match one) is highlighted on render;
+the sourced per-league default (e.g. Rookie 75-85) usually won't match any single band exactly, so
+no highlight is the normal/expected state there - the inputs are still correctly pre-filled either
+way.
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.
