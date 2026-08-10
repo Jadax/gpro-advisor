@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.8.3
+// @version 6.9.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -28,7 +28,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.4.0
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.5.0
 // @run-at document-idle
 // ==/UserScript==
 
@@ -6541,7 +6541,28 @@
   // applyCustomFilters / filterAndRenderMarket, pre-filled from these same sourced minimums but
   // fully editable) - rows arriving here have already been filtered, so this just ranks them.
   function mkFullStatsTable(rows, idKey, priorityEntries, league) {
-  let h = mkScoredTable(rows, idKey, priorityEntries, league);
+  // Top Pick callout (2026-08-12, explicit user request: "is there a way to show the top driver
+  // sorted by priority... think of the logic here, from the game rules, top user ratings etc").
+  // Uses the same recruitmentScore as the table below (weighted sum of real scraped attributes by
+  // this league's priority order, with age/weight penalties modeled on pitwall's
+  // RecruitmentService) - not a separate heuristic, just surfaced more prominently so the single
+  // best-fitting scanned candidate doesn't require scanning down a table to find.
+  const scored = rows.map(r => ({ row: r, score: recruitmentScore(r, priorityEntries, league) }))
+  .filter(s => s.score != null)
+  .sort((a, b) => b.score - a.score);
+  let h = '';
+  if (scored.length) {
+  const top = scored[0];
+  const r = top.row;
+  const nameCell = (idKey === 'driId' && r.driId)
+  ? `<a href="DriverProfile.asp?ID=${r.driId}" style="color:#fff;text-decoration:underline;">${esc(r.name)}</a>`
+  : esc(r.name);
+  h += `<div style="background:linear-gradient(135deg,#10b981,#059669);border-radius:8px;padding:8px 10px;margin-bottom:8px;">
+  <div style="font-size:9px;color:rgba(255,255,255,0.85);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">🏆 Top Pick (best Fit Score of ${scored.length} scanned with real stats)</div>
+  <div style="font-size:13px;color:#fff;font-weight:700;margin-top:2px;">${nameCell} - OA ${r.OA}, ${esc(r.salary || '')}, age ${r.age ?? '?'} - Fit ${top.score}</div>
+  </div>`;
+  }
+  h += mkScoredTable(rows, idKey, priorityEntries, league);
   h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Match Score = weighted sum of each candidate's real attributes (scraped from their profile page), weighted by this league's priority order. Relative ranking only, not a percentage or verified formula. Filtering (including any minimums) is controlled by the filter bar above.</div>`;
   return h;
   }

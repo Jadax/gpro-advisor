@@ -683,6 +683,18 @@ var GPRO_DATA = {
  // drivers) - which is exactly why the advisor shortlisted nobody. Values below follow real
  // per-band medians; only the top-priority floor gates the shortlist split (per GPRO's own
  // Newbie Guide, "one or two skills will suffice", never every attribute at once).
+ //
+ // REAL BUG found 2026-08-12: that recalibration only changed concentration's STRING notation
+ // ('200+' -> '200') and never actually fixed the underlying number - it's the exact same
+ // documented-unreachable threshold as before. Combined with the later "ALL attributes must
+ // clear at once" policy (D.driverSelection... every numeric floor gates, see mkFullStatsTable's
+ // history in CLAUDE.md), a single always-failing floor collapsed a ~4600-candidate Rookie
+ // market down to ~3 matches. No corrected numeric median was ever actually sourced for
+ // concentration specifically (only the qualitative "0 of 100 sampled max-OA had 200+" finding),
+ // so rather than invent a replacement number, it's qualitative now - same "as high as
+ // affordable" treatment already used for Pro/Master/Elite where no trustworthy number exists.
+ // Talent/experience/techInsight/aggressiveness/stamina below DO carry real median-derived
+ // numeric floors from the same scrape and still gate the shortlist.
   Rookie: {
   // Rookie: Car resets each season. Focus on cheap, balanced driver.
   // Priority: Concentration > Talent > Experience > Tech Insight
@@ -690,7 +702,7 @@ var GPRO_DATA = {
   maxSalary: 2000000, // per GPRO Newbie Guide: don't pay much over $2M/race in Rookie
   maxAge: 36,
   attributes: {
-  concentration: { target: '200', priority: 1, note: 'Consistency + error reduction. Train toward 200 via Yoga' },
+  concentration: { target: 'as high as affordable', priority: 1, note: 'Consistency + error reduction. No trustworthy numeric floor sourced (the old "200+" was empirically unreachable - 0 of 100 sampled max-OA Rookie drivers had it). Train toward 200 via Yoga once owned.' },
   talent: { target: '60-150', priority: 2, note: 'Raw speed; untrainable. Naturally 200+ in most of the market - treat <150 as a red flag' },
   experience: { target: '90-150', priority: 3, note: 'Grows +1/race; affects strategy and tyre management' },
   techInsight: { target: '80-150', priority: 4, note: 'Setup precision and fuel consumption. Train toward 125 via Technical training' },
@@ -708,7 +720,7 @@ var GPRO_DATA = {
   maxSalary: 2500000,
   maxAge: 37,
   attributes: {
-  concentration: { target: '200', priority: 1, note: 'Consistency + error reduction. Train toward 200 via Yoga' },
+  concentration: { target: 'as high as affordable', priority: 1, note: 'Consistency + error reduction. No trustworthy numeric floor sourced (only ~20% of max-OA Amateur drivers cleared the old "200+"). Train toward 200 via Yoga once owned.' },
   talent: { target: '60-150', priority: 2, note: 'Raw speed, untrainable; market median ~205, prefer high' },
   experience: { target: '90-150', priority: 3, note: 'Grows +1/race; strategy, tyre management, setup precision' },
   techInsight: { target: '80-150', priority: 4, note: 'Setup precision, margin of acceptance, fuel. Train toward 125 via Technical training' },
