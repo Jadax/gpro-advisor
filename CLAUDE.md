@@ -180,6 +180,26 @@ trustworthy numeric floor" note above - the old 200 was empirically shown to cle
 that history, not a reintroduction of the earlier bug. Same editable/clearable field as everything
 else in the bar. Don't "fix" this back to unset without the user asking again - it's intentional.
 
+**Stale-candidate bug: signed drivers kept reappearing in results (real bug fixed 2026-08-13,
+v6.13.0)**: user report - "the driver market advisor keeps scanning and recommending drivers that
+are already signed by someone else." Root cause: `mergeMarketRows` is a pure additive union by ID
+(rows missing from the latest page are KEPT, never dropped - by design, so paging through a market
+doesn't lose earlier pages). That's correct for accumulating PARTIAL views across page visits, but
+`ensureFullMarketFetched` was using the same additive merge for a COMPLETED full-market crawl -
+merging fresh results into whatever was already in `state.rows` (which started as page 1 + long-
+lived stale cache, see `renderMarketPage`). A driver signed by another manager since the last cache
+write never got removed, so they kept surfacing in every subsequent scan indefinitely. Fixed:
+`ensureFullMarketFetched` now takes an explicit `freshPage1Rows` param (the live DOM read of page 1,
+threaded through `wireScanFullStatsButton`'s new `page1Rows` arg → `state.page1Rows`) and REPLACES
+`state.rows` with `mergeMarketRows(page1Rows, restRows, idKey)` - both freshly fetched in the same
+crawl - rather than merging into old state. When there's no live page 1 available (the menu overview
+command, not physically on the market page), it now fetches page 1 for real too instead of silently
+relying on stale cache for that page. The confirmed-fresh result also overwrites the stale cache
+(`setStaleData`) so a later page load's partial pre-scan view stops perpetuating departed candidates
+either. General lesson: `mergeMarketRows`'s "never remove" semantics are only safe for genuinely
+partial/incremental views - once a fetch is known to be a complete, authoritative snapshot, it must
+replace, not merge.
+
 ## Market custom filter bar (2026-08-11, revised same day)
 
 `AvailDrivers.asp`/`AvailTechDirectors.asp` gate their own per-attribute filters (Con/Tal/Agr/Exp/

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.12.3
+// @version 6.13.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -5294,9 +5294,9 @@
  // until Apply Filters / Scan is clicked - see ensureFullMarketFetched, called from inside
  // applyFilterBar/runScanAndFilter using type='drivers'/'tds' (sectionId already equals type).
  if (type === 'drivers' && sel) {
- wireScanFullStatsButton('drivers', 'driId', allRows, Object.entries(sel.attributes), league, false);
+ wireScanFullStatsButton('drivers', 'driId', allRows, Object.entries(sel.attributes), league, false, domRows);
  } else if (type === 'tds' && tdSel) {
- wireScanFullStatsButton('tds', 'tdId', allRows, Object.entries(tdSel.skills), league, false);
+ wireScanFullStatsButton('tds', 'tdId', allRows, Object.entries(tdSel.skills), league, false, domRows);
  }
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad'));
@@ -6624,23 +6624,47 @@
  return enriched;
  }
 
- // Fetches the rest of the market (beyond page 1 + cache) exactly once per section, bounded by the
- // filter bar's CURRENT OA-min value (see fetchRemainingMarketPages's oaMinCutoff). Called lazily
- // from both scan entry points below instead of eagerly on page load (2026-08-12, explicit user
- // request: "I thought we said it'd be better and more efficient for me to choose the filters first
- // and then run the search?"). `sectionId` doubles as the market type ('drivers'/'tds') that
+ // Fetches the rest of the market (beyond page 1) exactly once per section, bounded by the filter
+ // bar's CURRENT OA-min value (see fetchRemainingMarketPages's oaMinCutoff). Called lazily from
+ // both scan entry points below instead of eagerly on page load (2026-08-12, explicit user request:
+ // "I thought we said it'd be better and more efficient for me to choose the filters first and then
+ // run the search?"). `sectionId` doubles as the market type ('drivers'/'tds') that
  // fetchRemainingMarketPages expects - they're the same string everywhere in this file.
- async function ensureFullMarketFetched(sectionId, idKey, state, statusEl) {
+ // `freshPage1Rows` (added 2026-08-13): pass the live DOM read of page 1 when actually on
+ // AvailDrivers.asp/AvailTechDirectors.asp; omit it (menu overview command, not physically on that
+ // page) and this fetches page 1 for real too, so both entry points get true full coverage.
+ //
+ // Real bug fixed 2026-08-13: this used to merge the freshly-crawled rows INTO whatever was already
+ // in `state.rows` - which started as page 1 + long-lived stale cache (see renderMarketPage), so a
+ // driver who'd since been signed by another manager and dropped off the real market stayed in our
+ // results forever (mergeMarketRows only ever adds by ID, never removes). Reported live: "the driver
+ // market advisor keeps scanning and recommending drivers that are already signed by someone else."
+ // A completed full crawl is authoritative - it now REPLACES state.rows outright (page1 ∪ restRows,
+ // both freshly fetched just now), and also overwrites the stale cache with this confirmed-current
+ // set so a later page load's partial pre-scan view stops perpetuating departed candidates too.
+ async function ensureFullMarketFetched(sectionId, idKey, state, statusEl, freshPage1Rows) {
  if (state.hasFetchedFullMarket) return;
  const bar = document.getElementById(`gpro-filterbar-${sectionId}`);
  const oaMinInput = bar && bar.querySelector('[data-filter-field="oaMin"]');
  const oaMinCutoff = (oaMinInput && oaMinInput.value !== '') ? parseFloat(oaMinInput.value) : null;
  if (statusEl) statusEl.textContent = '⏳ Fetching market pages...';
+ let page1Rows = freshPage1Rows;
+ if (!page1Rows) {
+ const basePath = sectionId === 'drivers' ? 'AvailDrivers.asp' : 'AvailTechDirectors.asp';
+ try {
+ const html = await fetchPageHTML(`${basePath}?Page=1`);
+ const doc = new DOMParser().parseFromString(html, 'text/html');
+ page1Rows = parseAvailListDOM(doc, idKey) || [];
+ } catch (e) { logError('page 1 fetch failed:', e.message); page1Rows = []; }
+ }
  const restRows = await fetchRemainingMarketPages(sectionId, idKey, (pagesFetched, candidatesSoFar) => {
  if (statusEl) statusEl.textContent = `⏳ Fetching market pages: page ${pagesFetched}, ${candidatesSoFar} candidates so far${oaMinCutoff != null ? ` (stops once OA drops below ${oaMinCutoff})` : ''}...`;
  }, oaMinCutoff);
- state.rows = mergeMarketRows(state.rows, restRows, idKey);
+ state.rows = mergeMarketRows(page1Rows, restRows, idKey);
  state.hasFetchedFullMarket = true;
+ const marketEndpoint = sectionId === 'drivers' ? '/AvailDrivers' : '/AvailTDs';
+ const marketKey = sectionId === 'drivers' ? 'drivers' : 'tds';
+ setStaleData(marketEndpoint, { [marketKey]: state.rows });
  }
 
  // Reads the filter bar's CURRENT values (whatever the user has typed/edited, pre-filled from
@@ -6672,7 +6696,7 @@
  if (!bar || !container) return;
  if (applyBtn) applyBtn.disabled = true;
  try {
- await ensureFullMarketFetched(sectionId, idKey, state, statusEl);
+ await ensureFullMarketFetched(sectionId, idKey, state, statusEl, state.page1Rows);
  } catch (e) {
  if (statusEl) statusEl.textContent = `Market fetch failed: ${e.message}`;
  if (applyBtn) applyBtn.disabled = false;
@@ -6703,7 +6727,7 @@
  if (btn) btn.disabled = true;
  const statusEl = document.getElementById(`gpro-scan-status-${sectionId}`);
  try {
- await ensureFullMarketFetched(sectionId, idKey, state, statusEl);
+ await ensureFullMarketFetched(sectionId, idKey, state, statusEl, state.page1Rows);
  const narrowed = cheapFilteredRows(sectionId, idKey, state.rows);
  await runMarketScan(idKey, narrowed, container, state, priorityEntries, league, statusEl);
  filterAndRenderMarket(sectionId, idKey, container, state, priorityEntries, league);
@@ -6727,7 +6751,7 @@
  // market is already narrowed to real, scanned candidates matching those defaults. Leagues with no
  // sourced targets (filter bar starts empty) skip auto-start, since there'd be nothing to filter by
  // and it would just burn requests scanning the entire market unfiltered.
- function wireScanFullStatsButton(sectionId, idKey, rows, priorityEntries, league, autoStart) {
+ function wireScanFullStatsButton(sectionId, idKey, rows, priorityEntries, league, autoStart, page1Rows) {
  const btn = document.getElementById(`gpro-scan-${sectionId}`);
  const container = document.getElementById(`gpro-shortlist-${sectionId}`);
  // Filter state: starts as page 1 + stale cache only (NOT the full market - see
@@ -6735,8 +6759,11 @@
  // whatever the last scan returned once one runs (attribute filters can only ever cover the
  // scanned pool). `hasScanned` decides which renderer (mkMarketTable vs mkFullStatsTable) the
  // filtered view re-uses. Shared between the standalone scan button and the filter bar's Apply
- // button below, so whichever runs first benefits the other.
- const state = { rows, hasScanned: false, hasFetchedFullMarket: false };
+ // button below, so whichever runs first benefits the other. `page1Rows` (the live DOM read of
+ // page 1, when actually on the market page) is kept separately so ensureFullMarketFetched can
+ // REPLACE `rows` with a fully-fresh set once it runs, instead of merging fresh data into
+ // whatever stale cache `rows` may have started with (see that function's bug-fix comment).
+ const state = { rows, hasScanned: false, hasFetchedFullMarket: false, page1Rows };
  const applyBtn = document.getElementById(`gpro-filterapply-${sectionId}`);
  if (applyBtn) applyBtn.addEventListener('click', () => applyFilterBar(sectionId, idKey, rows, container, state, priorityEntries, league));
  // Click listener wired regardless of autoStart, so a failed auto-scan's "Retry scan" button (see
