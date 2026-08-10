@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.7.0
+// @version 6.7.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -6198,21 +6198,20 @@
  return BASE_FILTER_FIELDS.concat(idKey === 'driId' ? DRIVER_ATTR_FILTER_FIELDS : TD_ATTR_FILTER_FIELDS);
  }
 
- // Renders the filter bar's number inputs. Attribute fields are shown greyed-out with a note
- // until a Full Stats scan has run (they're real values from each candidate's own profile page,
- // not something derivable from the market list alone) - Age/Salary/Offers work immediately since
- // they're already on the base market row.
- function mkFilterBar(sectionId, idKey, hasFullStats) {
+ // Renders the filter bar's number inputs. Real bug fixed 2026-08-11: attribute fields used to be
+ // disabled/unfillable until a SEPARATE "Scan Full Stats" button had already been clicked - "half
+ // the filters can't even be filled out" was the exact complaint. Every field is now always
+ // fillable; Apply Filters (see applyFilterBar below) scans automatically the first time it's
+ // needed, so filling in e.g. a Concentration minimum and clicking Apply just works in one step
+ // instead of requiring a separate scan-then-filter sequence.
+ function mkFilterBar(sectionId, idKey) {
  const fields = filterFieldsFor(idKey);
- const inputs = fields.map((f) => {
- const disabled = f.needsScan && !hasFullStats;
- return `<div style="display:flex;flex-direction:column;gap:1px;min-width:52px;">
- <label style="font-size:8px;color:${disabled ? PALETTE.textMuted : PALETTE.textDim};">${esc(f.label)} ${f.dir === 'max' ? '≤' : '≥'}</label>
- <input type="number" data-filter-field="${f.key}" ${disabled ? 'disabled' : ''} placeholder="any" style="width:100%;background:${disabled ? PALETTE.borderSoft : PALETTE.bgCard};color:${PALETTE.text};border:1px solid ${PALETTE.border};border-radius:4px;padding:2px 4px;font-size:10px;">
- </div>`;
- }).join('');
+ const inputs = fields.map((f) => `<div style="display:flex;flex-direction:column;gap:1px;min-width:52px;">
+ <label style="font-size:8px;color:${PALETTE.textDim};">${esc(f.label)} ${f.dir === 'max' ? '≤' : '≥'}</label>
+ <input type="number" data-filter-field="${f.key}" placeholder="any" style="width:100%;background:${PALETTE.bgCard};color:${PALETTE.text};border:1px solid ${PALETTE.border};border-radius:4px;padding:2px 4px;font-size:10px;">
+ </div>`).join('');
  return `<div id="gpro-filterbar-${sectionId}" style="margin:6px 0;padding:7px 8px;background:${PALETTE.bgCard};border:1px solid ${PALETTE.borderSoft};border-radius:8px;">
- <div style="font-size:9px;color:${PALETTE.textDim};margin-bottom:5px;">Custom filters (replaces GPRO's Supporter-only market filters - free here)${hasFullStats ? '' : ` - <span style="color:${PALETTE.warm};">Con/Tal/etc need a Full Stats scan first</span>`}</div>
+ <div style="font-size:9px;color:${PALETTE.textDim};margin-bottom:5px;">Custom filters (replaces GPRO's Supporter-only market filters - free here). Con/Tal/etc trigger a one-time profile scan automatically the first time you use one.</div>
  <div style="display:flex;flex-wrap:wrap;gap:6px;">${inputs}</div>
  <button id="gpro-filterapply-${sectionId}" style="width:100%;margin-top:6px;background:${PALETTE.accent};color:#fff;border:none;padding:5px;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600;">Apply Filters</button>
  <div id="gpro-filterstatus-${sectionId}" style="font-size:9px;color:${PALETTE.textDim};margin-top:4px;"></div>
@@ -6288,7 +6287,7 @@
  }
  }
  h += `<div style="font-size:9px;color:#9ca3af;margin-bottom:6px;">${floorNote}</div>`;
- h += mkFilterBar(sectionId, idKey, false);
+ h += mkFilterBar(sectionId, idKey);
  h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(capped, idKey, targetOA)}</div>`;
  h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (${rows.length > capped.length ? `top ${capped.length} of ${rows.length} listed, by OA` : `all ${capped.length} listed`} - fetches each candidate's profile page)</button>`;
  h += `<div id="gpro-scan-status-${sectionId}" style="font-size:9px;color:#6b7280;margin-top:4px;"></div>`;
@@ -6451,58 +6450,75 @@
   return h;
   }
 
- // Wires the "Scan Full Stats" button for one market section (drivers or TDs) after body(h) has
- // rendered it. rows = the FULL row list shown (mkShortlistSection/scanCandidatesFullStats apply
- // their own 30-candidate cap); priorityEntries = Object.entries of
- // D.driverSelection[league].attributes or D.tdSelection[league].skills.
- // Reads the filter bar's current input values and re-renders the shortlist container with
- // whichever rows (from `state`) pass them. Shared by the initial pre-scan wiring and by the
- // re-wiring that happens after a scan replaces the filter bar's DOM node (attribute inputs go
- // from disabled to enabled at that point, so the bar itself is rebuilt, not just its listener).
- function applyFilterBar(sectionId, idKey, container, state, priorityEntries, league) {
+ // Runs the real profile scan (shared by both entry points below) and updates `state`/`container`
+ // in place. Cheap to call more than once - scanCandidatesFullStats caches per candidate ID, so a
+ // second scan (e.g. triggered by Apply Filters after the standalone button already ran one) just
+ // reads the cache instead of re-fetching.
+ async function runMarketScan(idKey, rows, container, state, priorityEntries, league, statusEl) {
+ if (statusEl) statusEl.textContent = '⏳ Fetching candidate profiles...';
+ const enriched = await scanCandidatesFullStats(rows, idKey);
+ state.rows = enriched;
+ state.hasScanned = true;
+ const gotStats = enriched.filter(r => r.fullStats).length;
+ if (statusEl) statusEl.textContent = `Scanned ${enriched.length} candidates - got real stats for ${gotStats}.` + (gotStats < enriched.length ? ' Some profile pages could not be read (parser may need verifying against real markup).' : '');
+ return enriched;
+ }
+
+ // Real bug fixed 2026-08-11: attribute filters (Con/Tal/etc) used to only work AFTER a separate
+ // "Scan Full Stats" button had already been clicked - "half the filters can't even be filled out"
+ // was the exact complaint, since those inputs were disabled until then. Apply Filters is now
+ // self-sufficient: if the user filled in any field that needs real scraped stats and no scan has
+ // run yet, it scans automatically first, then filters - one button, one step, regardless of which
+ // fields were used.
+ async function applyFilterBar(sectionId, idKey, rows, container, state, priorityEntries, league) {
  const bar = document.getElementById(`gpro-filterbar-${sectionId}`);
+ const applyBtn = document.getElementById(`gpro-filterapply-${sectionId}`);
+ const statusEl = document.getElementById(`gpro-filterstatus-${sectionId}`);
  if (!bar || !container) return;
  const values = {};
  bar.querySelectorAll('[data-filter-field]').forEach((inp) => { values[inp.getAttribute('data-filter-field')] = inp.value; });
+ const fields = filterFieldsFor(idKey);
+ const needsScanNow = !state.hasScanned && fields.some((f) => f.needsScan && values[f.key] !== undefined && values[f.key] !== '');
+ if (needsScanNow) {
+ if (applyBtn) applyBtn.disabled = true;
+ try {
+ await runMarketScan(idKey, rows, container, state, priorityEntries, league, statusEl);
+ } catch (e) {
+ if (statusEl) statusEl.textContent = `Scan failed: ${e.message}`;
+ if (applyBtn) applyBtn.disabled = false;
+ return;
+ }
+ if (applyBtn) applyBtn.disabled = false;
+ }
  const filtered = applyCustomFilters(state.rows, idKey, values);
  container.innerHTML = state.hasScanned ? mkFullStatsTable(filtered, idKey, priorityEntries, league) : mkMarketTable(filtered, idKey, null);
- const statusEl = document.getElementById(`gpro-filterstatus-${sectionId}`);
  if (statusEl) statusEl.textContent = `Showing ${filtered.length} of ${state.rows.length}${state.hasScanned ? ' scanned' : ' listed'} candidates matching your filters.`;
  }
 
+ // Wires both entry points for one market section (drivers or TDs) after body(h) has rendered it:
+ // the standalone "Scan Full Stats & Filter" button (scans immediately, no filter values needed)
+ // and the filter bar's Apply button (scans only if a filled-in field needs it - see
+ // applyFilterBar). rows = the FULL row list shown; priorityEntries = Object.entries of
+ // D.driverSelection[league].attributes or D.tdSelection[league].skills.
  function wireScanFullStatsButton(sectionId, idKey, rows, priorityEntries, league) {
  const btn = document.getElementById(`gpro-scan-${sectionId}`);
  const container = document.getElementById(`gpro-shortlist-${sectionId}`);
  // Filter state: starts as the FULL unfiltered row list (Age/Salary/Offers filters need no scan
  // and can therefore reach beyond the OA-capped subset), then narrows to whatever the last scan
  // returned once one runs (attribute filters can only ever cover the scanned pool). `hasScanned`
- // decides which renderer (mkMarketTable vs mkFullStatsTable) the filtered view re-uses.
+ // decides which renderer (mkMarketTable vs mkFullStatsTable) the filtered view re-uses. Shared
+ // between the standalone scan button and the filter bar's Apply button below, so whichever runs
+ // a scan first benefits the other.
  const state = { rows, hasScanned: false };
  const applyBtn = document.getElementById(`gpro-filterapply-${sectionId}`);
- if (applyBtn) applyBtn.addEventListener('click', () => applyFilterBar(sectionId, idKey, container, state, priorityEntries, league));
+ if (applyBtn) applyBtn.addEventListener('click', () => applyFilterBar(sectionId, idKey, rows, container, state, priorityEntries, league));
  if (!btn) return;
  btn.addEventListener('click', async () => {
  btn.disabled = true;
- btn.textContent = '⏳ Fetching candidate profiles...';
  const statusEl = document.getElementById(`gpro-scan-status-${sectionId}`);
  try {
- const enriched = await scanCandidatesFullStats(rows, idKey);
- state.rows = enriched;
- state.hasScanned = true;
+ const enriched = await runMarketScan(idKey, rows, container, state, priorityEntries, league, statusEl);
  if (container) container.innerHTML = mkFullStatsTable(enriched, idKey, priorityEntries, league);
- const gotStats = enriched.filter(r => r.fullStats).length;
- if (statusEl) statusEl.textContent = `Scanned ${enriched.length} candidates - got real stats for ${gotStats}.` + (gotStats < enriched.length ? ' Some profile pages could not be read (parser may need verifying against real markup).' : '');
- // Rebuild the filter bar with attribute fields now enabled (they were disabled/greyed until
- // real scraped stats existed to filter against), and re-wire it against the same shared state.
- const barWrap = document.getElementById(`gpro-filterbar-${sectionId}`);
- if (barWrap && barWrap.parentElement) {
- const tmp = document.createElement('div');
- tmp.innerHTML = mkFilterBar(sectionId, idKey, true);
- const newBar = tmp.firstElementChild;
- barWrap.replaceWith(newBar);
- const newApplyBtn = document.getElementById(`gpro-filterapply-${sectionId}`);
- if (newApplyBtn) newApplyBtn.addEventListener('click', () => applyFilterBar(sectionId, idKey, container, state, priorityEntries, league));
- }
  btn.remove();
  } catch (e) {
  if (statusEl) statusEl.textContent = `Scan failed: ${e.message}`;
