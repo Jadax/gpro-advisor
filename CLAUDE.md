@@ -124,6 +124,16 @@ the ONLY place filtering happens, always reading the filter bar's current on-scr
 add a new sourced numeric floor anywhere in this flow, it must reach the user through the filter
 bar's `defaults`, not as a separate enforced check elsewhere.
 
+**Direction-aware autofill (2026-08-11, third pass)**: the first autofill pass read every sourced
+target with `parseMinFromTarget` regardless of the field's `dir`, which silently dropped
+`aggressiveness`/`stamina` (Rookie/Amateur target `'0-49'`/`'0-45'`, dir:`'max'`/"keep low") from
+the filter bar entirely - their real, meaningful number is the range's UPPER bound, and reading it
+as a lower bound produces a 0-floor that gets filtered out as a no-op. Fixed by `parseMaxFromTarget`
+(reads the trailing number) used for `dir:'max'` fields, `parseMinFromTarget` (leading number) for
+`dir:'min'` fields - see the `floors` computation in `mkShortlistSection`. Charisma/motivation
+(`'0-250'`, dir:`'min'`) correctly stay unfilled either way - that range spans the entire attribute
+scale, i.e. genuinely no sourced constraint, not a bug.
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.

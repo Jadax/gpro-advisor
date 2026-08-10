@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.7.2
+// @version 6.7.3
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -6159,6 +6159,17 @@
  return m ? parseInt(m[1]) : null;
  }
 
+ // Extracts a numeric ceiling from a target string like '0-49' -> 49, '150-200' -> 200,
+ // '200' -> 200. For "keep low" attributes (aggressiveness, stamina - dir:'max' fields) the
+ // meaningful sourced number is the UPPER bound of the range, not the lower one (which is usually
+ // just 0 and would be a no-op). '200+' has no upper bound and returns null, same as qualitative
+ // strings.
+ function parseMaxFromTarget(targetStr) {
+ if (typeof targetStr !== 'string') return null;
+ const m = targetStr.match(/(\d+)\s*$/);
+ return m ? parseInt(m[1]) : null;
+ }
+
  // ============================================================
  // CUSTOM FILTER BAR (2026-08-11, explicit user request) - GPRO gates its own per-attribute
  // market filters (Con/Tal/Agr/Exp/TechI/Sta/Cha/Mot/Rep/Wei/Age/Min salary/Offers, visible on
@@ -6267,13 +6278,23 @@
   // lists pages OA-descending, but merged rows arrive in page-visit order, which can interleave.
   const sortedByOA = [...rows].sort((a, b) => (parseFloat(b.OA) || 0) - (parseFloat(a.OA) || 0));
   const capped = sortedByOA.slice(0, MARKET_SCAN_MAX);
-  const floors = (priorityEntries || []).map(([key, info]) => [key, info.priority, parseMinFromTarget(info.target)]).filter(([, , min]) => min != null && min > 0);
-  // Per explicit user request (2026-08-10): every attribute with a sourced numeric minimum must
-  // clear it - not just a single top-priority one. "0-xx" keep-low targets parse to a 0 floor and
-  // impose no lower bound, so they never block. See mkFullStatsTable.
+  // Direction-aware sourced defaults (fixed 2026-08-11): 'min' fields (concentration, talent, exp,
+  // techInsight...) read the LOWER bound of the target range ('90-150' -> 90); "keep low" fields
+  // (aggressiveness, stamina - dir:'max') read the UPPER bound instead ('0-49' -> 49), since their
+  // lower bound is always a meaningless 0. Reading every field the same way (as the old code did)
+  // silently dropped aggressiveness/stamina from the filter bar entirely, since their 0-floor got
+  // filtered out as a no-op. Charisma/motivation ('0-250', dir:'min') correctly stay unfilled -
+  // that range spans the whole attribute scale, i.e. genuinely no constraint.
+  const attrFieldDefs = filterFieldsFor(idKey);
+  const floors = (priorityEntries || []).map(([key, info]) => {
+  const fieldDef = attrFieldDefs.find(f => f.key === key);
+  if (!fieldDef) return null;
+  const val = fieldDef.dir === 'max' ? parseMaxFromTarget(info.target) : parseMinFromTarget(info.target);
+  return (val != null && val > 0) ? [key, info.priority, val, fieldDef.dir] : null;
+  }).filter(Boolean);
   const floorNote = floors.length
-  ? `Filter bar below is pre-filled with this league's sourced minimums (${floors.map(([k, , m]) => `${k} ≥ ${m}`).join(', ')}) - edit any value freely, or clear it to drop that constraint.`
-  : `No numeric minimum thresholds sourced for ${cfgLabel} at ${league} league yet - filter bar below starts empty; results rank by Match Score once you scan.`;
+  ? `Filter bar below is pre-filled with this league's sourced targets (${floors.map(([k, , m, dir]) => `${k} ${dir === 'max' ? '≤' : '≥'} ${m}`).join(', ')}) - edit any value freely, or clear it to drop that constraint.`
+  : `No numeric targets sourced for ${cfgLabel} at ${league} league yet - filter bar below starts empty; results rank by Match Score once you scan.`;
  let h = `<div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">Target OA ${targetOA.min}-${targetOA.max} for ${league}${cash != null ? `, cash on hand $${cash.toLocaleString()}` : ' (cash balance unknown - visit UpdateCar.asp once to see it here)'}</div>`;
  // League salary/age guidance (from D.driverSelection/tdSelection) - flags rows the manager
  // likely can't sustain, matching competitor tools' salary/age filters without needing supporters.
