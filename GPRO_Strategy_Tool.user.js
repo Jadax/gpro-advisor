@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.8.2
+// @version 6.8.3
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1424,16 +1424,19 @@
  // Pre-scan preview table cap only (mkShortlistSection's initial mkMarketTable, before any profile
  // fetch has happened) - purely a display truncation, not a filtering decision.
  const MARKET_SCAN_MAX = 60;
- // Real full-stat scan safety cap (2026-08-11, v6.8.1): since whole-market auto-pagination (v6.8.0)
- // a "market" can now be 700+ candidates, so scanning must be narrowed by the CHEAP filter-bar
- // fields (Age/Salary/Offers - no profile fetch needed) BEFORE any expensive per-candidate scan
- // runs (see cheapFilteredRows) - that's the real reduction. This is only the hard backstop for
- // whatever's left after that narrowing, so scanning never fetches an unbounded number of profile
- // pages if the user clears every cheap filter on a huge market. Raised from 60 (2026-08-11,
- // explicit user request: "I want the advisor to automatically filter all the drivers... giving me
- // all drivers that fulfil the filter requirements" - a 60-cap silently dropped valid candidates
- // even after cheap pre-filtering).
- const MARKET_FULL_SCAN_MAX = 300;
+ // Real full-stat scan safety cap (2026-08-11, v6.8.1, raised again same day in v6.8.3): since
+ // whole-market auto-pagination (v6.8.0) a "market" can now be several THOUSAND candidates (a real
+ // Rookie market was observed at 92 pages / ~4600 rows), so scanning must be narrowed by the CHEAP
+ // filter-bar fields (Age/Salary/Offers - no profile fetch needed) BEFORE any expensive
+ // per-candidate scan runs (see cheapFilteredRows) - that's the real reduction. This is only the
+ // hard backstop for whatever's left after that narrowing, so scanning never fetches an unbounded
+ // number of profile pages if the user clears every cheap filter on a huge market. Raised from 60
+ // (2026-08-11, explicit user request: "I want the advisor to automatically filter all the
+ // drivers... giving me all drivers that fulfil the filter requirements" - a 60-cap silently
+ // dropped valid candidates even after cheap pre-filtering), then from 300 to 500 the same day once
+ // real market sizes turned out to be far larger than assumed - `scanCandidatesFullStats` reports
+ // `.truncatedFrom` when this cap is actually hit, surfaced honestly rather than silently dropped.
+ const MARKET_FULL_SCAN_MAX = 500;
 
  // Fetches an arbitrary same-site page's HTML in the background (no navigation) so its DOM can be
  // parsed the same way as a real visit. Used by "Update All Data" to reach DriverProfile.asp/
@@ -5290,8 +5293,11 @@
   const idKey = type === 'drivers' ? 'driId' : 'tdId';
   const page1Rows = parseAvailListDOM(document, idKey);
   let restRows = [];
-  try { restRows = await fetchRemainingMarketPages(type, idKey); }
-  catch (e) { logError('fetchRemainingMarketPages failed:', e.message); }
+  try {
+  restRows = await fetchRemainingMarketPages(type, idKey, (pagesFetched, candidatesSoFar) => {
+  body(`<div style="${ST.loading}">Loading market data - fetched page ${pagesFetched}, ${(page1Rows ? page1Rows.length : 0) + candidatesSoFar} candidates so far (this covers the whole market, not just this one)...</div>`);
+  });
+  } catch (e) { logError('fetchRemainingMarketPages failed:', e.message); }
   const domRows = page1Rows ? mergeMarketRows(page1Rows, restRows, idKey) : (restRows.length ? restRows : null);
   const marketEndpoint = type === 'drivers' ? '/AvailDrivers' : '/AvailTDs';
   // Merge into the accumulated stale cache too (by ID), so renderMarketOverview() (callable from
@@ -6119,12 +6125,15 @@
   } catch (e) { return null; }
   }
 
-  // Safety cap on how many market pages fetchRemainingMarketPages will auto-fetch. GPRO pages the
-  // market list at ~20 rows/page with no page-count exposed anywhere on the page itself, so "the
-  // next page came back empty" is the only reliable stop signal - this cap just guards against that
-  // signal never firing (a parser bug, an unexpected page format) looping forever. 15 pages covers
-  // ~300 candidates, comfortably above any real league's market size.
-  const MARKET_PAGE_FETCH_MAX = 15;
+  // Safety cap on how many market pages fetchRemainingMarketPages will auto-fetch. Real bug fixed
+  // 2026-08-11: this was 15, silently assumed on a guessed ~20 rows/page - but GPRO actually pages
+  // at 50 rows/page, and a live Rookie market was observed with 92 total pages (~4600 candidates,
+  // confirmed by the user manually reaching page 10 and finding drivers our crawl had missed - our
+  // own "750 listed" = exactly 15 pages * 50 rows, i.e. we were hitting this cap and silently
+  // treating it as end-of-market, not GPRO's own "next page is empty" signal). Raised to 250 (up to
+  // ~12,500 candidates) with real headroom above anything observed live; the empty-page stop
+  // condition below is still what normally ends the crawl well before this cap is ever hit.
+  const MARKET_PAGE_FETCH_MAX = 250;
 
   // Fetches every remaining page of the market list in the background so the shortlist/filter bar
   // covers the WHOLE market, not just whichever page the user happened to land on. Real user
@@ -6138,7 +6147,11 @@
   // politeness pattern as scanCandidatesFullStats), stopping the moment any page in a batch comes
   // back with zero rows - real HTTP page loads, never the API, so this never touches the per-race
   // token budget.
-  async function fetchRemainingMarketPages(type, idKey) {
+  // `onProgress(pagesFetchedSoFar, candidatesSoFar)` (optional) fires after each batch so the
+  // caller can show live progress - a 90+ page market takes real time to crawl, and a static
+  // "Loading..." message left the user unable to tell it was actually working (see the page-10
+  // report above) versus silently stuck.
+  async function fetchRemainingMarketPages(type, idKey, onProgress) {
   const basePath = type === 'drivers' ? 'AvailDrivers.asp' : 'AvailTechDirectors.asp';
   const fetchOnePage = async (p) => {
   try {
@@ -6151,6 +6164,7 @@
   const page2 = await fetchOnePage(2);
   if (!page2 || !page2.length) return collected;
   collected.push(...page2);
+  if (onProgress) onProgress(2, collected.length);
   let page = 3;
   while (page <= MARKET_PAGE_FETCH_MAX) {
   const batchPages = [];
@@ -6162,6 +6176,7 @@
   if (rows && rows.length) collected.push(...rows);
   else hitEmpty = true;
   });
+  if (onProgress) onProgress(batchPages[batchPages.length - 1], collected.length);
   if (hitEmpty) break;
   page += batchPages.length;
   }

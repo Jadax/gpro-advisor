@@ -181,6 +181,19 @@ exactly the kind of silent candidate-exclusion bug fixed twice already this sess
 floor gate, v6.8.1's OA-capped scan). Not worth the risk without a live-confirmed test of what those
 params actually do for a non-supporter account.
 
+**MARKET_PAGE_FETCH_MAX was the actual silent-truncation bug (2026-08-11, seventh pass, v6.8.3)**:
+user reported that manually visiting page 10 of a market surfaced drivers our own crawl had missed.
+Root cause: `MARKET_PAGE_FETCH_MAX` was set to 15 based on a guessed ~20 rows/page - but GPRO
+actually pages at 50 rows/page, and the user's real Rookie market ran 92 pages (~4600 candidates).
+The previously-reported "750 listed" was EXACTLY 15 pages × 50 rows - i.e. the crawl was hitting its
+own artificial cap and treating that as end-of-market, not GPRO's real "next page is empty" signal.
+Fixed by raising the cap to 250 (real headroom above anything observed) and raising
+`MARKET_FULL_SCAN_MAX` from 300 to 500 to match (see its own comment). Also added live progress to
+`fetchRemainingMarketPages` (`onProgress(pagesFetched, candidatesSoFar)` callback, wired into
+`renderMarketPage`'s loading message) since a 90+ page crawl takes real time and a static "Loading"
+message gave no way to tell it was working versus silently stuck - exactly what made this bug hard
+to notice in the first place.
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.
