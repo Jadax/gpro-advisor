@@ -170,6 +170,16 @@ remembering if a similar "field shows a value we never set" report comes in agai
 page's own rendered summary text first (it reflects the real current `filterDefaults`) before
 assuming a code regression.
 
+**Salary default removed, concentration default re-added deliberately (2026-08-13, v6.12.3)**:
+explicit, direct user request after everything above - "remove the salary number. add 200 to
+concentration." Salary's default (sourced from the league's `maxSalary` cap) is gone; the field
+still exists and filters normally, just starts blank. Concentration now defaults to 200 - this is
+**not** a sourced floor (concentration still has no trustworthy numeric target, see the "no
+trustworthy numeric floor" note above - the old 200 was empirically shown to clear almost no one)
+- it's a manually-requested starting value the user explicitly asked for with full knowledge of
+that history, not a reintroduction of the earlier bug. Same editable/clearable field as everything
+else in the bar. Don't "fix" this back to unset without the user asking again - it's intentional.
+
 ## Market custom filter bar (2026-08-11, revised same day)
 
 `AvailDrivers.asp`/`AvailTechDirectors.asp` gate their own per-attribute filters (Con/Tal/Agr/Exp/

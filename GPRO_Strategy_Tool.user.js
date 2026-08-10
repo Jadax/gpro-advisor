@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.12.2
+// @version 6.12.3
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -6341,8 +6341,15 @@
  // used to color the preview table, never actually applied as a filter or narrowed the scan).
  const filterDefaults = { oaMin: targetOA.min, oaMax: targetOA.max };
  floors.forEach(([k, , m]) => { filterDefaults[k] = m; });
- if (cfgLabel === 'driver' && capMaxSalary) filterDefaults.salary = Math.round(capMaxSalary / 1000);
  if (cfgLabel === 'driver' && capMaxAge) filterDefaults.age = capMaxAge;
+ // Salary default removed 2026-08-13 (explicit user request) - field still exists and works,
+ // just starts blank/"any" instead of pre-filled from the league's sourced maxSalary cap.
+ // Concentration default added 2026-08-13 (explicit user request: "add 200 to concentration").
+ // NOT a sourced floor - concentration has no trustworthy numeric target (the old 200 was found
+ // empirically unreachable for most of the market, see the "no trustworthy numeric floor" note
+ // elsewhere) - this is a manually-requested starting value, same editable/clearable field as
+ // everything else.
+ if (cfgLabel === 'driver') filterDefaults.concentration = 200;
  h += `<div style="font-size:9px;color:#9ca3af;margin-bottom:6px;">${floorNote}</div>`;
  h += mkFilterBar(sectionId, idKey, filterDefaults);
  h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(capped, idKey, targetOA)}</div>`;
