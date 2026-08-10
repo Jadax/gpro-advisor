@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.6.2
+// @version 6.6.3
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -6199,7 +6199,7 @@
  }
  h += `<div style="font-size:9px;color:#9ca3af;margin-bottom:6px;">${floorNote}</div>`;
  h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(capped, idKey, targetOA)}</div>`;
- h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (${capped.length}${rows.length > capped.length ? ` of ${rows.length} listed` : ''} - fetches each candidate's profile page)</button>`;
+ h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (top ${capped.length}${rows.length > capped.length ? ` of ${rows.length} listed, by OA` : ''} - fetches each candidate's profile page)</button>`;
  h += `<div id="gpro-scan-status-${sectionId}" style="font-size:9px;color:#6b7280;margin-top:4px;"></div>`;
  return h;
  }
