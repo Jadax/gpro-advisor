@@ -134,6 +134,20 @@ as a lower bound produces a 0-floor that gets filtered out as a no-op. Fixed by 
 (`'0-250'`, dir:`'min'`) correctly stay unfilled either way - that range spans the entire attribute
 scale, i.e. genuinely no sourced constraint, not a bug.
 
+**Whole-market auto-pagination (2026-08-11, fourth pass, v6.8.0)**: `renderMarketPage` used to only
+ever parse the current page's ~20 rows from the live DOM, so applying the filter bar on
+`AvailDrivers.asp` only ever filtered whatever page the user happened to be on - user's exact
+complaint: "why can the filter not filter out every driver... it clearly only filters the drivers
+on that page", after noticing the URL takes a `?Page=N` param they'd have to click through manually.
+`fetchRemainingMarketPages(type, idKey)` now auto-fetches every remaining page (real HTTP page
+loads via `fetchPageHTML`, never the API) starting from page 2, probing page 2 alone first (most
+leagues' markets fit on one page - avoids a wasted batch of requests in the common case), then
+continuing in `NET_CONCURRENCY`-bounded batches via `mapLimit` until a page comes back empty -
+GPRO exposes no page-count anywhere on the page itself, so "the next page is empty" is the only
+stop signal, backstopped by a hard `MARKET_PAGE_FETCH_MAX = 15` safety cap. `renderMarketPage`
+awaits this before rendering, so `domRows`/`drivers`/`tds` (and therefore the filter bar and
+shortlist) now always cover the FULL current market, not one page of it.
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.

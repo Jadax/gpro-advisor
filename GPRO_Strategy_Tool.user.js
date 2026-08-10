@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.7.3
+// @version 6.8.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -5275,26 +5275,29 @@
  // but using DOM-parsed data when available, falling back to API.
  async function renderMarketPage(type) {
  createPanel(type === 'drivers' ? 'Driver Market Advisor' : 'TD Market Advisor');
- body(`<div style="${ST.loading}">Loading market data...</div>`);
+ body(`<div style="${ST.loading}">Loading market data (fetching every market page - this covers the whole market, not just this one)...</div>`);
  try {
- // DOM-only, per user request - never call /AvailDrivers or /AvailTDs. We're literally on
- // AvailDrivers.asp/AvailTechDirectors.asp right now (this function only runs when @matched
- // there), so the live page IS the data source. Cache the parsed list into the stale store too,
- // so renderMarketOverview() (callable from any page via the Tampermonkey menu) has something
- // to show without an API call even when not currently on the market page.
+ // DOM-only for page 1 (the live page IS the data source), then a real-HTTP (never API) fetch of
+ // every remaining page - see fetchRemainingMarketPages. Real user complaint (2026-08-11): "why
+ // can the filter not filter out every driver... it clearly only filters the drivers on that
+ // page" - having to manually click through and re-apply the filter bar on every page was the
+ // exact bug. domRows below is now the WHOLE market, not just whatever page the user landed on.
   const idKey = type === 'drivers' ? 'driId' : 'tdId';
-  const domRows = parseAvailListDOM(document, idKey);
+  const page1Rows = parseAvailListDOM(document, idKey);
+  let restRows = [];
+  try { restRows = await fetchRemainingMarketPages(type, idKey); }
+  catch (e) { logError('fetchRemainingMarketPages failed:', e.message); }
+  const domRows = page1Rows ? mergeMarketRows(page1Rows, restRows, idKey) : (restRows.length ? restRows : null);
   const marketEndpoint = type === 'drivers' ? '/AvailDrivers' : '/AvailTDs';
-  // Merge this page's rows into the accumulated stale cache (by ID) instead of overwriting, so
-  // paging through the whole market builds one list rather than only remembering the last page.
-  // The panel below still shows just the current page's rows (that's what's on screen), but the
-  // cache accumulates everything seen across visits - renderMarketOverview then surfaces it all.
+  // Merge into the accumulated stale cache too (by ID), so renderMarketOverview() (callable from
+  // any page via the Tampermonkey menu, without an API call) stays in sync with whatever the most
+  // recent full market fetch found - candidates hired/withdrawn since a prior visit still won't
+  // linger forever since a fresh full fetch now happens on every visit here.
   const marketKey = type === 'drivers' ? 'drivers' : 'tds';
   const prevMarket = getStaleData(marketEndpoint);
   const prevRows = (prevMarket && prevMarket.data && prevMarket.data[marketKey]) || [];
   const allRows = domRows ? mergeMarketRows(prevRows, domRows, idKey) : prevRows;
   if (domRows) setStaleData(marketEndpoint, { [marketKey]: allRows });
-  const accumulatedNew = allRows.length - prevRows.length;
   const leagueInfo = await detectLeagueFresh();
   let h = '';
   const league = leagueInfo.league || (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.currentLeague) || 'Amateur';
@@ -5314,7 +5317,7 @@
   drivers.length ? mkShortlistSection(drivers, 'driId', sel && sel.targetOA, marketCash, league, 'driver', 'drivers', sel && Object.entries(sel.attributes)) : mkRec(emptyReason, 'warn'),
   'gpro-sec-market-drivers');
   if (allRows.length > drivers.length) {
-  h += `<div style="font-size:9px;color:#6b7280;margin-top:2px;">Accumulated ${allRows.length} candidates across market pages (${accumulatedNew > 0 ? `+${accumulatedNew} new this page, ` : ''}${prevRows.length} from before) - use the Driver &amp; TD Market menu command to see them all.</div>`;
+  h += `<div style="font-size:9px;color:#6b7280;margin-top:2px;">${allRows.length - drivers.length} more candidate(s) remembered from a previous visit are no longer listed (hired/withdrawn) and excluded above - the ${drivers.length} shown is the full CURRENT market, fetched across every page.</div>`;
   }
 
  // Driver selection criteria
@@ -5341,7 +5344,7 @@
   tds.length ? mkShortlistSection(tds, 'tdId', tdSel && tdSel.targetOA, marketCash, league, 'TD', 'tds', tdSel && Object.entries(tdSel.skills)) : mkRec(emptyReason, 'warn'),
   'gpro-sec-market-tds');
   if (allRows.length > tds.length) {
-  h += `<div style="font-size:9px;color:#6b7280;margin-top:2px;">Accumulated ${allRows.length} candidates across market pages (${accumulatedNew > 0 ? `+${accumulatedNew} new this page, ` : ''}${prevRows.length} from before) - use the Driver &amp; TD Market menu command to see them all.</div>`;
+  h += `<div style="font-size:9px;color:#6b7280;margin-top:2px;">${allRows.length - tds.length} more candidate(s) remembered from a previous visit are no longer listed (hired/withdrawn) and excluded above - the ${tds.length} shown is the full CURRENT market, fetched across every page.</div>`;
   }
  if (tdSel) {
  let tdSelHtml = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Target OA: ${tdSel.targetOA.min}-${tdSel.targetOA.max}</div><div style="font-size:9px;color:#f59e0b;margin-bottom:4px;">⚠️ TD OA caps are wiki-sourced and NOT independently confirmed - this project's driver OA caps came from the same wiki and turned out to be wrong (corrected 2026-07-27 via live in-game confirmation). Verify against what the game actually lets you sign before relying on this.</div>`;
@@ -6109,6 +6112,55 @@
  });
   return rows.length ? rows : null;
   } catch (e) { return null; }
+  }
+
+  // Safety cap on how many market pages fetchRemainingMarketPages will auto-fetch. GPRO pages the
+  // market list at ~20 rows/page with no page-count exposed anywhere on the page itself, so "the
+  // next page came back empty" is the only reliable stop signal - this cap just guards against that
+  // signal never firing (a parser bug, an unexpected page format) looping forever. 15 pages covers
+  // ~300 candidates, comfortably above any real league's market size.
+  const MARKET_PAGE_FETCH_MAX = 15;
+
+  // Fetches every remaining page of the market list in the background so the shortlist/filter bar
+  // covers the WHOLE market, not just whichever page the user happened to land on. Real user
+  // complaint (2026-08-11): "why can the filter not filter out every driver... it clearly only
+  // filters the drivers on that page" - clicking Apply on AvailDrivers.asp used to only ever see
+  // that one page's ~20 rows, so a candidate who'd pass the filter but happened to sit on page 3
+  // was invisible unless the user manually paged there first and re-applied. Page 1 is the live DOM
+  // already parsed by the caller. Probes page 2 alone first (most leagues' markets fit on a single
+  // page, so this avoids firing a whole batch of requests that would all come back empty in the
+  // common case); once page 2 proves non-empty, continues in NET_CONCURRENCY-bounded batches (same
+  // politeness pattern as scanCandidatesFullStats), stopping the moment any page in a batch comes
+  // back with zero rows - real HTTP page loads, never the API, so this never touches the per-race
+  // token budget.
+  async function fetchRemainingMarketPages(type, idKey) {
+  const basePath = type === 'drivers' ? 'AvailDrivers.asp' : 'AvailTechDirectors.asp';
+  const fetchOnePage = async (p) => {
+  try {
+  const html = await fetchPageHTML(`${basePath}?Page=${p}`);
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return parseAvailListDOM(doc, idKey);
+  } catch (e) { logError(`market page ${p} fetch failed:`, e.message); return null; }
+  };
+  const collected = [];
+  const page2 = await fetchOnePage(2);
+  if (!page2 || !page2.length) return collected;
+  collected.push(...page2);
+  let page = 3;
+  while (page <= MARKET_PAGE_FETCH_MAX) {
+  const batchPages = [];
+  for (let i = 0; i < NET_CONCURRENCY && (page + i) <= MARKET_PAGE_FETCH_MAX; i++) batchPages.push(page + i);
+  const results = await mapLimit(batchPages, NET_CONCURRENCY, fetchOnePage);
+  let hitEmpty = false;
+  results.forEach((r) => {
+  const rows = r.status === 'fulfilled' ? r.value : null;
+  if (rows && rows.length) collected.push(...rows);
+  else hitEmpty = true;
+  });
+  if (hitEmpty) break;
+  page += batchPages.length;
+  }
+  return collected;
   }
 
   // Accumulates market-list rows across page visits instead of letting each visit clobber the
