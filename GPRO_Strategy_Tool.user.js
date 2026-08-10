@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.10.1
+// @version 6.11.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -5294,27 +5294,20 @@
  // but using DOM-parsed data when available, falling back to API.
  async function renderMarketPage(type) {
  createPanel(type === 'drivers' ? 'Driver Market Advisor' : 'TD Market Advisor');
- body(`<div style="${ST.loading}">Loading market data (fetching every market page - this covers the whole market, not just this one)...</div>`);
+ body(`<div style="${ST.loading}">Loading market data...</div>`);
  try {
- // DOM-only for page 1 (the live page IS the data source), then a real-HTTP (never API) fetch of
- // every remaining page - see fetchRemainingMarketPages. Real user complaint (2026-08-11): "why
- // can the filter not filter out every driver... it clearly only filters the drivers on that
- // page" - having to manually click through and re-apply the filter bar on every page was the
- // exact bug. domRows below is now the WHOLE market, not just whatever page the user landed on.
+ // Real bug fixed 2026-08-12 (explicit user request: "I thought we said it'd be better and more
+ // efficient for me to choose the filters first and then run the search?"): this used to
+ // unconditionally crawl the ENTIRE market (every page) before the user had a chance to set any
+ // filter, which defeated the whole point of filtering first. Initial render now uses only page 1
+ // (the live DOM) plus whatever's in the stale cache from a previous visit - the full crawl only
+ // happens once the user clicks Apply Filters / Scan (see ensureFullMarketFetched), and even then
+ // it's bounded by the current OA filter: GPRO returns rows OA-descending, so once a page's OA
+ // drops below the filter's minimum, every further page can only be lower still - no point
+ // fetching them.
   const idKey = type === 'drivers' ? 'driId' : 'tdId';
-  const page1Rows = parseAvailListDOM(document, idKey);
-  let restRows = [];
-  try {
-  restRows = await fetchRemainingMarketPages(type, idKey, (pagesFetched, candidatesSoFar) => {
-  body(`<div style="${ST.loading}">Loading market data - fetched page ${pagesFetched}, ${(page1Rows ? page1Rows.length : 0) + candidatesSoFar} candidates so far (this covers the whole market, not just this one)...</div>`);
-  });
-  } catch (e) { logError('fetchRemainingMarketPages failed:', e.message); }
-  const domRows = page1Rows ? mergeMarketRows(page1Rows, restRows, idKey) : (restRows.length ? restRows : null);
+  const domRows = parseAvailListDOM(document, idKey);
   const marketEndpoint = type === 'drivers' ? '/AvailDrivers' : '/AvailTDs';
-  // Merge into the accumulated stale cache too (by ID), so renderMarketOverview() (callable from
-  // any page via the Tampermonkey menu, without an API call) stays in sync with whatever the most
-  // recent full market fetch found - candidates hired/withdrawn since a prior visit still won't
-  // linger forever since a fresh full fetch now happens on every visit here.
   const marketKey = type === 'drivers' ? 'drivers' : 'tds';
   const prevMarket = getStaleData(marketEndpoint);
   const prevRows = (prevMarket && prevMarket.data && prevMarket.data[marketKey]) || [];
@@ -5331,16 +5324,16 @@
  let sel = null, tdSel = null;
 
   if (type === 'drivers') {
-  const drivers = domRows || [];
-  h += mkDecisionBoard([{ id: 'gpro-sec-market-drivers', label: 'Drivers', verdict: `${drivers.length} listed`, tone: drivers.length ? 'info' : 'warn' }]);
+  // allRows = page 1 (live) + whatever's cached from a previous visit - a partial view, not the
+  // whole market. The full crawl only runs once Apply Filters / Scan is clicked (see
+  // ensureFullMarketFetched), so this initial count is honestly labeled as partial below.
+  const drivers = allRows;
+  h += mkDecisionBoard([{ id: 'gpro-sec-market-drivers', label: 'Drivers', verdict: `${drivers.length} cached so far`, tone: drivers.length ? 'info' : 'warn' }]);
   h += leagueSourceLine(leagueInfo);
   sel = D.driverSelection && D.driverSelection[league];
-  h += mkSection(`Available Drivers (${drivers.length})`,
+  h += mkSection(`Available Drivers (${drivers.length} cached - set filters below, then Apply/Scan to search the whole market)`,
   drivers.length ? mkShortlistSection(drivers, 'driId', sel && sel.targetOA, marketCash, league, 'driver', 'drivers', sel && Object.entries(sel.attributes)) : mkRec(emptyReason, 'warn'),
   'gpro-sec-market-drivers');
-  if (allRows.length > drivers.length) {
-  h += `<div style="font-size:9px;color:#6b7280;margin-top:2px;">${allRows.length - drivers.length} more candidate(s) remembered from a previous visit are no longer listed (hired/withdrawn) and excluded above - the ${drivers.length} shown is the full CURRENT market, fetched across every page.</div>`;
-  }
 
  // Driver selection criteria
  if (sel) {
@@ -5358,16 +5351,13 @@
  h += `<div style="font-size:9px;color:#f59e0b;margin-top:8px;">No target-attribute guidance calibrated yet for ${league} league (only Rookie/Amateur so far) - the driver list above is still real, just without a "what to look for" checklist.</div>`;
  }
    } else {
-  const tds = domRows || [];
-  h += mkDecisionBoard([{ id: 'gpro-sec-market-tds', label: 'TDs', verdict: `${tds.length} listed`, tone: tds.length ? 'info' : 'warn' }]);
+  const tds = allRows;
+  h += mkDecisionBoard([{ id: 'gpro-sec-market-tds', label: 'TDs', verdict: `${tds.length} cached so far`, tone: tds.length ? 'info' : 'warn' }]);
   h += leagueSourceLine(leagueInfo);
   tdSel = D.tdSelection && D.tdSelection[league];
-  h += mkSection(`Available Technical Directors (${tds.length})`,
+  h += mkSection(`Available Technical Directors (${tds.length} cached - set filters below, then Apply/Scan to search the whole market)`,
   tds.length ? mkShortlistSection(tds, 'tdId', tdSel && tdSel.targetOA, marketCash, league, 'TD', 'tds', tdSel && Object.entries(tdSel.skills)) : mkRec(emptyReason, 'warn'),
   'gpro-sec-market-tds');
-  if (allRows.length > tds.length) {
-  h += `<div style="font-size:9px;color:#6b7280;margin-top:2px;">${allRows.length - tds.length} more candidate(s) remembered from a previous visit are no longer listed (hired/withdrawn) and excluded above - the ${tds.length} shown is the full CURRENT market, fetched across every page.</div>`;
-  }
  if (tdSel) {
  let tdSelHtml = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Target OA: ${tdSel.targetOA.min}-${tdSel.targetOA.max}</div><div style="font-size:9px;color:#f59e0b;margin-bottom:4px;">⚠️ TD OA caps are wiki-sourced and NOT independently confirmed - this project's driver OA caps came from the same wiki and turned out to be wrong (corrected 2026-07-27 via live in-game confirmation). Verify against what the game actually lets you sign before relying on this.</div>`;
  Object.entries(tdSel.skills).sort((a, b) => a[1].priority - b[1].priority).forEach(([skill, info]) => {
@@ -5386,15 +5376,13 @@
  wireDecisionBoard();
  // autoStart reverted 2026-08-12 (explicit user request): "it shouldn't automatically start the
  // search. I should click on apply filters and THEN it starts... because I'll put in OA, salary
- // etc. which means [fewer] drivers... [need] to scan." Auto-scanning on load (v6.8.2) meant the
- // scan already ran against default values before the user got a chance to tighten OA/salary
- // first, wasting exactly the narrowing those edits were meant to provide. Full market pagination
- // (fetchRemainingMarketPages) still runs automatically - only the scan+filter step now waits for
- // an explicit Apply Filters / Scan click.
+ // etc. which means [fewer] drivers... [need] to scan." Nothing fetches beyond page 1 + cache
+ // until Apply Filters / Scan is clicked - see ensureFullMarketFetched, called from inside
+ // applyFilterBar/runScanAndFilter using type='drivers'/'tds' (sectionId already equals type).
  if (type === 'drivers' && sel) {
- wireScanFullStatsButton('drivers', 'driId', domRows || [], Object.entries(sel.attributes), league, false);
+ wireScanFullStatsButton('drivers', 'driId', allRows, Object.entries(sel.attributes), league, false);
  } else if (type === 'tds' && tdSel) {
- wireScanFullStatsButton('tds', 'tdId', domRows || [], Object.entries(tdSel.skills), league, false);
+ wireScanFullStatsButton('tds', 'tdId', allRows, Object.entries(tdSel.skills), league, false);
  }
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad'));
@@ -6169,8 +6157,15 @@
   // caller can show live progress - a 90+ page market takes real time to crawl, and a static
   // "Loading..." message left the user unable to tell it was actually working (see the page-10
   // report above) versus silently stuck.
-  async function fetchRemainingMarketPages(type, idKey, onProgress) {
+  // `oaMinCutoff` (optional, added 2026-08-12): GPRO returns market rows OA-descending, so once a
+  // fetched page's HIGHEST OA already falls below this threshold, every further page can only be
+  // lower still - no point fetching them. Lets a narrow OA-range filter (e.g. Rookie's sourced
+  // 75-85) turn a 92-page crawl into a handful of pages instead of the whole market, without
+  // needing GPRO's own supporter-gated MinOA/MaxOA params (which this project deliberately doesn't
+  // rely on - see the "considered but did NOT implement" note elsewhere in CLAUDE.md).
+  async function fetchRemainingMarketPages(type, idKey, onProgress, oaMinCutoff) {
   const basePath = type === 'drivers' ? 'AvailDrivers.asp' : 'AvailTechDirectors.asp';
+  const belowCutoff = (rowsOnPage) => oaMinCutoff != null && rowsOnPage.every(r => (parseFloat(r.OA) || 0) < oaMinCutoff);
   const fetchOnePage = async (p) => {
   try {
   const html = await fetchPageHTML(`${basePath}?Page=${p}`);
@@ -6183,19 +6178,23 @@
   if (!page2 || !page2.length) return collected;
   collected.push(...page2);
   if (onProgress) onProgress(2, collected.length);
+  if (belowCutoff(page2)) return collected;
   let page = 3;
   while (page <= MARKET_PAGE_FETCH_MAX) {
   const batchPages = [];
   for (let i = 0; i < NET_CONCURRENCY && (page + i) <= MARKET_PAGE_FETCH_MAX; i++) batchPages.push(page + i);
   const results = await mapLimit(batchPages, NET_CONCURRENCY, fetchOnePage);
   let hitEmpty = false;
+  let hitCutoff = false;
   results.forEach((r) => {
   const rows = r.status === 'fulfilled' ? r.value : null;
-  if (rows && rows.length) collected.push(...rows);
-  else hitEmpty = true;
+  if (rows && rows.length) {
+  collected.push(...rows);
+  if (belowCutoff(rows)) hitCutoff = true;
+  } else hitEmpty = true;
   });
   if (onProgress) onProgress(batchPages[batchPages.length - 1], collected.length);
-  if (hitEmpty) break;
+  if (hitEmpty || hitCutoff) break;
   page += batchPages.length;
   }
   return collected;
@@ -6432,8 +6431,11 @@
  // BEFORE any profile page gets fetched (see cheapFilteredRows), so a huge market becomes scannable
  // without fetching thousands of pages. Preview the count using today's pre-filled defaults so the
  // button is honest about roughly how many profile fetches it's about to do.
+ // `rows` here is only page 1 + stale cache (a partial view - see ensureFullMarketFetched), so this
+ // preview count is a rough estimate from that partial set, not the real market. Clicking the
+ // button fetches the rest of the market first (bounded by the OA-min filter above), THEN scans.
  const cheapPreview = applyCustomFilters(rows, idKey, { oaMin: filterDefaults.oaMin, oaMax: filterDefaults.oaMax, age: filterDefaults.age, salary: filterDefaults.salary });
- h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (~${cheapPreview.length} of ${rows.length} match today's OA/Age/Salary filters above - edit those first to narrow further, then this fetches each match's profile page)</button>`;
+ h += `<button id="gpro-scan-${sectionId}" data-section="${sectionId}" style="width:100%;margin-top:6px;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">🔍 Scan Full Stats & Filter (set OA/Age/Salary above first - clicking fetches the matching part of the market, then scans each candidate's profile page; ~${cheapPreview.length} of ${rows.length} cached rows match today's filters)</button>`;
  h += `<div id="gpro-scan-status-${sectionId}" style="font-size:9px;color:#6b7280;margin-top:4px;"></div>`;
  return h;
  }
@@ -6659,6 +6661,25 @@
  return enriched;
  }
 
+ // Fetches the rest of the market (beyond page 1 + cache) exactly once per section, bounded by the
+ // filter bar's CURRENT OA-min value (see fetchRemainingMarketPages's oaMinCutoff). Called lazily
+ // from both scan entry points below instead of eagerly on page load (2026-08-12, explicit user
+ // request: "I thought we said it'd be better and more efficient for me to choose the filters first
+ // and then run the search?"). `sectionId` doubles as the market type ('drivers'/'tds') that
+ // fetchRemainingMarketPages expects - they're the same string everywhere in this file.
+ async function ensureFullMarketFetched(sectionId, idKey, state, statusEl) {
+ if (state.hasFetchedFullMarket) return;
+ const bar = document.getElementById(`gpro-filterbar-${sectionId}`);
+ const oaMinInput = bar && bar.querySelector('[data-filter-field="oaMin"]');
+ const oaMinCutoff = (oaMinInput && oaMinInput.value !== '') ? parseFloat(oaMinInput.value) : null;
+ if (statusEl) statusEl.textContent = '⏳ Fetching market pages...';
+ const restRows = await fetchRemainingMarketPages(sectionId, idKey, (pagesFetched, candidatesSoFar) => {
+ if (statusEl) statusEl.textContent = `⏳ Fetching market pages: page ${pagesFetched}, ${candidatesSoFar} candidates so far${oaMinCutoff != null ? ` (stops once OA drops below ${oaMinCutoff})` : ''}...`;
+ }, oaMinCutoff);
+ state.rows = mergeMarketRows(state.rows, restRows, idKey);
+ state.hasFetchedFullMarket = true;
+ }
+
  // Reads the filter bar's CURRENT values (whatever the user has typed/edited, pre-filled from
  // sourced minimums but never overridden by them - see mkFilterBar) and (re)renders the container
  // with rows narrowed to those matching every filled-in field. Shared by both entry points below so
@@ -6678,41 +6699,49 @@
  // Real bug fixed 2026-08-11: attribute filters (Con/Tal/etc) used to only work AFTER a separate
  // "Scan Full Stats" button had already been clicked - "half the filters can't even be filled out"
  // was the exact complaint, since those inputs were disabled until then. Apply Filters is now
- // self-sufficient: if the user filled in any field that needs real scraped stats and no scan has
- // run yet, it scans automatically first, then filters - one button, one step, regardless of which
- // fields were used.
+ // self-sufficient: fetches the rest of the market if it hasn't yet (see ensureFullMarketFetched,
+ // bounded by the current OA-min value), then scans automatically if a filled-in field needs real
+ // scraped stats and no scan has run yet, then filters - one button, one step.
  async function applyFilterBar(sectionId, idKey, rows, container, state, priorityEntries, league) {
  const bar = document.getElementById(`gpro-filterbar-${sectionId}`);
  const applyBtn = document.getElementById(`gpro-filterapply-${sectionId}`);
  const statusEl = document.getElementById(`gpro-filterstatus-${sectionId}`);
  if (!bar || !container) return;
+ if (applyBtn) applyBtn.disabled = true;
+ try {
+ await ensureFullMarketFetched(sectionId, idKey, state, statusEl);
+ } catch (e) {
+ if (statusEl) statusEl.textContent = `Market fetch failed: ${e.message}`;
+ if (applyBtn) applyBtn.disabled = false;
+ return;
+ }
  const values = {};
  bar.querySelectorAll('[data-filter-field]').forEach((inp) => { values[inp.getAttribute('data-filter-field')] = inp.value; });
  const fields = filterFieldsFor(idKey);
  const needsScanNow = !state.hasScanned && fields.some((f) => f.needsScan && values[f.key] !== undefined && values[f.key] !== '');
  if (needsScanNow) {
- if (applyBtn) applyBtn.disabled = true;
  try {
- const narrowed = cheapFilteredRows(sectionId, idKey, rows);
+ const narrowed = cheapFilteredRows(sectionId, idKey, state.rows);
  await runMarketScan(idKey, narrowed, container, state, priorityEntries, league, statusEl);
  } catch (e) {
  if (statusEl) statusEl.textContent = `Scan failed: ${e.message}`;
  if (applyBtn) applyBtn.disabled = false;
  return;
  }
- if (applyBtn) applyBtn.disabled = false;
  }
+ if (applyBtn) applyBtn.disabled = false;
  filterAndRenderMarket(sectionId, idKey, container, state, priorityEntries, league);
  }
 
- // Cheap-filters, scans, and renders in one step - the body of the standalone "Scan Full Stats &
- // Filter" button's click handler, pulled out so it can also fire automatically on page load (see
- // autoStart below) without a synthetic click.
- async function runScanAndFilter(sectionId, idKey, rows, container, state, priorityEntries, league, btn) {
+ // Fetches the rest of the market (if not already done), cheap-filters, scans, and renders in one
+ // step - the body of the standalone "Scan Full Stats & Filter" button's click handler, pulled out
+ // so it can also fire automatically on page load (see autoStart below) without a synthetic click.
+ async function runScanAndFilter(sectionId, idKey, container, state, priorityEntries, league, btn) {
  if (btn) btn.disabled = true;
  const statusEl = document.getElementById(`gpro-scan-status-${sectionId}`);
  try {
- const narrowed = cheapFilteredRows(sectionId, idKey, rows);
+ await ensureFullMarketFetched(sectionId, idKey, state, statusEl);
+ const narrowed = cheapFilteredRows(sectionId, idKey, state.rows);
  await runMarketScan(idKey, narrowed, container, state, priorityEntries, league, statusEl);
  filterAndRenderMarket(sectionId, idKey, container, state, priorityEntries, league);
  if (btn) btn.remove();
@@ -6738,20 +6767,20 @@
  function wireScanFullStatsButton(sectionId, idKey, rows, priorityEntries, league, autoStart) {
  const btn = document.getElementById(`gpro-scan-${sectionId}`);
  const container = document.getElementById(`gpro-shortlist-${sectionId}`);
- // Filter state: starts as the FULL unfiltered row list (Age/Salary/Offers filters need no scan
- // and can therefore reach beyond the OA-capped subset), then narrows to whatever the last scan
- // returned once one runs (attribute filters can only ever cover the scanned pool). `hasScanned`
- // decides which renderer (mkMarketTable vs mkFullStatsTable) the filtered view re-uses. Shared
- // between the standalone scan button and the filter bar's Apply button below, so whichever runs
- // a scan first benefits the other.
- const state = { rows, hasScanned: false };
+ // Filter state: starts as page 1 + stale cache only (NOT the full market - see
+ // ensureFullMarketFetched, which fills this in lazily on first Apply/Scan click), then narrows to
+ // whatever the last scan returned once one runs (attribute filters can only ever cover the
+ // scanned pool). `hasScanned` decides which renderer (mkMarketTable vs mkFullStatsTable) the
+ // filtered view re-uses. Shared between the standalone scan button and the filter bar's Apply
+ // button below, so whichever runs first benefits the other.
+ const state = { rows, hasScanned: false, hasFetchedFullMarket: false };
  const applyBtn = document.getElementById(`gpro-filterapply-${sectionId}`);
  if (applyBtn) applyBtn.addEventListener('click', () => applyFilterBar(sectionId, idKey, rows, container, state, priorityEntries, league));
  // Click listener wired regardless of autoStart, so a failed auto-scan's "Retry scan" button (see
  // runScanAndFilter's catch branch) still works - autoStart only decides whether the FIRST run
  // fires immediately or waits for a click.
- if (btn) btn.addEventListener('click', () => runScanAndFilter(sectionId, idKey, rows, container, state, priorityEntries, league, btn));
- if (autoStart && rows.length) runScanAndFilter(sectionId, idKey, rows, container, state, priorityEntries, league, btn);
+ if (btn) btn.addEventListener('click', () => runScanAndFilter(sectionId, idKey, container, state, priorityEntries, league, btn));
+ if (autoStart && rows.length) runScanAndFilter(sectionId, idKey, container, state, priorityEntries, league, btn);
  }
 
  async function renderMarketOverview() {

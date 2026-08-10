@@ -262,6 +262,24 @@ for an explicit Apply Filters / Scan Full Stats click. If auto-run is ever wante
 default to the user's OWN last-edited filter values, not the raw sourced defaults, to avoid
 reintroducing this exact complaint.
 
+**Full-market crawl deferred until Apply/Scan, bounded by OA-min (2026-08-12, thirteenth pass,
+v6.11.0)**: same-day follow-up to the autoStart revert above - even with autoStart gone, the page
+was STILL eagerly crawling every market page on load before the user could touch the filter bar at
+all (exact complaint: "I thought we said it'd be better and more efficient for me to choose the
+filters first and then run the search?"). `renderMarketPage` now renders using only page 1 (live
+DOM) + stale cache - genuinely partial, labeled as such ("N cached so far... set filters below, then
+Apply/Scan to search the whole market"). The real crawl now happens inside a new
+`ensureFullMarketFetched(sectionId, idKey, state, statusEl)`, called lazily from both
+`applyFilterBar` and `runScanAndFilter` on their first invocation (`state.hasFetchedFullMarket`
+guards against re-fetching on a second click). Bonus: `fetchRemainingMarketPages` now takes an
+`oaMinCutoff` param - since GPRO returns market rows OA-descending, once a fetched page's rows are
+ALL below the filter bar's current OA-min value, every further page can only be lower still, so the
+crawl stops early. For a narrow OA band (e.g. Rookie's sourced 75-85) this can turn a 92-page crawl
+into a handful of pages - real, meaningful savings, not just "wait for the click" cosmetics. Note:
+`cheapFilteredRows`/`filterAndRenderMarket` must read `state.rows` (updated in place by
+`ensureFullMarketFetched`), never the original `rows` closure param, which after this change is only
+ever the small page-1-plus-cache snapshot from page load.
+
 ## Known calibration facts (sourced, don't re-derive from scratch)
 
 - **Driver OA caps per league** (confirmed live in-game by the user, 2026-07-27 — NOT what the GPRO wiki says, which was stale/wrong): Rookie 85, Amateur 110, Pro 135, Master 160, Elite uncapped. `D.leagues[league].driverMaxOA` and `D.driverSelection[league].targetOA`.
