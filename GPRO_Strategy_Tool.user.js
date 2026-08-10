@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.4.4
+// @version 6.6.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -28,11 +28,11 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.2.0
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.4.0
 // @run-at document-idle
 // ==/UserScript==
 
-// GPRO Strategy Tool v6.4.4
+// GPRO Strategy Tool v6.6.0
 // Made with ❤ by Tushant Sharma
 // A comprehensive strategy tool for Grand Prix Racing Online providing
 // fuel calculations, tyre strategy, car setup recommendations,
@@ -353,9 +353,10 @@
  if (h.includes('TrainingSession.asp')) return 'training';
  if (h.includes('AvailDrivers.asp')) return 'marketDrivers';
  if (h.includes('AvailTechDirectors.asp')) return 'marketTDs';
- if (h.includes('NegotiationsOverview.asp')) return 'negotiations';
- if (h.includes('NegotiateSponsor.asp')) return 'negotiateSponsor';
- return null;
+  if (h.includes('NegotiationsOverview.asp')) return 'negotiations';
+  if (h.includes('NegotiateSponsor.asp')) return 'negotiateSponsor';
+  if (h.includes('DriverProfile.asp')) return 'driverOffer';
+  return null;
  }
 
  // ============================================================
@@ -720,11 +721,70 @@
  if (td) weight = parseInt((td.textContent || '').replace(/[^\d]/g, '')) || null;
  }
  });
- const h1 = root.querySelector('h1.block');
- const driverName = h1 ? h1.textContent.replace(/Driver profile:/i, '').trim() : '';
- return { concentration: conc, talent, aggressiveness: aggr, experience, techInsight: techI, stamina, charisma, motivation, weight, driverName };
- } catch (e) { return null; }
- }
+  const h1 = root.querySelector('h1.block');
+  const driverName = h1 ? h1.textContent.replace(/Driver profile:/i, '').trim() : '';
+  return { concentration: conc, talent, aggressiveness: aggr, experience, techInsight: techI, stamina, charisma, motivation, weight, driverName };
+  } catch (e) { return null; }
+  }
+
+  // Parser for the "Place your offer" contract form on DriverProfile.asp (only present when the
+  // driver is a free agent you can bid on). Reads the game's own validation values directly:
+  //   1) the driver's asking salary from the submit button's `SubmitForm(<ask>)` onclick
+  //   2) the manager's cash from the hidden `managersCash` field - it caps every bonus
+  //   3) the current per-field values already in the form
+  //   4) the live "Current offer cost" and "Next offer cost increment in" counter
+  //   5) how many competing managers have already placed offers (and their group codes)
+  // Returns null if there's no offer form on the page (e.g. driver already under your contract).
+  function parseDriverOfferDOM(root) {
+  root = root || document;
+  try {
+  const form = root.querySelector('form[name="formOffer"]');
+  if (!form) return null;
+  const val = (name) => {
+  const el = form.querySelector(`input[name="${name}"]`);
+  return el ? (el.value || '') : '';
+  };
+  const submitBtn = form.querySelector('input[name="OfferContract"]');
+  let ask = null;
+  if (submitBtn) {
+  const m = (submitBtn.getAttribute('onclick') || '').match(/SubmitForm\((\d+)\)/);
+  if (m) ask = parseInt(m[1], 10);
+  }
+  if (ask == null) ask = parseInt(val('SalaryRace')) || null;
+  const cash = parseGproCash(val('managersCash'));
+  const visSel = form.querySelector('select[name="slVisibility"]');
+  const visibility = visSel && visSel.selectedIndex >= 0 ? (visSel.options[visSel.selectedIndex].textContent || '').trim() : '';
+  const champDisabled = (() => { const c = form.querySelector('input[name="BonusChamp"]'); return c ? !!c.disabled : true; })();
+  const costEl = root.getElementById('snOfferCost');
+  const offerCostText = costEl ? (costEl.textContent || '').trim() : '';
+  const offerCost = parseGproCash(offerCostText);
+  const timerEl = root.getElementById('dvTimeRemainig');
+  const timerText = timerEl ? (timerEl.textContent || '').trim() : '';
+  // Competing offers: "Total offers: N" + the "Offers from" list (manager + group code like R149).
+  let totalOffers = 0;
+  Array.from(root.querySelectorAll('p, div')).forEach((el) => {
+  const m = (el.textContent || '').match(/Total offers:\s*(\d+)/i);
+  if (m && parseInt(m[1]) > totalOffers) totalOffers = parseInt(m[1]);
+  });
+  const groupCodes = [];
+  let scans = 0;
+  Array.from(root.querySelectorAll('td')).forEach((td) => {
+  if (scans > 60) return;
+  const t = (td.textContent || '').replace(/\s+/g, '').trim();
+  if (/^(R|A|P|M|E)\d+$/.test(t)) { scans++; if (!groupCodes.includes(t)) groupCodes.push(t); }
+  });
+  const current = {
+  salary: parseGproCash(val('SalaryRace')),
+  signFee: parseGproCash(val('SignFee')),
+  bonusWin: parseGproCash(val('BonusRace')),
+  bonusPodium: parseGproCash(val('BonusPodium')),
+  bonusPoint: parseGproCash(val('BonusPoint')),
+  bonusChamp: parseGproCash(val('BonusChamp')),
+  races: parseInt(val('NbRaces')) || null,
+  };
+  return { driverName: (root.querySelector('h1.block') || {}).textContent ? root.querySelector('h1.block').textContent.replace(/Driver profile:/i, '').trim() : '', ask, cash, visibility, champDisabled, offerCost, offerCostText, timerText, totalOffers, groupCodes, current };
+  } catch (e) { return null; }
+  }
 
  // TD profile page parser - UNVERIFIED against a real live page (no TD profile page has ever been
  // captured in this project, unlike DriverProfile.asp). The exact page URL isn't guessed either -
@@ -2768,10 +2828,10 @@
  // ============================================================
  // CAR UPGRADE RECOMMENDER
  // ============================================================
- // League-specific targets - D.carTargets has real per-league part-level tables
- // (Rookie/Amateur/Pro/Master/Elite, all same {target,parts,notes} shape), now actually usable
- // since detectLeagueFromMenu() (added 2026-07-19) gives the real league instead of assuming
- // Amateur. Falls back to Amateur's targets if the league is unknown/unset or GPRO_DATA didn't
+  // League-specific targets - D.carTargets has real per-league part-level tables
+  // (Rookie/Amateur/Pro/Master/Elite, all same {target,parts,notes} shape), now actually usable
+  // since detectLeagueFresh() gives the real league instead of assuming Amateur. Falls back to
+  // Amateur's targets if the league is unknown/unset or GPRO_DATA didn't
  // load, same as before this change - so behavior for anyone not yet passing a real league is
  // unchanged.
  const AMATEUR_CAR_TARGETS = {
@@ -4555,11 +4615,19 @@
    d.innerHTML = `<div style="background:#111827;border-radius:12px;padding:24px;width:440px;max-width:92%;box-shadow:0 8px 32px rgba(0,0,0,0.6);color:#e5e7eb;">
   <h2 style="color:#60a5fa;margin:0 0 8px;font-size:18px;font-weight:700;">GPRO Strategy Tool</h2>
   <p style="color:#9ca3af;font-size:12px;margin:4px 0 12px;">All recommendations are computed from live DOM data — no API token required. CTR (clear track risk) is auto-detected from the Race page when set.</p>
+  <label style="display:block;color:#9ca3af;font-size:12px;margin:10px 0 4px;">Driver offer aggressiveness:</label>
+  <select id="gpro-bid-strategy" style="width:100%;background:#1f2937;color:#e5e7eb;border:1px solid #374151;border-radius:6px;padding:8px;font-size:13px;">
+  <option value="value">Value — lowball ~50% of his ask (risks losing the driver)</option>
+  <option value="balanced" selected>Balanced — fair, budget-friendly (~100–125%)</option>
+  <option value="aggressive">Aggressive — ~200% of his ask (must-win)</option>
+  </select>
   <div style="display:flex;gap:8px;margin-top:14px;">
   <button id="gpro-token-ok" style="background:#2563eb;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">OK</button>
   </div>
   </div>`;
   document.body.appendChild(d);
+  try { document.getElementById('gpro-bid-strategy').value = GM_getValue('gpro_bid_strategy', 'balanced'); } catch (e) {}
+  document.getElementById('gpro-bid-strategy').onchange = () => { try { GM_setValue('gpro_bid_strategy', document.getElementById('gpro-bid-strategy').value); } catch (e) {} };
   document.getElementById('gpro-token-ok').onclick = () => d.remove();
   }
 
@@ -4714,9 +4782,9 @@
  // backgroundCacheSeasonTrackSpecs. Independent of the per-race capture above; no-ops instantly
  // once the season's already fully cached (tracked via GM value), so this is cheap on every
  // subsequent call despite living inside the same 30-min-throttled block.
- getDataSmart('/Menu').catch(() => null).then((menu) => {
- if (menu && menu.group) backgroundCacheSeasonTrackSpecs(menu.group);
- });
+  detectLeagueFresh().then((info) => {
+  if (info && info.group) backgroundCacheSeasonTrackSpecs(info.group);
+  });
  } else if (bgStatusEl) {
  bgStatusEl.textContent = `Background capture skipped (ran ${formatRelativeTime(lastBgCapture)} - throttled to every 30 min, click Update All Data to force).`;
  }
@@ -4775,17 +4843,87 @@
  // 2026-07-19); splitting on " - " gives the league name directly in the exact casing
  // D.leagues/D.risks/D.facilityTargets/D.staffPriority/D.driverSelection already key by, so no
  // abbreviation-guessing (class: "Ro" etc) needed.
- function detectLeagueFromMenu(menu) {
- if (!menu || !menu.group) return null;
- const name = String(menu.group).split(' - ')[0].trim();
- return name || null;
- }
+  // League is season-changing data (promotion/demotion between seasons) and therefore must NEVER
+  // come from the eternal stale /Menu cache: getStaleData('/Menu') has no TTL, so a cached copy
+  // from a previous league (e.g. "Amateur - 3" captured before a demotion to Rookie) would pin
+  // the wrong league forever - getDataSmart('/Menu') serves that stale copy before ever re-calling
+  // the API. Real bug fixed 2026-08-10: the market advisor kept showing Amateur guidance after
+  // the account demoted to Rookie. Resolve fresh instead, cheapest first:
+  //   1) current page's own group link (<a href="Standings.asp?Group=Rookie - 31">) - free, always current
+  //   2) apiGet('/Menu') - short-lived 20-min cache, then the real API
+  //   3) eternal stale /Menu only if the API genuinely fails (flagged, not silent)
+  function parseLeagueGroupFromDom() {
+  try {
+  // Scan EVERY Standings.asp?Group= link on the current page, not just the first - a page can
+  // carry several (sidebar + manager-info table + driver-contract table), and the first in DOM
+  // order isn't necessarily the manager's own group. Keep only ones whose league name is one we
+  // actually know about (so a stray link to some other group can't override the real league),
+  // then pick the league that appears most often across those links.
+  const known = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.leagues) ? Object.keys(GPRO_DATA.leagues) : ['Rookie', 'Amateur', 'Pro', 'Master', 'Elite'];
+  const links = Array.from(document.querySelectorAll('a[href*="Standings.asp"][href*="Group="]'));
+  const candidates = [];
+  links.forEach((a) => {
+  const href = a.getAttribute('href') || '';
+  const m = href.match(/Group=([^&]+)/i);
+  if (!m) return;
+  let group = m[1];
+  try { group = decodeURIComponent(group).replace(/\+/g, ' ').trim(); } catch (e) { /* keep raw */ }
+  const league = String(group).split(' - ')[0].trim();
+  if (known.indexOf(league) !== -1) candidates.push({ group, league });
+  });
+  if (!candidates.length) return null;
+  const freq = {};
+  candidates.forEach((c) => { freq[c.league] = (freq[c.league] || 0) + 1; });
+  const best = candidates.slice().sort((x, y) => (freq[y.league] || 0) - (freq[x.league] || 0))[0];
+  logDebug('parseLeagueGroupFromDom ->', best.group, 'from', links.length, 'standings links');
+  return best.group;
+  } catch (e) { return null; }
+  }
+
+  async function detectLeagueFresh() {
+  // Priority: trust a live page reading over any cached value. When we DO get a fresh group
+  // (DOM or real API), also write it back into the eternal stale /Menu cache so every other
+  // consumer of getDataSmart('/Menu') - background track-specs pre-cache, renderHome, etc -
+  // self-corrects instead of staying permanently pinned to a previous season's league.
+  const domGroup = parseLeagueGroupFromDom();
+  if (domGroup) {
+  setStaleData('/Menu', { group: domGroup });
+  return { league: String(domGroup).split(' - ')[0].trim() || null, group: domGroup, source: 'DOM' };
+  }
+  try {
+  const menu = await apiGet('/Menu');
+  const group = menu && menu.group ? String(menu.group) : null;
+  if (group) {
+  // Only persist a group that came from a real API response - if the request failed and
+  // fallbackOrReject resolved the eternal stale value (marked __stale) it's not trustworthy
+  // enough to rewrite over itself, but it's still the best we have for THIS call.
+  return { league: String(group).split(' - ')[0].trim(), group, source: menu.__stale ? 'stale' : 'API' };
+  }
+  return { league: null, group: null, source: 'none' };
+  } catch (e) {
+  return { league: null, group: null, source: 'none' };
+  }
+  }
+
+  // Small diagnostic line showing which league the panel resolved and where that value came from
+  // (page / live API / stale cache). Makes a wrong-league panel diagnosable at a glance instead
+  // of silently trusting a cached value - this exact confusion (Rookie account shown Amateur
+  // guidance) is what detectLeagueFresh() was built to fix.
+  function leagueSourceLine(leagueInfo) {
+  const league = leagueInfo && leagueInfo.league;
+  if (!league) {
+  return `<div style="font-size:9px;color:#ef4444;margin:4px 0;">League: unknown - no group link on this page and /Menu unavailable. Edit "What to look for" below, or set currentLeague in gpro-data.js.</div>`;
+  }
+  const srcText = { DOM: 'read off this page', API: 'live from API', stale: '⚠ from cached /Menu - may be out of date' }[leagueInfo.source] || leagueInfo.source;
+  const color = leagueInfo.source === 'stale' ? '#f59e0b' : '#9ca3af';
+  return `<div style="font-size:9px;color:${color};margin:4px 0;">League: <b>${esc(league)}</b> (${srcText})</div>`;
+  }
 
  function renderStaff(staffData, league) {
  let h = '';
 
- // League context (D.leagues/D.risks were sitting unused until this league was actually
- // detectable - see detectLeagueFromMenu). Informational only; doesn't change any calculation,
+  // League context (D.leagues/D.risks were sitting unused until this league was actually
+  // detectable - see detectLeagueFresh). Informational only; doesn't change any calculation,
  // just surfaces the real caps/risk-ceiling for the account's actual league instead of leaving
  // the user to assume Amateur.
  if (league && D.leagues && D.leagues[league]) {
@@ -5029,9 +5167,27 @@
  sessHtml += `<tr><td style="padding:3px;color:#d1d5db;">${s.label}</td><td style="text-align:center;color:#9ca3af;">$${s.cost.toLocaleString()}</td><td style="padding:3px;color:#6b7280;font-size:9px;">${effectStr}</td></tr>`;
  });
  sessHtml += '</table></div>';
- h += mkSection('Available Training',
- sessHtml + `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Community-reported effects (source: <a href="https://gproracers.forumotion.com/t65-driver-stats" target="_blank" style="color:#60a5fa;">gproracers.forumotion.com</a>), not a verified formula - GPRO's own wiki says the exact effect isn't perfectly consistent session to session.</div>`);
- }
+  h += mkSection('Available Training',
+  sessHtml + `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Community-reported effects (source: <a href="https://gproracers.forumotion.com/t65-driver-stats" target="_blank" style="color:#60a5fa;">gproracers.forumotion.com</a>), not a verified formula - GPRO's own wiki says the exact effect isn't perfectly consistent session to session.</div>`);
+  }
+
+  // Optimal-training reference (user-provided 2026-08-10): target attribute levels to aim for and
+  // the session that raises each one, shown against the driver's current skill values so the gap
+  // to each target is visible at a glance. Guidance, not a verified formula.
+  const optimalTraining = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.driverOptimalTraining) || [];
+  if (optimalTraining.length) {
+  let optHtml = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:10px;">';
+  optHtml += '<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Skill</td><td style="text-align:center;">Now</td><td style="text-align:center;">Target</td><td style="text-align:center;">Gap</td><td style="padding:3px;">Session</td></tr>';
+  optimalTraining.forEach(ot => {
+  const now = data.skills[ot.skill];
+  const gap = now != null ? Math.max(0, ot.target - now) : null;
+  const gapStr = gap == null ? '?' : gap === 0 ? '<span style="color:#10b981;">Met</span>' : `+${gap}`;
+  optHtml += `<tr><td style="padding:3px;color:#d1d5db;">${ot.label}</td><td style="text-align:center;color:#9ca3af;">${now != null ? now : '?'}</td><td style="text-align:center;color:#f59e0b;font-weight:600;">${ot.target}</td><td style="text-align:center;color:${gap === 0 ? '#10b981' : '#ef4444'};font-weight:600;">${gapStr}</td><td style="padding:3px;color:#6b7280;font-size:9px;">${ot.session}</td></tr>`;
+  });
+  optHtml += '</table></div>';
+  h += mkSection('Driver Optimal Training', optHtml + `<div style="font-size:9px;color:#6b7280;margin-top:4px;">${optimalTraining.map(o => `${o.label} to ${o.target} via ${o.session}`).join(' • ')} - guidance, not a verified formula.</div>`);
+  }
+
 
  // Training recommendations — map weakest skills to best session, weighted by which attributes
  // actually matter at this driver's league (D.driverAttributeLeaguePriority) instead of pure
@@ -5112,12 +5268,22 @@
  // there), so the live page IS the data source. Cache the parsed list into the stale store too,
  // so renderMarketOverview() (callable from any page via the Tampermonkey menu) has something
  // to show without an API call even when not currently on the market page.
- const idKey = type === 'drivers' ? 'driId' : 'tdId';
- const domRows = parseAvailListDOM(document, idKey);
- if (domRows) setStaleData(type === 'drivers' ? '/AvailDrivers' : '/AvailTDs', { [type === 'drivers' ? 'drivers' : 'tds']: domRows });
- const menu = await getDataSmart('/Menu').catch(() => null);
- let h = '';
- const league = detectLeagueFromMenu(menu) || (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.currentLeague) || 'Amateur';
+  const idKey = type === 'drivers' ? 'driId' : 'tdId';
+  const domRows = parseAvailListDOM(document, idKey);
+  const marketEndpoint = type === 'drivers' ? '/AvailDrivers' : '/AvailTDs';
+  // Merge this page's rows into the accumulated stale cache (by ID) instead of overwriting, so
+  // paging through the whole market builds one list rather than only remembering the last page.
+  // The panel below still shows just the current page's rows (that's what's on screen), but the
+  // cache accumulates everything seen across visits - renderMarketOverview then surfaces it all.
+  const marketKey = type === 'drivers' ? 'drivers' : 'tds';
+  const prevMarket = getStaleData(marketEndpoint);
+  const prevRows = (prevMarket && prevMarket.data && prevMarket.data[marketKey]) || [];
+  const allRows = domRows ? mergeMarketRows(prevRows, domRows, idKey) : prevRows;
+  if (domRows) setStaleData(marketEndpoint, { [marketKey]: allRows });
+  const accumulatedNew = allRows.length - prevRows.length;
+  const leagueInfo = await detectLeagueFresh();
+  let h = '';
+  const league = leagueInfo.league || (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.currentLeague) || 'Amateur';
  const emptyReason = 'Could not read the market table on this page - if this just loaded, wait a moment and click Retry.';
  const cachedCarForMarket = getCachedCarData();
  const marketCash = cachedCarForMarket && cachedCarForMarket.cash > 0 ? cachedCarForMarket.cash : null;
@@ -5125,13 +5291,17 @@
  // one applies without a ReferenceError (const inside each branch would go out of scope).
  let sel = null, tdSel = null;
 
- if (type === 'drivers') {
- const drivers = domRows || [];
- h += mkDecisionBoard([{ id: 'gpro-sec-market-drivers', label: 'Drivers', verdict: `${drivers.length} listed`, tone: drivers.length ? 'info' : 'warn' }]);
- sel = D.driverSelection && D.driverSelection[league];
- h += mkSection(`Available Drivers (${drivers.length})`,
- drivers.length ? mkShortlistSection(drivers, 'driId', sel && sel.targetOA, marketCash, league, 'driver', 'drivers', sel && Object.entries(sel.attributes)) : mkRec(emptyReason, 'warn'),
- 'gpro-sec-market-drivers');
+  if (type === 'drivers') {
+  const drivers = domRows || [];
+  h += mkDecisionBoard([{ id: 'gpro-sec-market-drivers', label: 'Drivers', verdict: `${drivers.length} listed`, tone: drivers.length ? 'info' : 'warn' }]);
+  h += leagueSourceLine(leagueInfo);
+  sel = D.driverSelection && D.driverSelection[league];
+  h += mkSection(`Available Drivers (${drivers.length})`,
+  drivers.length ? mkShortlistSection(drivers, 'driId', sel && sel.targetOA, marketCash, league, 'driver', 'drivers', sel && Object.entries(sel.attributes)) : mkRec(emptyReason, 'warn'),
+  'gpro-sec-market-drivers');
+  if (allRows.length > drivers.length) {
+  h += `<div style="font-size:9px;color:#6b7280;margin-top:2px;">Accumulated ${allRows.length} candidates across market pages (${accumulatedNew > 0 ? `+${accumulatedNew} new this page, ` : ''}${prevRows.length} from before) - use the Driver &amp; TD Market menu command to see them all.</div>`;
+  }
 
  // Driver selection criteria
  if (sel) {
@@ -5148,13 +5318,17 @@
  // say plainly that the guidance doesn't exist yet for this league.
  h += `<div style="font-size:9px;color:#f59e0b;margin-top:8px;">No target-attribute guidance calibrated yet for ${league} league (only Rookie/Amateur so far) - the driver list above is still real, just without a "what to look for" checklist.</div>`;
  }
- } else {
- const tds = domRows || [];
- h += mkDecisionBoard([{ id: 'gpro-sec-market-tds', label: 'TDs', verdict: `${tds.length} listed`, tone: tds.length ? 'info' : 'warn' }]);
- tdSel = D.tdSelection && D.tdSelection[league];
- h += mkSection(`Available Technical Directors (${tds.length})`,
- tds.length ? mkShortlistSection(tds, 'tdId', tdSel && tdSel.targetOA, marketCash, league, 'TD', 'tds', tdSel && Object.entries(tdSel.skills)) : mkRec(emptyReason, 'warn'),
- 'gpro-sec-market-tds');
+   } else {
+  const tds = domRows || [];
+  h += mkDecisionBoard([{ id: 'gpro-sec-market-tds', label: 'TDs', verdict: `${tds.length} listed`, tone: tds.length ? 'info' : 'warn' }]);
+  h += leagueSourceLine(leagueInfo);
+  tdSel = D.tdSelection && D.tdSelection[league];
+  h += mkSection(`Available Technical Directors (${tds.length})`,
+  tds.length ? mkShortlistSection(tds, 'tdId', tdSel && tdSel.targetOA, marketCash, league, 'TD', 'tds', tdSel && Object.entries(tdSel.skills)) : mkRec(emptyReason, 'warn'),
+  'gpro-sec-market-tds');
+  if (allRows.length > tds.length) {
+  h += `<div style="font-size:9px;color:#6b7280;margin-top:2px;">Accumulated ${allRows.length} candidates across market pages (${accumulatedNew > 0 ? `+${accumulatedNew} new this page, ` : ''}${prevRows.length} from before) - use the Driver &amp; TD Market menu command to see them all.</div>`;
+  }
  if (tdSel) {
  let tdSelHtml = `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Target OA: ${tdSel.targetOA.min}-${tdSel.targetOA.max}</div><div style="font-size:9px;color:#f59e0b;margin-bottom:4px;">⚠️ TD OA caps are wiki-sourced and NOT independently confirmed - this project's driver OA caps came from the same wiki and turned out to be wrong (corrected 2026-07-27 via live in-game confirmation). Verify against what the game actually lets you sign before relying on this.</div>`;
  Object.entries(tdSel.skills).sort((a, b) => a[1].priority - b[1].priority).forEach(([skill, info]) => {
@@ -5262,11 +5436,104 @@
  return merged;
  }
 
- // ============================================================
- // INIT
- // ============================================================
- async function init() {
- const page = detectPage();
+  // ============================================================
+  // RENDER: DRIVER OFFER (DriverProfile.asp "Place your offer" form)
+  // ============================================================
+  // Advises on the contract-offer form a free-agent driver shows you. All numbers are read live
+  // off the page (driver's ask, your cash, current form values) so the advice reflects the real
+  // caps the game's own SubmitForm validation enforces - nothing guessed.
+  function renderDriverOffer() {
+  createPanel('Driver Offer Advisor');
+  body(`<div style="${ST.loading}">Reading offer form...</div>`);
+  try {
+  const offer = parseDriverOfferDOM(document);
+  if (!offer) {
+  body(mkRec('No contract-offer form found on this page - either this driver is already under your contract or the page just loaded. Click Retry or reload.', 'warn') +
+  `<div style="margin-top:8px;"><button id="gpro-retry" style="background:#374151;color:#d1d5db;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;">Retry</button></div>`);
+  setTimeout(() => { document.getElementById('gpro-retry')?.addEventListener('click', () => location.reload()); }, 100);
+  return;
+  }
+  let h = '';
+  const ask = offer.ask || 0;
+  const cash = offer.cash || 0;
+
+  // Game caps from the page's own validation JS:
+  //   max bonus per win/podium/point = floor(managersCash / 17)
+  //   max championship bonus        = floor(managersCash / 2)  (Elite-only field)
+  //   salary outside 0.3x..5x of the ask triggers a "please confirm"
+  //   signing fee < 0.3x salary warns; signing fee must be < 3.0x salary (tooltip)
+  const maxRaceBonus = Math.floor(cash / 17);
+  const maxChampBonus = Math.floor(cash / 2);
+
+  // Driver/ask/competition/offer-cost detail cards removed from the visible panel per explicit
+  // user request 2026-07-31 ("pointless waste... I only need the recommended offers part") -
+  // same "UI stays copy-paste-simple" precedent as the other advisors (see CLAUDE.md). All of
+  // this is still parsed and used internally below to compute the recommendation - only the
+  // separate display cards for it are gone, not the data itself.
+
+  // ---- Recommended offer ----
+  // HONESTY NOTE: GPRO's driver-choice model is closed, and rival bid amounts aren't visible, so
+  // there is NO proven "win" number and no tool can give you one. This is a transparent heuristic
+  // anchored on the driver's asking salary, and it's tunable - you decide how competitive you want
+  // to be (a "value" bid vs. a "must-win" bid). All values are held inside the game's own
+  // validation caps (read off this page), and the default is a fair, budget-friendly deal - not an
+  // attempt to brute-force someone else's bid, which nobody can see anyway.
+  const contested = offer.totalOffers > 0;
+  // Nightly tuning via Settings (gpro_bid_strategy): value=0.5x ask, balanced=1.0x (default,
+  // material deal), aggressive=2.0x. Balanced picks 1.25x when contested, 1.0x when calm.
+  let bidStrat = contested ? 1.25 : 1.0;
+  try {
+  const s = GM_getValue('gpro_bid_strategy', 'balanced');
+  bidStrat = s === 'value' ? 0.5 : s === 'aggressive' ? 2.0 : s === 'balanced' ? (contested ? 1.25 : 1.0) : bidStrat;
+  } catch (e) {}
+  let recSalary = Math.max(Math.round(ask * 0.5 / 10000) * 10000, Math.round((ask * bidStrat) / 10000) * 10000);
+  // Don't blow your whole cash on one season-long salary; sanity-cap at ~70% of held cash.
+  const seasonCap = Math.floor(cash * 0.7);
+  recSalary = Math.min(recSalary, seasonCap);
+  // Signing fee: generous but capped well inside the <3x rule - 1x salary is a genuinely strong
+  // but sane offer that won't overpay on an untested salary.
+  const recSignFee = Math.min(Math.round((recSalary * 1.0) / 5000) * 5000, recSalary * 3);
+  // Bonuses: keep them modest (result-only upside), never near the legal max - that's the "proven
+  // top-tools overpay" trap with zero upside unless the driver actually delivers.
+  const recWinBonus = Math.min(Math.round((recSalary * 0.4) / 5000) * 5000, maxRaceBonus);
+  const recPodiumBonus = Math.min(Math.round((recSalary * 0.25) / 5000) * 5000, maxRaceBonus);
+  const recPointBonus = Math.min(Math.round((recSalary * 0.2) / 5000) * 5000, maxRaceBonus);
+  const recRaces = 17;
+  const recChampBonus = 0;
+
+  // Budget check: total season commitment = salary*races + fee + offer cost.
+  const total = recSalary * recRaces + recSignFee + offer.offerCost;
+  const affordable = total <= cash;
+  const bufNote = affordable ? '' : mkRec('This recommended offer exceeds the cash you hold — trim salary/races below to stay solvent.', 'bad');
+
+  h += mkSection('Recommended offer' + (contested ? ' (driver is contested)' : ''),
+  mkRow('Salary per race', '$' + recSalary.toLocaleString() + `<span style="color:#9ca3af;font-size:9px;"> (~${Math.round(recSalary / Math.max(1, ask) * 10) / 10}x his $${ask.toLocaleString()} ask)</span>`) +
+  mkRow('Signing on fee', '$' + recSignFee.toLocaleString() + `<span style="color:#9ca3af;font-size:9px;"> (${recSignFee === 0 ? 'must be > 0' : Math.round(recSignFee / recSalary * 10) / 10 + 'x salary — keep < 3x'})</span>`) +
+  mkRow('Bonus per win', '$' + recWinBonus.toLocaleString() + '<span style="color:#6b7280;font-size:9px;"> result-only</span>') +
+  mkRow('Bonus per podium', '$' + recPodiumBonus.toLocaleString() + '<span style="color:#6b7280;font-size:9px;"> result-only</span>') +
+  mkRow('Points bonus', '$' + recPointBonus.toLocaleString() + '<span style="color:#6b7280;font-size:9px;"> result-only</span>') +
+  mkRow('Championship bonus', offer.champDisabled ? '0 (not offered below Elite)' : '$0') +
+  mkRow('Contract length', recRaces + ' races (max - locks the driver in)') +
+  mkRow('Visibility', offer.visibility || 'Public offer') +
+  mkRow('Est. total commitment', '$' + total.toLocaleString() + (affordable ? '' : ' ❌ exceeds cash')) +
+  bufNote +
+  `<div style="font-size:9px;color:#f59e0b;margin-top:2px;">⚠ Heuristic, not proven: no tool can see rivals' bids, so there's no verified "win" bid. This is a fair, budget-friendly default. To change your aggressiveness, use the Settings menu.</div>` +
+  // GPRO wiki (Staff_Markets, confirmed 2026-07-31): "Maximum of 4 total offers per market
+  // (drivers and TDs combined)" - a real constraint worth surfacing here since it bears
+  // directly on whether this specific offer is worth spending a slot on, not just its price.
+  `<div style="font-size:9px;color:#6b7280;margin-top:2px;">You can have at most 4 open offers total (drivers + TDs combined) per market - spend slots on drivers you'd actually sign.</div>`);
+
+  body(h);
+  } catch (err) {
+  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad'));
+  }
+  }
+
+  // ============================================================
+  // INIT
+  // ============================================================
+  async function init() {
+  const page = detectPage();
  if (!page) return;
  const PAGE_TITLES = {
  home: 'GPRO Dashboard',
@@ -5278,9 +5545,10 @@
  training: 'Training Advisor',
  marketDrivers: 'Driver Market Advisor',
  marketTDs: 'TD Market Advisor',
-  negotiations: 'Sponsor Advisor',
-  negotiateSponsor: 'Sponsor Negotiation Advisor',
- };
+   negotiations: 'Sponsor Advisor',
+   negotiateSponsor: 'Sponsor Negotiation Advisor',
+   driverOffer: 'Driver Offer Advisor',
+  };
  createPanel(PAGE_TITLES[page] || 'GPRO Strategy Tool');
  // Show loading progress
  const loadingMsgs = {
@@ -5328,15 +5596,15 @@
  // Same DOM-only policy as Qualify above, plus Testing (fuel-stint data) now has a real
  // parser (parseTestingDOM) fed by visiting/background-fetching Testing.asp, so it's
  // DOM-only too - Office remains the one confirmed no-DOM-source exception.
- const [practice, track, testing, driver, office, staff, car, supplierData, menu] = await Promise.all([
- getDataDomOnly('/Practice', buildLivePracticeDOM), getDataDomOnly('/TrackProfile'),
- getDataDomOnly('/Testing', parseTestingDOM), getDataDomOnly('/DriProfile'),
- getDataSmart('/Office'), getDataDomOnly('/StaffAndFacilities'), getDataDomOnly('/UpdateCar'),
- getDataDomOnly('/TyreSuppliers'), getDataSmart('/Menu').catch(() => null)
- ]);
- const supplier = resolveActiveSupplier(office, supplierData);
- const staffTd = await buildStaffTdInfo(office, staff);
- renderRaceSetup(practice, track, testing, driver, supplier, mergeWithCachedCarData(car), staffTd, detectLeagueFromMenu(menu));
+  const [practice, track, testing, driver, office, staff, car, supplierData, leagueInfo] = await Promise.all([
+  getDataDomOnly('/Practice', buildLivePracticeDOM), getDataDomOnly('/TrackProfile'),
+  getDataDomOnly('/Testing', parseTestingDOM), getDataDomOnly('/DriProfile'),
+  getDataSmart('/Office'), getDataDomOnly('/StaffAndFacilities'), getDataDomOnly('/UpdateCar'),
+  getDataDomOnly('/TyreSuppliers'), detectLeagueFresh()
+  ]);
+  const supplier = resolveActiveSupplier(office, supplierData);
+  const staffTd = await buildStaffTdInfo(office, staff);
+  renderRaceSetup(practice, track, testing, driver, supplier, mergeWithCachedCarData(car), staffTd, leagueInfo.league);
  } else if (page === 'updateCar') {
  // DOM-only for car data: UpdateCar.asp's own "Setup related parts" table already gives
  // levels/wear/cash/upgrade-options, and renderUpdateCar's own parseUpdateCarDOM() merge
@@ -5345,11 +5613,11 @@
  // always physically on when this runs. getCachedCarData() (this project's separate
  // long-lived DOM-fed car cache, populated by prior visits to this same page) is the base
  // rather than {} purely for continuity if any single DOM field is momentarily unreadable.
- const [track, driver, menu] = await Promise.all([
- getDataDomOnly('/TrackProfile'), getDataDomOnly('/DriProfile'), getDataSmart('/Menu').catch(() => null)
- ]);
- const car = getCachedCarData() || {};
- renderUpdateCar(car, track, driver, detectLeagueFromMenu(menu));
+  const [track, driver, leagueInfo] = await Promise.all([
+  getDataDomOnly('/TrackProfile'), getDataDomOnly('/DriProfile'), detectLeagueFresh()
+  ]);
+  const car = getCachedCarData() || {};
+  renderUpdateCar(car, track, driver, leagueInfo.league);
  } else if (page === 'staff') {
  // Real bug fixed 2026-07-19: this branch was fetching /Office, but staff skills and
  // facility levels live on /StaffAndFacilities (CLAUDE.md already documented this exact
@@ -5357,26 +5625,28 @@
  // had the same mistake, unnoticed because /Office's fields happened not to throw, they
  // just silently produced an all-undefined staff object). Now DOM-only via the expanded
  // parseStaffFacilitiesDOM (we're always physically on StaffAndFacilities.asp here).
- const [staff, menu] = await Promise.all([
- Promise.resolve(getDataDomOnly('/StaffAndFacilities', parseStaffFacilitiesDOM)),
- getDataSmart('/Menu').catch(() => null),
- ]);
- if (!staff) {
- body(mkRec('No staff/facilities data found on this page yet. If this page just loaded, wait a moment and click Retry.', 'warn') +
- `<div style="margin-top:8px;"><button id="gpro-retry" style="background:#374151;color:#d1d5db;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;">Retry</button></div>`);
- setTimeout(() => { document.getElementById('gpro-retry')?.addEventListener('click', () => location.reload()); }, 100);
- return;
- }
- renderStaff(staff, detectLeagueFromMenu(menu));
- } else if (page === 'training') {
- const menu = await getDataSmart('/Menu').catch(() => null);
- renderTraining(detectLeagueFromMenu(menu));
+  const [staff, leagueInfo] = await Promise.all([
+  Promise.resolve(getDataDomOnly('/StaffAndFacilities', parseStaffFacilitiesDOM)),
+  detectLeagueFresh(),
+  ]);
+  if (!staff) {
+  body(mkRec('No staff/facilities data found on this page yet. If this page just loaded, wait a moment and click Retry.', 'warn') +
+  `<div style="margin-top:8px;"><button id="gpro-retry" style="background:#374151;color:#d1d5db;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;">Retry</button></div>`);
+  setTimeout(() => { document.getElementById('gpro-retry')?.addEventListener('click', () => location.reload()); }, 100);
+  return;
+  }
+  renderStaff(staff, leagueInfo.league);
+  } else if (page === 'training') {
+  const leagueInfo = await detectLeagueFresh();
+  renderTraining(leagueInfo.league);
   } else if (page === 'marketDrivers' || page === 'marketTDs') {
   renderMarketPage(page === 'marketDrivers' ? 'drivers' : 'tds');
    } else if (page === 'negotiations') {
    renderSponsorOverview();
    } else if (page === 'negotiateSponsor') {
    renderNegotiateSponsor();
+   } else if (page === 'driverOffer') {
+   renderDriverOffer();
    }
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad') +
@@ -5621,10 +5891,11 @@
    `<span style="font-size:9px;color:#6b7280;">Each is a 1-7 scale. Higher finances/reputation = deeper pockets/prestige; higher negotiation = tougher to please; higher expectations = wants more from you; lower patience = answer & move fast. These drive every reply below.</span>`);
  }
 
- // Manager's realistic season goal (context for "what to expect next season").
- // Trains off current league + its target OA / promotion posture so the pick is
- // grounded in the manager's own ambition, not a coin-flip.
- const league = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.currentLeague) || 'Amateur';
+  // Manager's realistic season goal (context for "what to expect next season").
+  // Trains off current league + its target OA / promotion posture so the pick is
+  // grounded in the manager's own ambition, not a coin-flip.
+  const leagueInfo = await detectLeagueFresh();
+  const league = leagueInfo.league || (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.currentLeague) || 'Amateur';
  const lgCfg = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.leagues) ? GPRO_DATA.leagues[league] : null;
  const managerGoal = lgCfg && lgCfg.resetsEachSeason
   ? 'Promotion / top 4 / championship win'
@@ -5822,11 +6093,24 @@
  row.profileHref = link.getAttribute('href');
  rows.push(row);
  });
- return rows.length ? rows : null;
- } catch (e) { return null; }
- }
+  return rows.length ? rows : null;
+  } catch (e) { return null; }
+  }
 
- function mkMarketTable(rows, idKey, targetOA) {
+  // Accumulates market-list rows across page visits instead of letting each visit clobber the
+  // previous one. GPRO's market list is paginated, so paging through the whole market must merge
+  // each page into the stale cache by ID - otherwise the menu command (renderMarketOverview) could
+  // only ever show the LAST page visited. Incoming rows win for a duplicate ID (fresh salary/
+  // offers/retiring flags are the newest reading), but rows not present on the current page are
+  // kept, not dropped. Added 2026-08-10.
+  function mergeMarketRows(existing, incoming, idKey) {
+  const byId = new Map();
+  (existing || []).forEach((r) => { if (r && r[idKey] != null) byId.set(r[idKey], r); });
+  (incoming || []).forEach((r) => { if (r && r[idKey] != null) byId.set(r[idKey], r); });
+  return Array.from(byId.values());
+  }
+
+  function mkMarketTable(rows, idKey, targetOA) {
  let t = `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:10px;">`;
  t += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Name</td><td>Nat</td><td>OA</td><td>Age</td><td>Salary</td><td>Sign Fee</td><td>Offers</td><td>Value</td>${targetOA ? '<td>Match</td>' : ''}</tr>`;
  // Sort by OA descending for better visibility
@@ -5877,17 +6161,19 @@
  return mkMarketTable(rows, idKey, targetOA) +
  `<div style="font-size:9px;color:#f59e0b;margin-top:4px;">No ${cfgLabel} guidance calibrated yet for ${league || 'your'} league - showing the full unfiltered list.</div>`;
  }
- // Politeness cap on real page fetches per scan - not an API budget concern, but still real
- // traffic against gpro.net, so bounded regardless of how many rows the market lists.
- const capped = rows.slice(0, 30);
- const floors = (priorityEntries || []).map(([key, info]) => [key, info.priority, parseMinFromTarget(info.target)]).filter(([, , min]) => min != null && min > 0);
- // Only the single top-priority floor gates the post-scan split (see mkFullStatsTable) - per
- // GPRO's own official Newbie Guide, expecting every attribute to clear its floor simultaneously
- // isn't realistic ("a driver with one or two skills will suffice").
- const topFloor = floors.length ? floors.reduce((a, b) => a[1] <= b[1] ? a : b) : null;
- const floorNote = topFloor
- ? `Will filter to candidates meeting ${topFloor[0]} ≥ ${topFloor[2]} (${league}'s top-priority attribute - not every attribute at once, per GPRO's own guide on realistic driver expectations)`
- : `No numeric minimum thresholds sourced for ${cfgLabel} at ${league} league yet - results will be ranked by Match Score instead of filtered to a hard cutoff.`;
+  // Politeness cap on real page fetches per scan - not an API budget concern, but still real
+  // traffic against gpro.net, so bounded regardless of how many rows the market lists. Sort by OA
+  // desc BEFORE capping so accumulation never pushes the best candidates out of scan range - GPRO
+  // lists pages OA-descending, but merged rows arrive in page-visit order, which can interleave.
+  const sortedByOA = [...rows].sort((a, b) => (parseFloat(b.OA) || 0) - (parseFloat(a.OA) || 0));
+  const capped = sortedByOA.slice(0, 30);
+  const floors = (priorityEntries || []).map(([key, info]) => [key, info.priority, parseMinFromTarget(info.target)]).filter(([, , min]) => min != null && min > 0);
+  // Per explicit user request (2026-08-10): every attribute with a sourced numeric minimum must
+  // clear it - not just a single top-priority one. "0-xx" keep-low targets parse to a 0 floor and
+  // impose no lower bound, so they never block. See mkFullStatsTable.
+  const floorNote = floors.length
+  ? `Will filter to candidates meeting ALL minimums: ${floors.map(([k, , m]) => `${k} ≥ ${m}`).join(', ')}`
+  : `No numeric minimum thresholds sourced for ${cfgLabel} at ${league} league yet - results will be ranked by Match Score instead of filtered to a hard cutoff.`;
  let h = `<div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">Target OA ${targetOA.min}-${targetOA.max} for ${league}${cash != null ? `, cash on hand $${cash.toLocaleString()}` : ' (cash balance unknown - visit UpdateCar.asp once to see it here)'}</div>`;
  // League salary/age guidance (from D.driverSelection/tdSelection) - flags rows the manager
  // likely can't sustain, matching competitor tools' salary/age filters without needing supporters.
@@ -5938,14 +6224,15 @@
  } catch (e) { logError(`full-stat fetch failed for ${kind} ${id}:`, e.message); return null; }
  }
 
- // Bounded to 30 real page fetches per scan (matches the cap already shown to the user in
- // mkShortlistSection's button label - kept in sync so "scan these N" actually scans N).
- async function scanCandidatesFullStats(rows, idKey) {
- const kind = idKey === 'driId' ? 'driver' : 'td';
- const capped = rows.slice(0, 30);
- const results = await mapLimit(capped, NET_CONCURRENCY, (r) => fetchCandidateFullStats(kind, r[idKey], r.profileHref));
- return capped.map((r, i) => Object.assign({}, r, { fullStats: results[i].status === 'fulfilled' ? results[i].value : null }));
- }
+  // Bounded to 30 real page fetches per scan (matches the cap already shown to the user in
+  // mkShortlistSection's button label - kept in sync so "scan these N" actually scans N). Same
+  // sort-by-OA-before-slice as mkShortlistSection, so the scanned set is exactly the displayed set.
+  async function scanCandidatesFullStats(rows, idKey) {
+  const kind = idKey === 'driId' ? 'driver' : 'td';
+  const capped = [...rows].sort((a, b) => (parseFloat(b.OA) || 0) - (parseFloat(a.OA) || 0)).slice(0, 30);
+  const results = await mapLimit(capped, NET_CONCURRENCY, (r) => fetchCandidateFullStats(kind, r[idKey], r.profileHref));
+  return capped.map((r, i) => Object.assign({}, r, { fullStats: results[i].status === 'fulfilled' ? results[i].value : null }));
+  }
 
   // Weighted-sum match score (0-100) of real scraped attributes against this league's ideal
   // target, weighted by priority order (D.driverSelection[league].attributes /
@@ -6033,45 +6320,44 @@
  return t;
  }
 
- // Real bug fixed 2026-07-27: this used to require EVERY numeric floor simultaneously
- // (Concentration 200+ AND Talent 60+ AND Experience 90+ AND TechInsight 80+ all at once), which
- // directly contradicts GPRO's own official Newbie Guide (gpro.net/gb/GPRONoobGuide.asp): "You
- // will not find a driver who has a good rating for all his skills whilst in Rookie, but a driver
- // with one or two skills will suffice and provide you with a promotion-worthy driver." Requiring
- // all floors at once meant zero candidates could ever pass, regardless of the threshold numbers
- // being right. Now requires meeting the floor for the SINGLE highest-priority attribute only
- // (Concentration, in every league's data) - matching "one or two skills will suffice" without
- // being so loose it stops meaning anything.
- function mkFullStatsTable(rows, idKey, priorityEntries, league) {
- const floors = (priorityEntries || []).map(([key, info]) => [key, info.priority, parseMinFromTarget(info.target)]).filter(([, , min]) => min != null && min > 0);
- let h = '';
- if (!floors.length) {
- h += mkScoredTable(rows, idKey, priorityEntries, league);
- h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">No numeric minimum thresholds sourced for this league - ranked by Fit Score (age/weight-adjusted), not filtered to a hard cutoff.</div>`;
- return h;
- }
- // Only the single highest-priority (lowest priority number) floor gates the split - per GPRO's
- // own guide, expecting every attribute to clear its floor at once isn't realistic.
- const [topKey, , topMin] = floors.reduce((a, b) => a[1] <= b[1] ? a : b);
- const meets = [], below = [];
- rows.forEach(r => {
- const stats = r.fullStats;
- const ok = stats && typeof stats[topKey] === 'number' && stats[topKey] >= topMin;
- (ok ? meets : below).push(r);
- });
- const floorStr = `${topKey} ≥ ${topMin}`;
- if (meets.length) {
- h += `<div style="font-size:9px;color:#10b981;margin-bottom:4px;">Meets ${floorStr} (this league's top-priority attribute): ${meets.length} of ${rows.length}</div>`;
- h += mkScoredTable(meets, idKey, priorityEntries, league);
- } else {
- h += mkRec(`None of the ${rows.length} scanned candidates meet ${floorStr} - see below. Per GPRO's own Newbie Guide, don't expect every attribute to clear its floor at once; this only gates on the single top-priority one.`, 'warn');
- }
- if (below.length) {
- h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#6b7280;font-size:10px;padding:4px 0;">Show ${below.length} that didn't meet ${floorStr}</summary>${mkScoredTable(below, idKey, priorityEntries, league)}</details>`;
- }
- h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Match Score = weighted sum of each candidate's real attributes (scraped from their profile page), weighted by this league's priority order. Relative ranking only, not a percentage or verified formula.</div>`;
- return h;
- }
+  // Market shortlist filtering (2026-08-10, per explicit user request): candidates must meet ALL
+  // numeric minima sourced for their league - not just the single top-priority one that was the
+  // previous behaviour. Requirement: every attribute with a numeric floor (min > 0) must clear it,
+  // and candidates that pass every floor are shown separately from those that don't (with the
+  // specific floor(s) they missed called out). Range targets like "60-150" are treated as "meet the
+  // lower bound" (parseMinFromTarget reads the leading integer); "0-49"-style keep-low targets parse
+  // to a 0 floor and therefore don't impose a lower bound, so they never block a candidate.
+  function mkFullStatsTable(rows, idKey, priorityEntries, league) {
+  const floors = (priorityEntries || []).map(([key, info]) => [key, info.priority, parseMinFromTarget(info.target)]).filter(([, , min]) => min != null && min > 0);
+  let h = '';
+  if (!floors.length) {
+  h += mkScoredTable(rows, idKey, priorityEntries, league);
+  h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">No numeric minimum thresholds sourced for this league - ranked by Fit Score (age/weight-adjusted), not filtered to a hard cutoff.</div>`;
+  return h;
+  }
+  const meets = [], below = [];
+  rows.forEach(r => {
+  const stats = r.fullStats;
+  const fails = floors.filter(([key, , min]) => !(stats && typeof stats[key] === 'number' && stats[key] >= min));
+  (fails.length ? below : meets).push(Object.assign({}, r, { __misses: fails.map(([k, , m]) => `${k}<${m}`) }));
+  });
+  const floorStr = floors.map(([k, , m]) => `${k} ≥ ${m}`).join(' AND ');
+  if (meets.length) {
+  h += `<div style="font-size:9px;color:#10b981;margin-bottom:4px;">Meets ALL minimums (${floorStr}): ${meets.length} of ${rows.length}</div>`;
+  h += mkScoredTable(meets, idKey, priorityEntries, league);
+  } else {
+  h += mkRec(`None of the ${rows.length} scanned candidates meet every minimum (${floorStr}). If this is stubbornly empty, some thresholds are likely too high for the current market - consider trimming the top-priority floor.`, 'warn');
+  }
+  if (below.length) {
+  h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#6b7280;font-size:10px;padding:4px 0;">⚠ Show ${below.length} that missed at least one minimum</summary>`;
+  h += `<div style="font-size:9px;color:#ef4444;margin-bottom:4px;">🚫 = attribute below its floor (each candidate shows which floor it failed):</div>`;
+  h += mkScoredTable(below, idKey, priorityEntries, league);
+  h += `<div style="font-size:9px;color:#6b7280;margin-top:2px;">${below.map(r => `${esc(r.name)}: ${(r.__misses || []).join(', ')}`).join(' • ')}</div>`;
+  h += '</details>';
+  }
+  h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Match Score = weighted sum of each candidate's real attributes (scraped from their profile page), weighted by this league's priority order. Relative ranking only, not a percentage or verified formula.</div>`;
+  return h;
+  }
 
  // Wires the "Scan Full Stats" button for one market section (drivers or TDs) after body(h) has
  // rendered it. rows = the FULL row list shown (mkShortlistSection/scanCandidatesFullStats apply
@@ -6108,14 +6394,14 @@
  // fall back to whatever parseAvailListDOM captured into the stale cache the last time the user
  // (or backgroundCaptureAuxPages) visited AvailDrivers.asp/AvailTechDirectors.asp. No API call
  // is ever made as a fallback; if nothing's cached yet, the section just says so.
- const menu = await getDataSmart('/Menu').catch(() => null);
- const staleDrivers = getStaleData('/AvailDrivers');
- const staleTds = getStaleData('/AvailTDs');
- let h = '';
- const drivers = (staleDrivers && staleDrivers.data && staleDrivers.data.drivers) || [];
- const tds = (staleTds && staleTds.data && staleTds.data.tds) || [];
- const noDataMsg = (page) => `No cached data yet - visit ${page} once to capture it (never fetched via API).`;
- const league = detectLeagueFromMenu(menu) || (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.currentLeague) || 'Amateur';
+  const leagueInfo = await detectLeagueFresh();
+  const staleDrivers = getStaleData('/AvailDrivers');
+  const staleTds = getStaleData('/AvailTDs');
+  let h = '';
+  const drivers = (staleDrivers && staleDrivers.data && staleDrivers.data.drivers) || [];
+  const tds = (staleTds && staleTds.data && staleTds.data.tds) || [];
+  const noDataMsg = (page) => `No cached data yet - visit ${page} once to capture it (never fetched via API).`;
+  const league = leagueInfo.league || (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.currentLeague) || 'Amateur';
  const cachedCar = getCachedCarData();
  const cash = cachedCar && cachedCar.cash > 0 ? cachedCar.cash : null;
  h += mkDecisionBoard([

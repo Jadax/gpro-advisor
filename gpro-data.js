@@ -677,96 +677,102 @@ var GPRO_DATA = {
  // skills suffices, so the shortlist (`mkFullStatsTable`) only gates on the single top-priority
  // attribute; the rest are a priority-ordered reference, not a full checklist.
  driverSelection: {
- Rookie: {
- // Rookie: Car resets each season. Focus on cheap, balanced driver.
- // Priority: Concentration > Talent > Experience > Tech Insight
- targetOA: { min: 75, max: 85 },
- maxSalary: 2000000, // per GPRO Newbie Guide: don't pay much over $2M/race in Rookie
- maxAge: 36,
- attributes: {
- concentration: { target: '200+', priority: 1, note: 'Most impactful for race consistency and error reduction' },
- talent: { target: '60-150', priority: 2, note: 'Affects raw speed; 150+ is ideal but expensive' },
- experience: { target: '90-150', priority: 3, note: 'Affects strategy and tyre management' },
- techInsight: { target: '80-150', priority: 4, note: 'Affects car setup precision' },
- aggressiveness:{ target: '0-49', priority: 5, note: 'Keep low to reduce tyre/parts wear' },
- stamina: { target: '0-45', priority: 6, note: 'Not critical in Rookie' },
- charisma: { target: '0-150', priority: 7, note: 'Helps with sponsor income' },
- motivation: { target: '0-250', priority: 8, note: 'Helps with training speed' },
- },
- budget: 'Save as much as possible. Car resets to L1. Spend only on driver.',
- },
- Amateur: {
- // Amateur: Car carries over. Invest in driver + car balance.
- // Priority: Concentration > Experience > Tech Insight > Talent
- targetOA: { min: 90, max: 110 },
- maxSalary: 2500000,
- maxAge: 37,
- attributes: {
- concentration: { target: '200+', priority: 1, note: 'Reduces errors, affects tyre wear and fuel consumption' },
- experience: { target: '150-200', priority: 2, note: 'Affects strategy, tyre management, and setup precision' },
- techInsight: { target: '150-200', priority: 3, note: 'Affects car setup precision and margin of acceptance' },
- talent: { target: '100-150', priority: 4, note: 'Raw speed; balanced with other attributes' },
- aggressiveness:{ target: '0-49', priority: 5, note: 'Keep low to reduce wear; increase for overtaking tracks' },
- stamina: { target: '0-45', priority: 6, note: 'Minor effect in Amateur' },
- charisma: { target: '100-150', priority: 7, note: 'Sponsor income boost' },
- motivation: { target: '100-200', priority: 8, note: 'Training speed' },
- },
- budget: 'Balance car upgrades (L5-7) with driver development. Never go into debt.',
+ // Targets calibrated 2026-08-10 from a real 24,846-driver market scrape (gpro-strategy.net
+ // find-driver, OA-banded). Previous '200+' concentration floors were unreachable in Rookie
+ // (0 of 100 sampled max-OA drivers had it) and too strict in Amateur (only ~20% of max-OA
+ // drivers) - which is exactly why the advisor shortlisted nobody. Values below follow real
+ // per-band medians; only the top-priority floor gates the shortlist split (per GPRO's own
+ // Newbie Guide, "one or two skills will suffice", never every attribute at once).
+  Rookie: {
+  // Rookie: Car resets each season. Focus on cheap, balanced driver.
+  // Priority: Concentration > Talent > Experience > Tech Insight
+  targetOA: { min: 75, max: 85 },
+  maxSalary: 2000000, // per GPRO Newbie Guide: don't pay much over $2M/race in Rookie
+  maxAge: 36,
+  attributes: {
+  concentration: { target: '200', priority: 1, note: 'Consistency + error reduction. Train toward 200 via Yoga' },
+  talent: { target: '60-150', priority: 2, note: 'Raw speed; untrainable. Naturally 200+ in most of the market - treat <150 as a red flag' },
+  experience: { target: '90-150', priority: 3, note: 'Grows +1/race; affects strategy and tyre management' },
+  techInsight: { target: '80-150', priority: 4, note: 'Setup precision and fuel consumption. Train toward 125 via Technical training' },
+  aggressiveness:{ target: '0-49', priority: 5, note: 'Keep low to reduce tyre/parts wear; 100 via Ninja training if raising intentionally' },
+  stamina: { target: '0-45', priority: 6, note: 'Train toward 100 via Fitness Class + Testing (2x 50 laps = +5 stamina)' },
+  charisma: { target: '0-250', priority: 7, note: 'Helps with sponsor income' },
+  motivation: { target: '0-250', priority: 8, note: 'Helps with training speed' },
+  },
+  budget: 'Save as much as possible. Car resets to L1. Spend only on driver.',
+  },
+  Amateur: {
+  // Amateur: Car carries over. Invest in driver + car balance.
+  // Priority: Concentration > Talent > Experience > Tech Insight
+  targetOA: { min: 90, max: 110 },
+  maxSalary: 2500000,
+  maxAge: 37,
+  attributes: {
+  concentration: { target: '200', priority: 1, note: 'Consistency + error reduction. Train toward 200 via Yoga' },
+  talent: { target: '60-150', priority: 2, note: 'Raw speed, untrainable; market median ~205, prefer high' },
+  experience: { target: '90-150', priority: 3, note: 'Grows +1/race; strategy, tyre management, setup precision' },
+  techInsight: { target: '80-150', priority: 4, note: 'Setup precision, margin of acceptance, fuel. Train toward 125 via Technical training' },
+  aggressiveness:{ target: '0-49', priority: 5, note: 'Keep low to reduce wear; 100 via Ninja training if raising intentionally' },
+  stamina: { target: '0-45', priority: 6, note: 'Train toward 100 via Fitness Class + Testing (2x 50 laps = +5 stamina)' },
+  charisma: { target: '0-250', priority: 7, note: 'Sponsor income boost' },
+  motivation: { target: '0-250', priority: 8, note: 'Affects qualifying/training speed; volatile (spikes with results)' },
+  },
+  budget: 'Balance car upgrades (L5-7) with driver development. Never go into debt.',
  },
  // Pro/Master/Elite added 2026-07-27, OA bands corrected same date (see note above). Attribute
  // PRIORITY ORDER is the same logical extension of Rookie/Amateur's established order
  // (concentration/consistency stays the top lever at every level), but no community source was
  // found giving precise numeric attribute targets this far up the ladder, unlike Rookie/Amateur -
  // so those are left as "as high as affordable" rather than inventing specific thresholds.
-  Pro: {
-  targetOA: { min: 110, max: 135 },
-  maxSalary: 3500000,
-  maxAge: 38,
-  attributes: {
- concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
- experience: { target: 'as high as affordable', priority: 2, note: 'Strategy/tyre management/setup precision' },
- techInsight: { target: 'as high as affordable', priority: 3, note: 'Setup precision, margin of acceptance' },
- talent: { target: 'as high as affordable', priority: 4, note: 'Raw speed - TD (available from Pro) can partly compensate for setup gaps' },
- aggressiveness:{ target: 'track-dependent', priority: 5, note: 'Higher risk tolerance viable with a stronger car/TD' },
- stamina: { target: 'as high as affordable', priority: 6, note: 'Race distance/fatigue matters more as pace closes up' },
- charisma: { target: 'as high as affordable', priority: 7, note: 'Sponsor income boost' },
- motivation: { target: 'as high as affordable', priority: 8, note: 'Training speed' },
- },
- budget: 'TD becomes available - budget for both driver and TD, don\'t overspend on either alone.',
- },
-  Master: {
-  targetOA: { min: 130, max: 160 },
-  maxSalary: 5000000,
-  maxAge: 39,
-  attributes: {
- concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
- experience: { target: 'as high as affordable', priority: 2, note: 'Strategy/tyre management/setup precision' },
- techInsight: { target: 'as high as affordable', priority: 3, note: 'Setup precision, margin of acceptance' },
- talent: { target: 'as high as affordable', priority: 4, note: 'Raw speed - increasingly decisive as fields tighten' },
- aggressiveness:{ target: 'track-dependent', priority: 5, note: 'Higher risk tolerance viable with a stronger car/TD' },
- stamina: { target: 'as high as affordable', priority: 6, note: 'Race distance/fatigue matters more as pace closes up' },
- charisma: { target: 'as high as affordable', priority: 7, note: 'Sponsor income boost' },
- motivation: { target: 'as high as affordable', priority: 8, note: 'Training speed' },
- },
- budget: 'Facility level cap 80 - push facilities alongside driver quality.',
- },
-  Elite: {
-  targetOA: { min: 150, max: 999 },
-  maxSalary: 8000000,
-  maxAge: 40,
-  attributes: {
- concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
- experience: { target: 'as high as affordable', priority: 2, note: 'Strategy/tyre management/setup precision' },
- techInsight: { target: 'as high as affordable', priority: 3, note: 'Setup precision, margin of acceptance' },
- talent: { target: 'as high as affordable', priority: 4, note: 'Raw speed - decisive at the top end' },
- aggressiveness:{ target: 'track-dependent', priority: 5, note: 'Higher risk tolerance viable with a stronger car/TD' },
- stamina: { target: 'as high as affordable', priority: 6, note: 'Race distance/fatigue matters more as pace closes up' },
- charisma: { target: 'as high as affordable', priority: 7, note: 'Sponsor income boost' },
- motivation: { target: 'as high as affordable', priority: 8, note: 'Training speed' },
- },
- budget: 'Endgame - maximize everything affordable. No practical facility cap, no driver OA cap.',
- },
- },
+   Pro: {
+   targetOA: { min: 110, max: 135 },
+   maxSalary: 3500000,
+   maxAge: 38,
+   attributes: {
+  concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
+  stamina: { target: 'as high as affordable', priority: 2, note: 'Race distance/fatigue matters more as pace closes up - "Stamina=Speed" holds at every level' },
+  talent: { target: 'as high as affordable', priority: 3, note: 'Raw speed - TD (available from Pro) can partly compensate for setup gaps' },
+  experience: { target: 'as high as affordable', priority: 4, note: 'Strategy/tyre management/setup precision' },
+  techInsight: { target: 'as high as affordable', priority: 5, note: 'Setup precision, margin of acceptance' },
+  aggressiveness:{ target: 'track-dependent', priority: 6, note: 'Higher risk tolerance viable with a stronger car/TD' },
+  motivation: { target: 'as high as affordable', priority: 7, note: 'Training speed' },
+  charisma: { target: 'as high as affordable', priority: 8, note: 'Sponsor income boost' },
+  },
+  budget: 'TD becomes available - budget for both driver and TD, don\'t overspend on either alone.',
+  },
+   Master: {
+   targetOA: { min: 130, max: 160 },
+   maxSalary: 5000000,
+   maxAge: 39,
+   attributes: {
+  concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
+  stamina: { target: 'as high as affordable', priority: 2, note: 'Race distance/fatigue matters more as pace closes up - "Stamina=Speed" holds at every level' },
+  talent: { target: 'as high as affordable', priority: 3, note: 'Raw speed - increasingly decisive as fields tighten' },
+  experience: { target: 'as high as affordable', priority: 4, note: 'Strategy/tyre management/setup precision' },
+  techInsight: { target: 'as high as affordable', priority: 5, note: 'Setup precision, margin of acceptance' },
+  aggressiveness:{ target: 'track-dependent', priority: 6, note: 'Higher risk tolerance viable with a stronger car/TD' },
+  motivation: { target: 'as high as affordable', priority: 7, note: 'Training speed' },
+  charisma: { target: 'as high as affordable', priority: 8, note: 'Sponsor income boost' },
+  },
+  budget: 'Facility level cap 80 - push facilities alongside driver quality.',
+  },
+   Elite: {
+   targetOA: { min: 150, max: 999 },
+   maxSalary: 8000000,
+   maxAge: 40,
+   attributes: {
+  concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
+  stamina: { target: 'as high as affordable', priority: 2, note: 'Race distance/fatigue matters more as pace closes up - "Stamina=Speed" holds at every level' },
+  talent: { target: 'as high as affordable', priority: 3, note: 'Raw speed - decisive at the top end' },
+  experience: { target: 'as high as affordable', priority: 4, note: 'Strategy/tyre management/setup precision' },
+  techInsight: { target: 'as high as affordable', priority: 5, note: 'Setup precision, margin of acceptance' },
+  aggressiveness:{ target: 'track-dependent', priority: 6, note: 'Higher risk tolerance viable with a stronger car/TD' },
+  motivation: { target: 'as high as affordable', priority: 7, note: 'Training speed' },
+  charisma: { target: 'as high as affordable', priority: 8, note: 'Sponsor income boost' },
+  },
+  budget: 'Endgame - maximize everything affordable. No practical facility cap, no driver OA cap.',
+  },
+  },
 
  // ============================================================
  // TD SELECTION ADVICE (Pro/Master/Elite only - TDs unavailable below Pro)
@@ -1203,8 +1209,19 @@ var GPRO_DATA = {
  tech: { up: ['techInsight'], down: [], source: 'gproracers.forumotion.com/t65-driver-stats' },
  sportspsychologist: { up: ['motivation'], down: [], source: 'gproracers.forumotion.com/t65-driver-stats' },
  ninja: { up: ['aggressiveness'], down: [], source: 'gproracers.forumotion.com/t65-driver-stats' },
- spa: { up: [], down: [], source: null, note: 'No community-confirmed effects found - unconfirmed, not guessed at' },
- },
+  spa: { up: [], down: [], source: null, note: 'No community-confirmed effects found - unconfirmed, not guessed at' },
+  },
+
+  // User-provided optimal-training reference (2026-08-10) - target attribute levels to aim for
+  // and the session that raises each one. Separate from the dynamic "weakest skill" advice:
+  // this is the manager's own preferred build-out plan for Rookie/Amateur. Presented as guidance,
+  // not a verified formula (GPRO's wiki says training isn't perfectly deterministic per session).
+  driverOptimalTraining: [
+  { skill: 'concentration', label: 'Concentration', target: 200, session: 'Yoga', note: 'Train to 200 via Yoga' },
+  { skill: 'stamina', label: 'Stamina', target: 100, session: 'Fitness Class + Testing', note: 'Fitness Class + Testing (2x 50 laps = adds 5 stamina)' },
+  { skill: 'techInsight', label: 'Technical Insight', target: 125, session: 'Technical training', note: 'Train to 125 via Technical training' },
+  { skill: 'aggressiveness', label: 'Aggression', target: 100, session: 'Ninja training', note: 'Train to 100 via Ninja training' },
+  ],
 
  // Which driver attribute matters most per league, per the same community guide - used to weight
  // "weakest skill" training recommendations toward what's actually relevant at that league instead
