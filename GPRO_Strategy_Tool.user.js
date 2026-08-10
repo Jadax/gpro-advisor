@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.12.0
+// @version 6.12.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -3716,16 +3716,15 @@
   ]);
  }
 
- h += mkSection('Track',
- mkRow('Name', (practice||{}).trackName || (track||{}).trackName || '?') +
- mkRow('Laps', (track||{}).laps || '?') +
- mkRow('Pit Loss', `${(track||{}).timeInOutPits || '?'}s`)
- );
+ // Track/Weather Forecast/Race Strategy sections removed 2026-08-13 from Race Setup (explicit user
+ // request, pasted the full text of all three and confirmed "these parts aren't needed" after a
+ // clarifying question). The "RACE QUICK SUMMARY" bar rendered earlier already covers the essential
+ // numbers compactly (tyre+stops, total fuel, fuel/lap, stint fuel breakdown, weather, parts-fail
+ // warnings) - these three sections were a longer restatement of the same underlying data. `tyre`/
+ // `fuel`/`analyze` are all still fully computed and drive the Quick Summary and Car Setup/PHA
+ // sections elsewhere on this page - only this display block is gone.
 
- // Weather
- h += mkWeatherForecastSection(analyze, { rainLabel: 'RAIN PLAN COMMITTED', showAvg: false, id: 'gpro-sec-weather' });
-
-   // === UNIFIED RACE STRATEGY ===
+   // === UNIFIED RACE STRATEGY (computed, not displayed - see comment above) ===
    // Combines push-or-hold, tyre compound, fuel plan, rain transition, and wait-to-pit into
    // one coherent section instead of scattering related data across 4+ separate blocks.
    {
@@ -3948,7 +3947,8 @@
    }
    strategyHtml += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">You set fuel amounts per stint on RaceSetup.asp — the game pits automatically when fuel runs low, weather forces a tyre change, or a mechanical issue occurs.</div>`;
 
-  h += mkSection('Race Strategy', strategyHtml, 'gpro-sec-strategy');
+  // `strategyHtml` intentionally not appended to `h` - see removal note above. pushHold/fuel/tyre
+  // computed above still feed the Quick Summary and decision board elsewhere on this page.
 
   }
 

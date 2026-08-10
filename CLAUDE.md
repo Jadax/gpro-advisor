@@ -134,6 +134,19 @@ this... probably better used internally by you"):
 only call sites were removed and were deleted (verified via grep - zero remaining references beyond
 their own definitions) rather than left as unused functions.
 
+**Race Setup's Track/Weather Forecast/Race Strategy sections removed too (2026-08-13, v6.12.1)**:
+same-day follow-up - user pasted the full text of all three sections and confirmed (after a
+clarifying question about whether the actual fuel/pit numbers should stay) that everything shown
+should go. Safe to remove because the "RACE QUICK SUMMARY" bar (rendered earlier in
+`renderRaceSetup`) already covers the essential numbers compactly - tyre+stops, total fuel, fuel/lap,
+stint fuel breakdown, weather, parts-fail warnings. `strategyHtml` (the ~200-line block building the
+old "Race Strategy" section) is still fully built - `pushHold`/`fuel`/`tyre`/`analyze` all still
+compute and feed the Quick Summary and decision board - only the final `h += mkSection('Race
+Strategy', strategyHtml, ...)` append was removed, so nothing downstream broke. Two decision-board
+tiles ("Weather", "Strategy") lost their click-to-jump target since the sections they'd scroll to no
+longer exist - `wireDecisionBoard`'s handler already null-checks the target before calling
+`scrollIntoView`, so this degrades silently (tile just doesn't scroll) rather than erroring.
+
 ## Market custom filter bar (2026-08-11, revised same day)
 
 `AvailDrivers.asp`/`AvailTechDirectors.asp` gate their own per-attribute filters (Con/Tal/Agr/Exp/
