@@ -893,6 +893,33 @@ var GPRO_DATA = {
  driverMistake: { rookie: 0.30, amateur: 0.87, pro: 0.92, master: 0.76, elite: 0.50 },
  },
  },
+ // Added 2026-08-13 from a gproanalyzer.info screenshot - next race on this account's calendar.
+ 'Estoril GP': {
+ raceAnalysis: { total: 3707, rookie: 488, amateur: 2234, pro: 876, master: 98, elite: 11 },
+ preRaceUpdate: { total: 167, rookie: 62, amateur: 78, pro: 23, master: 4, elite: 0 },
+ q1Risk: {
+ keepOnTrack: { rookie: 14.18, amateur: 7.01, pro: 3.11, master: 0.00, elite: 9.09 },
+ pushLittle: { rookie: 30.36, amateur: 22.19, pro: 12.57, master: 5.88, elite: 0.00 },
+ pushLot: { rookie: 28.91, amateur: 35.21, pro: 42.16, master: 50.98, elite: 63.64 },
+ pushLimit: { rookie: 26.55, amateur: 35.60, pro: 42.16, master: 43.14, elite: 27.27 },
+ driverMistake: { rookie: 0.643, amateur: 0.325, pro: 0.147, master: 0.097, elite: 0.079 },
+ },
+ raceRisk: {
+ overtaking: { rookie: 23.51, amateur: 25.33, pro: 26.60, master: 20.02, elite: 24.36 },
+ defensive: { rookie: 24.54, amateur: 27.22, pro: 32.50, master: 35.43, elite: 39.27 },
+ clearTrackDry: { rookie: 16.78, amateur: 20.27, pro: 35.75, master: 46.82, elite: 49.45 },
+ malfunctioning: { rookie: 7.94, amateur: 10.00, pro: 18.10, master: 31.81, elite: 38.82 },
+ clearTrackDry50: { rookie: 3.07, amateur: 8.68, pro: 29.45, master: 54.08, elite: 54.55 },
+ },
+ raceStrategy: {
+ oneStop: { rookie: 18.85, amateur: 29.90, pro: 29.34, master: 29.59, elite: 27.27 },
+ twoStop: { rookie: 59.02, amateur: 59.80, pro: 61.30, master: 56.12, elite: 72.73 },
+ threeStop: { rookie: 14.96, amateur: 6.54, pro: 7.19, master: 13.27, elite: 0.00 },
+ fourStop: { rookie: 4.92, amateur: 2.46, pro: 1.48, master: 1.02, elite: 0.00 },
+ fiveStop: { rookie: 0.82, amateur: 0.58, pro: 0.23, master: 0.00, elite: 0.00 },
+ driverMistake: { rookie: 0.57, amateur: 1.17, pro: 1.44, master: 1.03, elite: 0.73 },
+ },
+ },
  // Add more tracks here as screenshots are provided
  },
 
