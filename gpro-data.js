@@ -1327,7 +1327,69 @@ var GPRO_DATA = {
  { race: 10, track: 'Montreal', laps: 69, fuelLkm: 0.763, tyrePkm: 0.477, qPos: 34, rPos: 34, pits: 2, temp: 43.74, humidity: 42.86, dryLaps: 69, rainLaps: 0, setup: { fw: 432, rw: 826, eng: 674, brakes: 592, gb: 514, susp: 235 } },
  ],
  },
- // Season CTR data scraped from gproanalyzer.info (Season 111, all 17 tracks)
+ // Current season's CTR data (added 2026-08-13 from a live gproanalyzer.info screenshot) - this
+ // account's ACTUAL current 17-track calendar (Estoril next). The old `seasonCTR`/`seasonPHA`
+ // below are tagged Season 111 and cover a completely different track list (Barcelona/Ahvenisto/
+ // Magny Cours/...) that doesn't match a single track here - kept as historical record, but
+ // superseded for any "upcoming races" lookup. Real season number not yet confirmed by the user
+ // (asked 2026-08-13) - rename this key once known.
+ currentSeasonCTR: [
+ { race: 1, track: 'Estoril', laps: 70, overtaking: 'Normal', grip: 'Low', ctrLap: 2.758, ctrRace: 193.086 },
+ { race: 2, track: 'Bremgarten', laps: 42, overtaking: 'Normal', grip: 'Low', ctrLap: 2.373, ctrRace: 99.664 },
+ { race: 3, track: 'Zandvoort', laps: 71, overtaking: 'Normal', grip: 'High', ctrLap: 2.619, ctrRace: 185.937 },
+ { race: 4, track: 'Zolder', laps: 70, overtaking: 'Hard', grip: 'Low', ctrLap: 2.672, ctrRace: 187.037 },
+ { race: 5, track: 'Anderstorp', laps: 70, overtaking: 'Very Hard', grip: 'Low', ctrLap: 2.770, ctrRace: 193.891 },
+ { race: 6, track: 'Sochi', laps: 53, overtaking: 'Hard', grip: 'Normal', ctrLap: 3.054, ctrRace: 161.870 },
+ { race: 7, track: 'Monza', laps: 53, overtaking: 'Easy', grip: 'Very Low', ctrLap: 2.370, ctrRace: 125.609 },
+ { race: 8, track: 'Brno', laps: 57, overtaking: 'Easy', grip: 'Normal', ctrLap: 2.974, ctrRace: 169.524 },
+ { race: 9, track: 'Valencia', laps: 57, overtaking: 'Hard', grip: 'Low', ctrLap: 2.886, ctrRace: 164.522 },
+ { race: 10, track: 'Indianapolis', laps: 73, overtaking: 'Easy', grip: 'High', ctrLap: 2.941, ctrRace: 214.724 },
+ { race: 11, track: 'Mexico City', laps: 69, overtaking: 'Hard', grip: 'Normal', ctrLap: 2.713, ctrRace: 187.221 },
+ { race: 12, track: 'Brasilia', laps: 55, overtaking: 'Hard', grip: 'Normal', ctrLap: 2.922, ctrRace: 160.732 },
+ { race: 13, track: 'Baku City', laps: 51, overtaking: 'Easy', grip: 'High', ctrLap: 2.897, ctrRace: 147.757 },
+ { race: 14, track: 'Shanghai', laps: 56, overtaking: 'Normal', grip: 'High', ctrLap: 2.811, ctrRace: 157.392 },
+ { race: 15, track: 'Sepang', laps: 55, overtaking: 'Normal', grip: 'Very High', ctrLap: 2.859, ctrRace: 157.233 },
+ { race: 16, track: 'Fuji', laps: 67, overtaking: 'Easy', grip: 'Normal', ctrLap: 3.181, ctrRace: 213.145 },
+ { race: 17, track: 'Singapore', laps: 61, overtaking: 'Hard', grip: 'Low', ctrLap: 2.877, ctrRace: 175.520 },
+ ],
+ // Current season's PHA data (added 2026-08-13, same screenshot source/caveats as currentSeasonCTR
+ // above). Only the per-track Power/Handling/Acceleration/Advantage columns are captured - the
+ // screenshot's separate "Season" cumulative P/H/A columns weren't self-consistent (the bottom
+ // summary row's totals didn't match race 17's own "Season" column), so rather than guess at their
+ // meaning they were left out entirely.
+ currentSeasonPHA: [
+ { race: 1, track: 'Estoril', power: 11, handling: 8, accel: 14, advantage: '+9' },
+ { race: 2, track: 'Bremgarten', power: 8, handling: 26, accel: 17, advantage: '+27' },
+ { race: 3, track: 'Zandvoort', power: 9, handling: 13, accel: 9, advantage: '+8' },
+ { race: 4, track: 'Zolder', power: 11, handling: 9, accel: 10, advantage: '+3' },
+ { race: 5, track: 'Anderstorp', power: 9, handling: 11, accel: 9, advantage: '+4' },
+ { race: 6, track: 'Sochi', power: 8, handling: 15, accel: 18, advantage: '+13' },
+ { race: 7, track: 'Monza', power: 17, handling: 12, accel: 9, advantage: '+13' },
+ { race: 8, track: 'Brno', power: 12, handling: 12, accel: 14, advantage: '+4' },
+ { race: 9, track: 'Valencia', power: 11, handling: 12, accel: 16, advantage: '+9' },
+ { race: 10, track: 'Indianapolis', power: 10, handling: 9, accel: 11, advantage: '+3' },
+ { race: 11, track: 'Mexico City', power: 13, handling: 12, accel: 7, advantage: '+7' },
+ { race: 12, track: 'Brasilia', power: 16, handling: 15, accel: 7, advantage: '+10' },
+ { race: 13, track: 'Baku City', power: 18, handling: 8, accel: 16, advantage: '+12' },
+ { race: 14, track: 'Shanghai', power: 9, handling: 16, accel: 15, advantage: '+8' },
+ { race: 15, track: 'Sepang', power: 14, handling: 11, accel: 14, advantage: '+3' },
+ { race: 16, track: 'Fuji', power: 13, handling: 11, accel: 8, advantage: '+7' },
+ { race: 17, track: 'Singapore', power: 7, handling: 11, accel: 17, advantage: '+16' },
+ ],
+ // Current season's per-track average temperature (added 2026-08-13, same screenshot source) -
+ // the "Avg" column from gproanalyzer's Season Weather table. Per-season-instance samples (S97,
+ // S91, S87...) and the unlabeled wear-intensity bar shown alongside each row were NOT captured -
+ // no printed numbers were visible for those, only colored bars, and this project doesn't guess
+ // numeric values from bar length/color.
+ currentSeasonAvgTemp: {
+ 'Estoril': 25.25, 'Bremgarten': 31.92, 'Zandvoort': 26.39, 'Zolder': 31.13, 'Anderstorp': 26.52,
+ 'Sochi': 22.12, 'Monza': 25.02, 'Brno': 26.15, 'Valencia': 25.95, 'Indianapolis': 29.70,
+ 'Mexico City': 20.84, 'Brasilia': 31.10, 'Baku City': 29.63, 'Shanghai': 18.93, 'Sepang': 22.37,
+ 'Fuji': 18.58, 'Singapore': 27.84,
+ },
+ // Season CTR data scraped from gproanalyzer.info (Season 111, all 17 tracks) - STALE, kept for
+ // historical record only. Superseded by currentSeasonCTR above (Season 111's track list doesn't
+ // match this account's actual current calendar at all).
  seasonCTR: [
  { race: 1, track: 'Barcelona', laps: 65, overtaking: 'Hard', grip: 'Low', ctrLap: 2.832, ctrRace: 184.092 },
  { race: 2, track: 'Ahvenisto', laps: 80, overtaking: 'Normal', grip: 'Normal', ctrLap: 3.277, ctrRace: 262.175 },
@@ -1347,7 +1409,8 @@ var GPRO_DATA = {
  { race: 16, track: 'Yas Marina', laps: 55, overtaking: 'Hard', grip: 'High', ctrLap: 2.846, ctrRace: 156.526 },
  { race: 17, track: 'Baku City', laps: 51, overtaking: 'Easy', grip: 'High', ctrLap: 2.897, ctrRace: 147.757 },
  ],
- // Season PHA (Track Power/Handling/Acceleration requirements, Season 111)
+ // Season PHA (Track Power/Handling/Acceleration requirements, Season 111) - STALE, kept for
+ // historical record only. Superseded by currentSeasonPHA above.
  seasonPHA: [
  { race: 1, track: 'Barcelona', power: 11, handling: 13, accel: 8, advantage: '+7' },
  { race: 2, track: 'Ahvenisto', power: 5, handling: 10, accel: 7, advantage: '+8' },

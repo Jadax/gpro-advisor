@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.13.1
+// @version 6.14.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -28,7 +28,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.5.2
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.5.3
 // @run-at document-idle
 // ==/UserScript==
 
@@ -4527,14 +4527,17 @@
   h += mkSection('Car PHA', phaHtml + `<span style="font-size:9px;color:#6b7280;">Power=Chassis+Engine+FW+RW, Handling=UB+Sidepods+Cooling+GB, Accel=Brakes+Susp+Elec. Track-match matters for setup.</span>`);
   }
 
-  // Upcoming Track PHA Requirements (from scraped seasonPHA data)
-  if (car && typeof GPRO_DATA !== 'undefined' && GPRO_DATA.seasonPHA) {
+  // Upcoming Track PHA Requirements. Prefers currentSeasonPHA (this account's actual current
+  // calendar, added 2026-08-13) over the legacy seasonPHA (Season 111 - a different, unmatched
+  // track list kept only for historical record - see gpro-data.js).
+  const upcomingPHA = (typeof GPRO_DATA !== 'undefined') && (GPRO_DATA.currentSeasonPHA || GPRO_DATA.seasonPHA);
+  if (car && upcomingPHA) {
   const carPower = parseInt(car.carPower) || 0;
   const carHandl = parseInt(car.carHandl) || 0;
   const carAccel = parseInt(car.carAccel) || 0;
   let phaHtml = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:9px;">';
   phaHtml += '<tr style="color:#60a5fa;font-weight:700;"><td style="padding:2px;">Track</td><td style="text-align:center;">Need P</td><td style="text-align:center;">Need H</td><td style="text-align:center;">Need A</td><td style="text-align:center;">Your P</td><td style="text-align:center;">Your H</td><td style="text-align:center;">Your A</td><td style="text-align:center;">Best Match</td></tr>';
-  GPRO_DATA.seasonPHA.slice(0, 5).forEach(t => {
+  upcomingPHA.slice(0, 5).forEach(t => {
    const match = carPower >= t.power && carHandl >= t.handling && carAccel >= t.accel;
    const best = carPower >= carHandl && carPower >= carAccel ? 'Power' : carHandl >= carAccel ? 'Handling' : 'Acceleration';
    const trackBest = t.power >= t.handling && t.power >= t.accel ? 'Power' : t.handling >= t.accel ? 'Handling' : 'Acceleration';
@@ -5176,10 +5179,13 @@
   h += mkSection(leagueAttrPriority ? `Training Recommendation (${league})` : 'Training Recommendation', recHtml);
   }
 
-  // Track-Specific Training Advice (using scraped season CTR/PHA data)
+  // Track-Specific Training Advice (using scraped season CTR/PHA data). Prefers currentSeasonCTR
+  // (this account's actual current calendar, added 2026-08-13) over the legacy seasonCTR (Season
+  // 111 - a different, unmatched track list kept only for historical record - see gpro-data.js).
   // Shows which skills matter most for upcoming tracks based on overtaking difficulty and grip
-  if (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.seasonCTR) {
-  const upcomingTracks = GPRO_DATA.seasonCTR.slice(0, 5); // Next 5 races
+  const upcomingCTR = (typeof GPRO_DATA !== 'undefined') && (GPRO_DATA.currentSeasonCTR || GPRO_DATA.seasonCTR);
+  if (upcomingCTR) {
+  const upcomingTracks = upcomingCTR.slice(0, 5); // Next 5 races
   let trackHtml = '<div style="font-size:10px;color:#d1d5db;">';
   trackHtml += '<div style="color:#f59e0b;font-weight:600;margin-bottom:4px;">Upcoming Track Analysis:</div>';
   upcomingTracks.forEach(t => {

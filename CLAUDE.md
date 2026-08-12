@@ -75,6 +75,38 @@ call site needing its own CSS.
 - **UI stays copy-paste-simple.** Several backend-only breakdown sections (Time Lost/FLD/TCD, PHA car-vs-track, pit-strategy/phase-by-phase, tyre-cliff/DNF-risk blocks) were deliberately removed from visible panels in v6.1.1 per explicit user request — the calculations still run internally, just aren't surfaced. Don't re-add UI clutter without checking this preference first.
 - **User context**: this user does not run practice laps — goes straight to Q1 using GAPP/derived setup values. Don't design features around a practice-feedback loop.
 
+## Current-season CTR/PHA/weather data added, old S111 data superseded (2026-08-13)
+
+`D.seasonCTR`/`D.seasonPHA` were tagged Season 111 with a track calendar (Barcelona/Ahvenisto/
+Magny Cours/...) that doesn't match this account's actual current calendar at all - found while
+reviewing user-supplied gproanalyzer.info screenshots for the real current season (Estoril/
+Bremgarten/Zandvoort/Zolder/Anderstorp/Sochi/Monza/Brno/Valencia/Indianapolis/Mexico City/Brasilia/
+Baku City/Shanghai/Sepang/Fuji/Singapore). Since `renderUpdateCar`'s PHA table and `renderTraining`'s
+track-specific focus both just `.slice(0, 5)` off the front of these arrays (no track-name lookup),
+the stale data was silently showing wrong-track PHA/CTR requirements as "upcoming races".
+
+Added `D.currentSeasonCTR`/`D.currentSeasonPHA`/`D.currentSeasonAvgTemp` with the real current
+calendar (both `.slice(0,5)` call sites now prefer these, falling back to the legacy `seasonCTR`/
+`seasonPHA` only if absent). The old S111 arrays were left in place as historical record, clearly
+re-commented as stale/superseded, not deleted - they may still have reference value.
+
+**Real season number still unknown** - the user was asked (2026-08-13) to confirm it from gpro.asp;
+`D.currentSeason`/`D.seasons.S111.tracks` (season metadata, separate from the CTR/PHA data above)
+were deliberately NOT touched pending that answer, since guessing a season number would be exactly
+the kind of unsourced number this project's rules warn against.
+
+**Season PHA's "Season" cumulative columns were dropped, not transcribed** - the screenshot's
+per-track table had both a "Track" P/H/A/Advantage set (captured) and a separate "Season" P/H/A set
+per row that looked like a running average, but the bottom summary row's totals didn't match race
+17's own "Season" column values - internally inconsistent, so rather than guess at the semantics
+they were left out of `currentSeasonPHA` entirely.
+
+**Bar-chart-only screenshots (Season Car Wear, Season Fuel Consumption, Season Tyre Wear, and the
+unlabeled bar row under Season Weather) were NOT transcribed** - no printed numbers were visible,
+only colored bar segments (green/orange/red), and this project doesn't guess numeric values from
+bar length/color. If the user can get a numeric table view (e.g. gproanalyzer hover tooltips, a
+CSV/table export) these could be added properly later.
+
 ## Cash/balance freshness (real bug fixed 2026-07-31)
 
 `renderUpdateCar`'s DOM-vs-cached cash merge used to only overwrite the cached figure when the
