@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.14.0
+// @version 6.14.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -50,6 +50,15 @@
  const PART_LVL_KEYS = ['lvlChassis','lvlEngine','lvlFWing','lvlRWing','lvlUnderbody','lvlSidepods','lvlCooling','lvlGear','lvlBrakes','lvlSusp','lvlElectronics'];
  const PART_WEAR_KEYS = ['usaChassis','usaEngine','usaFWing','usaRWing','usaUnderbody','usaSidepods','usaCooling','usaGear','usaBrakes','usaSusp','usaElectronics'];
  const PART_OPT_KEYS = ['chassisOptions','engineOptions','fWingOptions','rWingOptions','underbodyOptions','sidepodsOptions','coolingOptions','gearOptions','brakesOptions','suspOptions','electronicsOptions'];
+ // Real bug fixed 2026-08-13, confirmed via a live screenshot comparison against calcCarSetupGappSession:
+ // `parseInt(driver.X) || default` (used throughout this file for driver-stat reads) treats a
+ // genuine 0 the same as missing data. This is common and often DESIRABLE for aggressiveness
+ // specifically (Rookie/Amateur guidance explicitly wants it kept low, sometimes exactly 0) - a
+ // real driver with aggressiveness=0 was getting Engine setup computed as if it were 50, a
+ // consistent +15 error that vanished completely (exact match, all fields, all sessions) once
+ // fixed. Use this everywhere a driver stat is read instead of the bare `parseInt(...) || def`
+ // idiom - it only falls back when the value is genuinely missing/non-numeric, not when it's 0.
+ function numOrDefault(v, def) { const n = parseInt(v); return Number.isFinite(n) ? n : def; }
  const FAST_WEAR = D.wearConstants?.fastWearParts || ['Chassis','Engine','Front Wing','Rear Wing','Gearbox'];
  const CRITICAL_WEAR = D.wearConstants?.critical ?? 10;
  const FAST_ALERT = D.wearConstants?.fastAlert ?? 30;
@@ -1651,10 +1660,10 @@
  // Very Low..Very High bucket guess
  const gappTrack = lookupGappTrack(track && track.trackName, 'trackData');
  fuelPerLap = gappTrack ? gappTrack.values[6] * gappTrack.values[13] : (FUEL_BASE[consStr] || 2.4);
- const driConc = driver ? (parseInt(driver.concentration) || 100) : 100;
- const driAggr = driver ? (parseInt(driver.aggressiveness) || 50) : 50;
- const driExp = driver ? (parseInt(driver.experience) || 50) : 50;
- const driTech = driver ? (parseInt(driver.techInsight) || 50) : 50;
+ const driConc = driver ? numOrDefault(driver.concentration, 100) : 100;
+ const driAggr = driver ? numOrDefault(driver.aggressiveness, 50) : 50;
+ const driExp = driver ? numOrDefault(driver.experience, 50) : 50;
+ const driTech = driver ? numOrDefault(driver.techInsight, 50) : 50;
  fuelPerLap *= (1.0 - (driConc - 100) * 0.001)
  * (1.0 + (driAggr - 50) * 0.002)
  * (1.0 - (driExp - 50) * 0.001)
@@ -1679,9 +1688,9 @@
  const tempMult = 1.0 + tempDeviation * 0.008;
 
  // Driver factors
- const driAggr = driver ? (parseInt(driver.aggressiveness) || 50) : 50;
- const driExp = driver ? (parseInt(driver.experience) || 50) : 50;
- const driWeight = driver ? (parseInt(driver.weight) || 75) : 75;
+ const driAggr = driver ? numOrDefault(driver.aggressiveness, 50) : 50;
+ const driExp = driver ? numOrDefault(driver.experience, 50) : 50;
+ const driWeight = driver ? numOrDefault(driver.weight, 75) : 75;
  const aggrWearFactor = 1.0 + (driAggr - 50) * 0.004;
  const expWearFactor = 1.0 - (driExp - 50) * 0.002;
  const weightFactor = 1.0 + (driWeight - 75) * 0.002;
@@ -1926,11 +1935,12 @@
  const trackWearLevel = wearLevelLookup !== undefined ? wearLevelLookup : 2;
  const rTemp = weather ? ((weather.raceQ1TempLow + weather.raceQ1TempHigh) / 2 || 25) : 25;
 
- const conc = parseInt(driver.concentration) || 100;
- const aggr = parseInt(driver.aggressiveness) || 50;
- const exp = parseInt(driver.experience) || 50;
- const ti = parseInt(driver.techInsight || driver.technicalInsight) || 50;
- const weight = parseInt(driver.weight) || 75;
+ const conc = numOrDefault(driver.concentration, 100);
+ const aggr = numOrDefault(driver.aggressiveness, 50);
+ const exp = numOrDefault(driver.experience, 50);
+ const tiRaw = (driver.techInsight !== undefined && driver.techInsight !== null) ? driver.techInsight : driver.technicalInsight;
+ const ti = numOrDefault(tiRaw, 50);
+ const weight = numOrDefault(driver.weight, 75);
  const suspLvl = gappCarPartLvl(car, 'Suspension');
  const engLvl = gappCarPartLvl(car, 'Engine');
  const elecLvl = gappCarPartLvl(car, 'Electronics');
@@ -2165,12 +2175,22 @@
  const o = gapp.setupBaseOffsets, cl = gapp.setupCarLevelOffsets, cw = gapp.setupCarWearOffsets, dOff = gapp.setupDriverOffsets, ws = gapp.wingSplit;
  const T = Math.round(parseFloat(sessionTemp) || 25);
 
- const talent = parseInt(driver.talent) || 50;
- const aggr = parseInt(driver.aggressiveness) || 50;
- const exp = parseInt(driver.experience) || 50;
- const conc = parseInt(driver.concentration) || 100;
- const ti = parseInt(driver.techInsight || driver.technicalInsight) || 50;
- const weight = parseInt(driver.weight) || 75;
+ // Real bug fixed 2026-08-13, found via a live screenshot comparison: `parseInt(x) || default`
+ // treats a genuine 0 the same as missing data, silently substituting the fallback default. This
+ // is common and expected for aggressiveness specifically (Rookie/Amateur guidance explicitly
+ // wants it kept low, often near 0) - a driver with real aggressiveness=0 was getting the Engine
+ // setup computed as if aggressiveness=50, a consistent +15 error confirmed against a real
+ // gproanalyzer-style screenshot (0.3 driverOffset coefficient x 50 wrong vs x0 real = 15). Every
+ // other value (wings/brakes/gearbox/suspension) matched the real screenshot exactly once this was
+ // fixed, so the rest of the formula is correctly calibrated - this was purely a 0-vs-missing bug.
+ const numOr = (v, def) => { const n = parseInt(v); return Number.isFinite(n) ? n : def; };
+ const talent = numOr(driver.talent, 50);
+ const aggr = numOr(driver.aggressiveness, 50);
+ const exp = numOr(driver.experience, 50);
+ const conc = numOr(driver.concentration, 100);
+ const tiRaw = (driver.techInsight !== undefined && driver.techInsight !== null) ? driver.techInsight : driver.technicalInsight;
+ const ti = numOr(tiRaw, 50);
+ const weight = numOr(driver.weight, 75);
  const lvl = (name) => gappCarPartLvl(car, name);
  const wear = (name) => gappCarPartWear(car, name);
  const clamp = (v) => Math.max(0, Math.min(999, Math.round(v)));
@@ -2250,7 +2270,7 @@
   if (!driver || !setup) return null;
   const fw = setup['Front Wing'] || 0;
   const rw = setup['Rear Wing'] || 0;
-  const talent = parseInt(driver.talent) || 50;
+  const talent = numOrDefault(driver.talent, 50);
   const shiftRange = D.gapp?.eliteWingSplit?.shiftRange || 50;
   // Higher talent drivers tend to prefer more rear wing (lower talent bias = more rear)
   const talentBias = D.gapp?.eliteWingSplit?.talentBias || -0.2465;
@@ -2274,8 +2294,9 @@
   // Example: TechInsight=25, Experience=175 → MA = 135 - 7.5 - 17.5 = 110
   function calcMarginOfAcceptance(driver) {
   if (!driver) return null;
-  const techKnowledge = parseInt(driver.techInsight || driver.technicalInsight) || 50;
-  const experience = parseInt(driver.experience) || 50;
+  const tkRaw = (driver.techInsight !== undefined && driver.techInsight !== null) ? driver.techInsight : driver.technicalInsight;
+  const techKnowledge = numOrDefault(tkRaw, 50);
+  const experience = numOrDefault(driver.experience, 50);
   return Math.round(135 - 0.3 * techKnowledge - 0.1 * experience);
   }
 
@@ -2514,8 +2535,8 @@
  // Higher Exp/TI = lower happy range = driver notices smaller wear changes
  function calcHappyRange(driver) {
  if (!driver) return null;
- const exp = parseInt(driver.experience) || 50;
- const ti = parseInt(driver.techInsight) || 50;
+ const exp = numOrDefault(driver.experience, 50);
+ const ti = numOrDefault(driver.techInsight, 50);
  const wings = Math.round(136.5 - 0.0952 * exp - 0.3067 * ti);
  const other = wings - 2;
  return {
@@ -2575,9 +2596,9 @@
  // Experience: ~0.021% per point
  function calcDriverWearFactor(driver) {
  if (!driver) return 1.0;
- const conc = parseInt(driver.concentration) || 100;
- const talent = parseInt(driver.talent) || 50;
- const exp = parseInt(driver.experience) || 50;
+ const conc = numOrDefault(driver.concentration, 100);
+ const talent = numOrDefault(driver.talent, 50);
+ const exp = numOrDefault(driver.experience, 50);
  // Using additive model from zero baseline
  const concEffect = conc * 0.00025;
  const talentEffect = talent * 0.00024;
@@ -4131,7 +4152,7 @@
   if (failParts.length > 0) checks.push({ ok: false, text: `${failParts.length} part(s) will fail: ${failParts.map(p => p.name).join(', ')}` });
   }
   if (driver) {
-  const conc = parseInt(driver.concentration) || 50;
+  const conc = numOrDefault(driver.concentration, 50);
   if (conc < 60) checks.push({ ok: false, text: `Low concentration (${conc}) — higher error risk` });
   }
   if (checks.length > 0) {

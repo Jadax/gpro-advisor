@@ -75,6 +75,29 @@ call site needing its own CSS.
 - **UI stays copy-paste-simple.** Several backend-only breakdown sections (Time Lost/FLD/TCD, PHA car-vs-track, pit-strategy/phase-by-phase, tyre-cliff/DNF-risk blocks) were deliberately removed from visible panels in v6.1.1 per explicit user request — the calculations still run internally, just aren't surfaced. Don't re-add UI clutter without checking this preference first.
 - **User context**: this user does not run practice laps — goes straight to Q1 using GAPP/derived setup values. Don't design features around a practice-feedback loop.
 
+## Driver-stat "0 means missing" bug — systemic, fixed across the whole file (2026-08-13)
+
+Confirmed via a real, verifiable test: took a live DriverProfile.asp screenshot (Takashi Oshima,
+aggressiveness=0) and a live UpdateCar.asp screenshot (all parts Level 1, 0% wear) alongside a real
+gproanalyzer-style screenshot of GPRO's own computed Q1/Q2/Race setup values for Estoril, then
+actually ran `calcCarSetupGappSession` (extracted into a standalone Node script, not hand-traced) to
+compare. Result: every value matched exactly except Engine, off by a consistent +15 regardless of
+session/temperature. Root cause: `const aggr = parseInt(driver.aggressiveness) || 50;` - `0` is
+falsy in JS, so a genuine aggressiveness of 0 (common and often *desirable* per this project's own
+Rookie/Amateur guidance - "keep aggressiveness low") silently became 50 instead. Fixed by adding a
+shared `numOrDefault(v, def)` helper (near `PART_NAMES` at the top of the file) that only falls back
+when the value is genuinely non-numeric, and re-ran the same live comparison: **exact match, all 6
+setup fields, all 3 sessions, zero difference.**
+
+This exact `parseInt(driver.X) || default` pattern existed in 15 places across the file (tyre wear,
+fuel consumption, wing split, margin of acceptance, happy range, driver wear factor, budget checks -
+grep `parseInt(driver\.` before assuming they're all fixed) - all now use `numOrDefault`. Same bug
+class as two earlier fixes this session (cash freshness, part-wear freshness) but in formula *inputs*
+rather than DOM-parse *outputs* - the general lesson holds even more broadly here: **before treating
+`0`/`falsy` as "missing" for any user-derived numeric field, check whether 0 is a real, legitimate
+value for that field.** For driver attributes specifically, assume yes unless proven otherwise -
+aggressiveness, motivation, and stamina in particular are commonly at or near 0 for real drivers.
+
 ## Current-season CTR/PHA/weather data added, old S111 data superseded (2026-08-13)
 
 `D.seasonCTR`/`D.seasonPHA` were tagged Season 111 with a track calendar (Barcelona/Ahvenisto/
