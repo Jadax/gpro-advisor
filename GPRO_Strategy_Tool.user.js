@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.15.3
+// @version 6.15.4
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -32,7 +32,7 @@
 // @run-at document-idle
 // ==/UserScript==
 
-// GPRO Strategy Tool v6.15.3
+// GPRO Strategy Tool v6.15.4
 // Made with ❤ by Tushant Sharma
 // A comprehensive strategy tool for Grand Prix Racing Online providing
 // fuel calculations, tyre strategy, car setup recommendations,
@@ -1093,14 +1093,17 @@
   const wanted = normalizeText(stem).toLowerCase();
   const matches = questionNodes.filter((el) => normalizeText(el.textContent).toLowerCase().includes(wanted));
   const el = matches.sort((a, b) => normalizeText(a.textContent).length - normalizeText(b.textContent).length)[0];
-  if (!el) return;
-  const inputs = collectInputs(el);
+  // The question text is authoritative. Answer controls can be rendered as native inputs,
+  // image/custom controls, or after the initial page parse, so they must not gate detection.
+  const pageHasQuestion = normalizeText(root.textContent).toLowerCase().includes(wanted);
+  if (!el && !pageHasQuestion) return;
+  const inputs = collectInputs(el || root);
   const options = [];
   inputs.forEach((input) => {
    const text = radioText(input);
    if (text && text.length > 1 && text.length < 120 && !options.includes(text)) options.push(text);
   });
-  if (options.length) out.questions.push({ question: stem, options });
+  out.questions.push({ question: stem, options });
  }); // Sponsor characteristics (exposed on NegotiateSponsor.asp as th(label)+td(value) pairs:
  // Finances / Expectations / Patience / Reputation / Image / Negotiation, each a 1-7 scale).
  // Walk every label cell and read the ADJACENT value cell (not the same cell).
