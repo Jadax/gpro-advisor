@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.15.7
+// @version 6.15.8
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -32,7 +32,7 @@
 // @run-at document-idle
 // ==/UserScript==
 
-// GPRO Strategy Tool v6.15.7
+// GPRO Strategy Tool v6.15.8
 // Made with ❤ by Tushant Sharma
 // A comprehensive strategy tool for Grand Prix Racing Online providing
 // fuel calculations, tyre strategy, car setup recommendations,
@@ -2984,6 +2984,7 @@
  function analyzeCar(carData, domData, trackData, driver, ctr, league) {
  if (!carData) return null;
  const leagueTargets = getLeagueCarTargets(league);
+ const leagueResetsCar = !!(typeof GPRO_DATA !== 'undefined' && GPRO_DATA.leagues && GPRO_DATA.leagues[league] && GPRO_DATA.leagues[league].resetsEachSeason);
  const cash = parseInt(carData.cash) || 0;
  const laps = trackData ? parseInt(trackData.laps) || 0 : 0;
  const trackWearStr = trackData ? (trackData.tyreWear || 'Medium') : 'Medium';
@@ -3127,7 +3128,7 @@
  // cheapest same-level replace actually costs less.
  const bestUpgrade = upgrades[0] || null;
  const bestReplace = replacements[0] || null;
- const useReplace = bestReplace && (!bestUpgrade || bestReplace.cost <= bestUpgrade.cost);
+ const useReplace = bestReplace && (!bestUpgrade || (leagueResetsCar && bestReplace.cost <= bestUpgrade.cost));
  if (useReplace) {
  const cost = bestReplace.cost || 0;
  runCash -= cost;
@@ -3166,7 +3167,7 @@
  }
  } else if (p.critical) {
  // Part critically worn — replace if possible
- if (replacements.length > 0) {
+ if (replacements.length > 0 && (leagueResetsCar || upgrades.length === 0)) {
  const best = replacements[0];
  const cost = best.cost || 0;
  runCash -= cost;
@@ -3244,7 +3245,7 @@
  const carPhaForAlign = { power: parseInt(carData.carPower) || 0, handling: parseInt(carData.carHandl) || 0, accel: parseInt(carData.carAccel) || 0 };
  if (trackPhaForAlign) {
  recs.forEach(r => {
- if (r.verdict !== 'UPGRADE' && r.verdict !== 'REPLACE') return;
+ if (r.verdict !== 'UPGRADE') return;
  const alignment = calcPartUpgradeAlignment(trackPhaForAlign, carPhaForAlign, r.part.name, r.part.lvl);
  if (alignment) r.phaAlignment = alignment.rationale;
  });
