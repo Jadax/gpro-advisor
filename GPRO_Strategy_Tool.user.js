@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.15.6
+// @version 6.15.7
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -32,7 +32,7 @@
 // @run-at document-idle
 // ==/UserScript==
 
-// GPRO Strategy Tool v6.15.6
+// GPRO Strategy Tool v6.15.7
 // Made with ❤ by Tushant Sharma
 // A comprehensive strategy tool for Grand Prix Racing Online providing
 // fuel calculations, tyre strategy, car setup recommendations,
@@ -4188,7 +4188,7 @@
  const headlineTone = willFailCount > 0 ? 'bad' : atRiskCount > 0 ? 'warn' : 'good';
  let tblPrefix = mkRec(headline, headlineTone);
  let tbl = `<table style="width:100%;border-collapse:collapse;font-size:9px;">`;
- tbl += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:2px 4px;">Part</td><td>Lvl</td><td>Now</td><td>End</td><td title="Performance loss (seconds/lap at current wear)">Perf</td><td title="Failure risk at current wear">Risk</td>${hasCrossCheck ? '<td title="own calibration cross-check end wear">End (own)</td>' : ''}<td>Target</td><td>Status</td></tr>`;
+ tbl += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:2px 4px;">Part</td><td>Lvl</td><td>Wear</td><td>Remaining</td><td>End</td><td title="Performance loss (seconds/lap at current wear)">Perf</td><td title="Failure risk at current wear">Risk</td>${hasCrossCheck ? '<td title="own calibration cross-check end wear">End (own)</td>' : ''}<td>Target</td><td>Status</td></tr>`;
  analysis.parts.forEach(p => {
  const endColor = p.endWear >= 100 ? '#ef4444' : p.endWear >= 85 ? '#f59e0b' : '#10b981';
  const status = p.willFail ? 'FAIL' : p.atRisk ? 'risk' : 'ok';
@@ -4200,7 +4200,7 @@
  const failRisk = p.failRisk !== undefined ? p.failRisk : 0;
  const perfColor = perfLoss >= 30 ? '#ef4444' : perfLoss >= 10 ? '#f59e0b' : '#6b7280';
  const riskColor = failRisk >= 40 ? '#ef4444' : failRisk >= 15 ? '#f59e0b' : '#6b7280';
- tbl += `<tr style="color:#d1d5db;"><td style="padding:2px 4px;">${p.name}</td><td>L${p.lvl}</td><td>${wearBar} ${p.remaining}%</td><td style="color:${endColor};font-weight:${p.willFail ? 700 : 400};">${Math.round(p.endWear)}%</td><td style="color:${perfColor};font-size:8px;">${perfLoss > 0 ? `+${perfLoss.toFixed(1)}s` : '-'}</td><td style="color:${riskColor};font-size:8px;">${failRisk > 0 ? `${failRisk}%` : '-'}</td>${hasCrossCheck ? `<td style="color:#9ca3af;">${ownEnd !== null ? Math.round(ownEnd) + '%' : '-'}</td>` : ''}<td>L${p.target}</td><td style="color:${statusColor};font-weight:${status === 'FAIL' ? 700 : 400};">${status}</td></tr>`;
+ tbl += `<tr style="color:#d1d5db;"><td style="padding:2px 4px;">${p.name}</td><td>L${p.lvl}</td><td>${wearBar} ${Math.round(p.wear)}%</td><td>${Math.round(p.remaining)}%</td><td style="color:${endColor};font-weight:${p.willFail ? 700 : 400};">${Math.round(p.endWear)}%</td><td style="color:${perfColor};font-size:8px;">${perfLoss > 0 ? `+${perfLoss.toFixed(1)}s` : '-'}</td><td style="color:${riskColor};font-size:8px;">${failRisk > 0 ? `${failRisk}%` : '-'}</td>${hasCrossCheck ? `<td style="color:#9ca3af;">${ownEnd !== null ? Math.round(ownEnd) + '%' : '-'}</td>` : ''}<td>L${p.target}</td><td style="color:${statusColor};font-weight:${status === 'FAIL' ? 700 : 400};">${status}</td></tr>`;
  });
  tbl += `</table>`;
  h += mkSection(`${trackName} (${analysis.laps} laps${wearCtx}${tempCtx}${ctrCtx})`, tblPrefix + tbl +
@@ -4208,9 +4208,9 @@
  } else {
  // No track data — show parts without predictions
  let tbl = `<table style="width:100%;border-collapse:collapse;font-size:9px;">`;
- tbl += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:2px 4px;">Part</td><td>Lvl</td><td>Wear</td><td>Target</td></tr>`;
+ tbl += `<tr style="color:#60a5fa;font-weight:700;"><td style="padding:2px 4px;">Part</td><td>Lvl</td><td>Wear</td><td>Remaining</td><td>Target</td></tr>`;
  analysis.parts.forEach(p => {
- tbl += `<tr style="color:#d1d5db;"><td style="padding:2px 4px;">${p.name}</td><td>L${p.lvl}</td><td>${p.remaining}%</td><td>L${p.target}</td></tr>`;
+ tbl += `<tr style="color:#d1d5db;"><td style="padding:2px 4px;">${p.name}</td><td>L${p.lvl}</td><td>${Math.round(p.wear)}%</td><td>${Math.round(p.remaining)}%</td><td>L${p.target}</td></tr>`;
  });
  tbl += `</table>`;
  h += mkSection('Parts Overview', tbl);
@@ -4221,7 +4221,7 @@
  let recsHtml = '';
  analysis.recs.forEach(r => {
  const rc = r.color === '#ef4444' ? 'bad' : r.color === '#f59e0b' ? 'warn' : 'info';
- let text = `<strong>${r.part.name}</strong> (L${r.part.lvl}, ${r.part.remaining}%): ${r.verdict}`;
+ let text = `<strong>${r.part.name}</strong> (L${r.part.lvl}, ${Math.round(r.part.wear)}% wear / ${Math.round(r.part.remaining)}% remaining): ${r.verdict}`;
  if (r.verdict === 'FAIL') {
  text += `<br><span style="font-size:10px;color:#ef4444;font-weight:700;">${r.detail}</span>`;
  } else if (r.verdict === 'CRITICAL') {
