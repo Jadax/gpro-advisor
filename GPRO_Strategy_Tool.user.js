@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.15.4
+// @version 6.15.5
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -32,7 +32,7 @@
 // @run-at document-idle
 // ==/UserScript==
 
-// GPRO Strategy Tool v6.15.4
+// GPRO Strategy Tool v6.15.5
 // Made with ❤ by Tushant Sharma
 // A comprehensive strategy tool for Grand Prix Racing Online providing
 // fuel calculations, tyre strategy, car setup recommendations,
@@ -1061,6 +1061,7 @@
   'What do you think of the contract duration we proposed?',
  ];
  const questionNodes = Array.from(root.querySelectorAll('td,th,label,p,span,div,li'));
+ const normalizeQuestion = (value) => normalizeText(value).toLowerCase().replace(/\badvertisment\b/g, 'advertisement');
  const radioText = (input) => {
   const id = input.getAttribute('id');
   const linked = id ? Array.from(root.querySelectorAll('label')).find(label => label.getAttribute('for') === id) : null;
@@ -1090,12 +1091,12 @@
   return Array.from(root.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
  };
  questionStems.forEach((stem) => {
-  const wanted = normalizeText(stem).toLowerCase();
-  const matches = questionNodes.filter((el) => normalizeText(el.textContent).toLowerCase().includes(wanted));
+  const wanted = normalizeQuestion(stem);
+  const matches = questionNodes.filter((el) => normalizeQuestion(el.textContent).includes(wanted));
   const el = matches.sort((a, b) => normalizeText(a.textContent).length - normalizeText(b.textContent).length)[0];
   // The question text is authoritative. Answer controls can be rendered as native inputs,
   // image/custom controls, or after the initial page parse, so they must not gate detection.
-  const pageHasQuestion = normalizeText(root.textContent).toLowerCase().includes(wanted);
+  const pageHasQuestion = normalizeQuestion(root.textContent).includes(wanted);
   if (!el && !pageHasQuestion) return;
   const inputs = collectInputs(el || root);
   const options = [];
