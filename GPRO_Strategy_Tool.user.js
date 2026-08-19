@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.15.2
+// @version 6.15.3
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -32,7 +32,7 @@
 // @run-at document-idle
 // ==/UserScript==
 
-// GPRO Strategy Tool v6.15.2
+// GPRO Strategy Tool v6.15.3
 // Made with ❤ by Tushant Sharma
 // A comprehensive strategy tool for Grand Prix Racing Online providing
 // fuel calculations, tyre strategy, car setup recommendations,
@@ -1073,25 +1073,35 @@
   }
   return normalizeText(input.parentElement && input.parentElement.textContent);
  };
+ const collectInputs = (el) => {
+  const seen = new Set();
+  const inputs = [];
+  let container = el;
+  while (container) {
+   container.querySelectorAll?.('input[type="radio"], input[type="checkbox"]').forEach((input) => {
+    if (!seen.has(input)) { seen.add(input); inputs.push(input); }
+   });
+   if (container === root || container.tagName === 'FORM') break;
+   container = container.parentElement;
+  }
+  if (inputs.length) return inputs;
+  // Some sponsor layouts put the prompt in one table and the answers in a sibling
+  // table. On this page only the active question's answer controls are rendered.
+  return Array.from(root.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
+ };
  questionStems.forEach((stem) => {
   const wanted = normalizeText(stem).toLowerCase();
   const matches = questionNodes.filter((el) => normalizeText(el.textContent).toLowerCase().includes(wanted));
   const el = matches.sort((a, b) => normalizeText(a.textContent).length - normalizeText(b.textContent).length)[0];
   if (!el) return;
-  let container = el;
-  for (let depth = 0; depth < 6 && container; depth++, container = container.parentElement) {
-   const inputs = Array.from(container.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
-   if (!inputs.length) continue;
-   const options = [];
-   inputs.forEach((input) => {
-    const text = radioText(input);
-    if (text && text.length > 1 && text.length < 120 && !options.includes(text)) options.push(text);
-   });
-   out.questions.push({ question: stem, options });
-   break;
-  }
- });
- // Sponsor characteristics (exposed on NegotiateSponsor.asp as th(label)+td(value) pairs:
+  const inputs = collectInputs(el);
+  const options = [];
+  inputs.forEach((input) => {
+   const text = radioText(input);
+   if (text && text.length > 1 && text.length < 120 && !options.includes(text)) options.push(text);
+  });
+  if (options.length) out.questions.push({ question: stem, options });
+ }); // Sponsor characteristics (exposed on NegotiateSponsor.asp as th(label)+td(value) pairs:
  // Finances / Expectations / Patience / Reputation / Image / Negotiation, each a 1-7 scale).
  // Walk every label cell and read the ADJACENT value cell (not the same cell).
  const charLabels = { 'finances': 'finances', 'expectations': 'expectations', 'patience': 'patience', 'reputation': 'reputation', 'image': 'image', 'negotiation': 'negotiation' };
