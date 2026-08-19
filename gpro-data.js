@@ -1,4 +1,4 @@
-﻿// GPRO Strategy Tool - Data Configuration
+// GPRO Strategy Tool - Data Configuration
 // Made with ❤ by Tushant Sharma
 // League caps, car part targets, facility targets, and strategy data.
 
@@ -619,7 +619,43 @@ var GPRO_DATA = {
  // Higher temp lowers Engine/FW/RW and raises Brakes/Susp; the numbered deltas below were trimmed.
  // See this track's original strategy sweep for the per-engine/driver/TD effect sizes.
  },
- 'Kaunas GP': {
+ 'Bremgarten GP': {
+ laps: 42,
+ pitLoss: 17,
+ tyreFinalWear: 15,
+ driver: { name: 'Kyle Manning', conc: 224, talent: 48, exp: 86, ti: 100, aggr: 0, weight: 92, stamina: 15, charisma: 159, motivation: 108 },
+ car: { power: 0, handling: 0, accel: 0 },
+ avgRaceTemp: 10,
+ // gproanalyzer Race Strategy sweep (CTR=0). Lost-time totals (tcd+fld+pits).
+ strategies: {
+ baseline: { // CTR=0, dry race
+ 'Extra Soft': { stops: 2, fuel: 80.3, total: 148.06 },
+ 'Soft': { stops: 2, fuel: 80.3, total: 183.29 },
+ 'Medium': { stops: 1, fuel: 0, total: 207.13 },
+ 'Hard': { stops: 1, fuel: 0, total: 242.36 },
+ 'Rain': { stops: 0, fuel: 0, total: 159.17 },
+ },
+ },
+ // gproanalyzer pit-strategy detail (Extra Soft: 3 stints of 14 laps, 17.9% final wear, 80.3L/stint)
+ pitStrategies: {
+ 'Extra Soft': {
+ stints: 3,
+ laps: [14, 14, 14],
+ fuel: [80.3, 80.3, 80.3],
+ tyreWear: [17.9, 17.9, 17.9],
+ },
+ },
+ // gproanalyzer car setup: Q1/Q2 ran wet, Race dry (10C). FW/RW/E/B/G/S order.
+ setupReference: {
+ dry: {
+ '10C': { q1: { fw: 0, rw: 0, e: 0, b: 0, g: 0, s: 0 }, q2: { fw: 0, rw: 0, e: 0, b: 0, g: 0, s: 0 }, race: { fw: 718, rw: 728, e: 662, b: 621, g: 752, s: 729 } },
+ },
+ wet: {
+ '11C': { q1: { fw: 936, rw: 904, e: 486, b: 710, g: 699, s: 537 }, q2: { fw: 0, rw: 0, e: 0, b: 0, g: 0, s: 0 }, race: { fw: 0, rw: 0, e: 0, b: 0, g: 0, s: 0 } },
+ '13C': { q1: { fw: 0, rw: 0, e: 0, b: 0, g: 0, s: 0 }, q2: { fw: 939, rw: 905, e: 488, b: 718, g: 683, s: 535 }, race: { fw: 0, rw: 0, e: 0, b: 0, g: 0, s: 0 } },
+ },
+ },
+ }, 'Kaunas GP': {
  laps: 80,
  pitLoss: 11,
  driver: { conc: 161, aggr: 8, exp: 33, ti: 123, weight: 66 },
@@ -673,16 +709,16 @@ var GPRO_DATA = {
  // targetOA bands corrected 2026-07-27 - see driverMaxOA note above `leagues:`. Each band's min is
  // this tool's own "worth shortlisting" heuristic (a RANGE, not an exact-cap point - matching exact
  // OA was too strict, per the original "No listings match OA 80-80" bug). The `target` attribute
- // numbers are NOT all required at once: per GPRO's Newbie Guide a driver with one or two good
- // skills suffices, so the shortlist (`mkFullStatsTable`) only gates on the single top-priority
- // attribute; the rest are a priority-ordered reference, not a full checklist.
+ // The shortlist applies the configured numeric attribute floors together. Qualitative targets
+ // such as as-high-as-affordable remain guidance rather than numeric gates.
+
  driverSelection: {
  // Targets calibrated 2026-08-10 from a real 24,846-driver market scrape (gpro-strategy.net
  // find-driver, OA-banded). Previous '200+' concentration floors were unreachable in Rookie
  // (0 of 100 sampled max-OA drivers had it) and too strict in Amateur (only ~20% of max-OA
  // drivers) - which is exactly why the advisor shortlisted nobody. Values below follow real
- // per-band medians; only the top-priority floor gates the shortlist split (per GPRO's own
- // Newbie Guide, "one or two skills will suffice", never every attribute at once).
+ // per-band medians; all numeric floors are applied together, per the current shortlist policy.
+
  //
  // REAL BUG found 2026-08-12: that recalibration only changed concentration's STRING notation
  // ('200+' -> '200') and never actually fixed the underlying number - it's the exact same
@@ -979,7 +1015,7 @@ var GPRO_DATA = {
  "Barcelona": [457.87, 673.95, 503.46, 676.11, 315.93, 140.56, 0.874, 0, 307.3, 1.0933, 21, 16, 65, 4.73],
  "Brands Hatch": [475.32, 647.54, 386.69, 709.4, 641.47, 121.1, 0.8305, 0.6357, 315.5, 1.04047, 25.5, 12, 75, 4.21],
  "Brasilia": [577.88, 409.23, 697.76, 849.61, 784.06, 46.69, 0.8911, 0.6221, 301.1, 1.04035, 13.5, 12, 55, 5.48],
- "Bremgarten": [713.7, 594.03, 589.41, 697.91, 539.29, 138.55, 0.858, 0, 305.8, 1.0813, 17, 16, 42, 7.28],
+ "Bremgarten": [713.7, 594.03, 589.41, 697.91, 539.29, 138.55, 0.858, 0.71, 305.8, 1.0813, 17, 16, 42, 7.28], // wetFuelPerKm inferred from comparable tracks; runtime falls back to dry when unavailable
  "Brno": [489.73, 515.49, 378.53, 555.53, 490.25, 73.58, 0.8324, 0.7015, 308, 0.98793, 14, 15, 57, 5.40],
  "Bucharest Ring": [269.73, 654.11, 711.39, 593.83, 744.57, 77.48, 0.9118, 0.7706, 245.7, 0.9947, 24, 14, 80, 3.07],
  "Buenos Aires": [901.29, 516.57, 272.05, 654.41, 706.34, 190.08, 0.7853, 0.572, 306.6, 0.9795, 19.5, 16, 72, 4.26],

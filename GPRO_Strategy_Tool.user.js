@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.14.1
+// @version 6.15.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -28,11 +28,11 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.5.3
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.5.4
 // @run-at document-idle
 // ==/UserScript==
 
-// GPRO Strategy Tool v6.6.0
+// GPRO Strategy Tool v6.15.2
 // Made with ❤ by Tushant Sharma
 // A comprehensive strategy tool for Grand Prix Racing Online providing
 // fuel calculations, tyre strategy, car setup recommendations,
@@ -1050,8 +1050,9 @@
   if (m) out.progress = parseInt(m[1] || m[2] || '0');
  }
 
- // Negotiation questions: GPRO asks up to 5. Each is a question string with radio/answer options.
- // Detect by looking for the known question stems.
+ // Negotiation questions: GPRO asks up to 5. Markup varies between sponsor pages, so detect
+ // normalized question text in any visible container and collect options from the nearest radio group.
+ const normalizeText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
  const questionStems = [
   'Which area of the car would our advertisement be placed on?',
   'What are you expecting to achieve next season?',
@@ -1059,25 +1060,37 @@
   'What do you think of the amount per race we proposed?',
   'What do you think of the contract duration we proposed?',
  ];
- questionStems.forEach(q => {
-  const found = root.querySelectorAll('td,th,label,p,span');
-  for (const el of found) {
-   if ((el.textContent || '').trim().includes(q)) {
-    // Gather nearby answer options (labels next to inputs)
-    const options = [];
-    const container = el.closest('tr') || el.parentElement || root;
-    container.querySelectorAll('input[type="radio"], input[type="checkbox"], label, td').forEach(opt => {
-     const t = (opt.textContent || opt.value || '').trim();
-     if (t && t.length > 2 && t.length < 120 && !t.includes(q) && options.length < 10) {
-      if (!options.includes(t)) options.push(t);
-     }
-    });
-    out.questions.push({ question: q, options });
-    break;
-   }
+ const questionNodes = Array.from(root.querySelectorAll('td,th,label,p,span,div,li'));
+ const radioText = (input) => {
+  const id = input.getAttribute('id');
+  const linked = id ? Array.from(root.querySelectorAll('label')).find(label => label.getAttribute('for') === id) : null;
+  const label = linked || input.closest('label');
+  if (label) return normalizeText(label.textContent);
+  const sibling = input.nextElementSibling;
+  if (sibling) {
+   const text = normalizeText(sibling.textContent);
+   if (text) return text;
+  }
+  return normalizeText(input.parentElement && input.parentElement.textContent);
+ };
+ questionStems.forEach((stem) => {
+  const wanted = normalizeText(stem).toLowerCase();
+  const matches = questionNodes.filter((el) => normalizeText(el.textContent).toLowerCase().includes(wanted));
+  const el = matches.sort((a, b) => normalizeText(a.textContent).length - normalizeText(b.textContent).length)[0];
+  if (!el) return;
+  let container = el;
+  for (let depth = 0; depth < 6 && container; depth++, container = container.parentElement) {
+   const inputs = Array.from(container.querySelectorAll('input[type="radio"], input[type="checkbox"]'));
+   if (!inputs.length) continue;
+   const options = [];
+   inputs.forEach((input) => {
+    const text = radioText(input);
+    if (text && text.length > 1 && text.length < 120 && !options.includes(text)) options.push(text);
+   });
+   out.questions.push({ question: stem, options });
+   break;
   }
  });
-
  // Sponsor characteristics (exposed on NegotiateSponsor.asp as th(label)+td(value) pairs:
  // Finances / Expectations / Patience / Reputation / Image / Negotiation, each a 1-7 scale).
  // Walk every label cell and read the ADJACENT value cell (not the same cell).
@@ -1614,15 +1627,19 @@
  const hH = weather[`raceQ${i}HumHigh`] || 0;
  segs.push({ name: `Seg ${i}`, rainMax: Math.max(rL, rH), rainMin: Math.min(rL, rH), tempAvg: (tL + tH) / 2, humAvg: (hL + hH) / 2 });
  }
- const maxRain = Math.max(...segs.map(s => s.rainMax));
- const avgTemp = segs.reduce((a, s) => a + s.tempAvg, 0) / segs.length;
- const hasRain = segs.filter(s => s.rainMax >= 40);
- // commitRain drives the STARTING tyre recommendation, so it must reflect race-START
- // conditions (segment 1) only - not "rain hits 40% at any point in the race". A track that's
- // dry at the start and only risks rain in the final segment should start on dry tyres and
- // switch mid-race (see the separate "Rain Strategy" pit-timing section), not start on Rain.
- const startRainRisk = segs[0].rainMax;
- return { segs, maxRain, avgTemp, hasRain, startRainRisk, commitRain: startRainRisk >= 40 };
+  const maxRain = Math.max(...segs.map(s => s.rainMax));
+  const avgTemp = segs.reduce((a, s) => a + s.tempAvg, 0) / segs.length;
+  const hasRain = segs.filter(s => s.rainMax >= 40);
+  // commitRain drives the STARTING tyre recommendation, so it must reflect race-START
+  // conditions (segment 1) only - not "rain hits 40% at any point in the race". A track that's
+  // dry at the start and only risks rain in the final segment should start on dry tyres and
+  // switch mid-race (see the separate "Rain Strategy" pit-timing section), not start on Rain.
+  const startRainRisk = segs[0].rainMax;
+  // isRainAllRace: rain is expected at the START and stays likely through every segment (each
+  // segment's peak rain >= 40). Drives the "stay on Rain tyres all race, only fuel stops" plan -
+  // distinct from a drying race (rain start then clears) which needs a wet->dry compound switch.
+  const isRainAllRace = startRainRisk >= 40 && segs.every(s => s.rainMax >= 40);
+  return { segs, maxRain, avgTemp, hasRain, startRainRisk, commitRain: startRainRisk >= 40, isRainAllRace };
  }
 
  // ============================================================
@@ -1655,23 +1672,29 @@
  const ld = parseInt((last.lapsDone || '0/0').split('/')[0]) || 1;
  if (fs > fl && ld > 0) fuelPerLap = (fs - fl) / ld;
  }
- if (!fuelPerLap) {
- // Prefer GAPP's per-track fuel-per-km data (real number for the actual track) over the
- // Very Low..Very High bucket guess
- const gappTrack = lookupGappTrack(track && track.trackName, 'trackData');
- fuelPerLap = gappTrack ? gappTrack.values[6] * gappTrack.values[13] : (FUEL_BASE[consStr] || 2.4);
- const driConc = driver ? numOrDefault(driver.concentration, 100) : 100;
- const driAggr = driver ? numOrDefault(driver.aggressiveness, 50) : 50;
- const driExp = driver ? numOrDefault(driver.experience, 50) : 50;
- const driTech = driver ? numOrDefault(driver.techInsight, 50) : 50;
- fuelPerLap *= (1.0 - (driConc - 100) * 0.001)
- * (1.0 + (driAggr - 50) * 0.002)
- * (1.0 - (driExp - 50) * 0.001)
- * (1.0 - (driTech - 50) * 0.001);
- if (car) {
- const engLvl = parseInt(car.lvlEngine) || 1;
- fuelPerLap *= (1.0 - (engLvl - 1) * 0.005);
- }
+  if (!fuelPerLap) {
+  // Prefer GAPP's per-track fuel-per-km data (real number for the actual track) over the
+  // Very Low..Very High bucket guess. Use the WET fuel rate when rain is committed at race
+  // start (wet tyres + rain track = higher fuel consumption) - the dry index (6) was always
+  // used here before, which under-fuelled rain-all-race races that fell back to this legacy
+  // path (unknown supplier / GAPP unavailable). Confirmed: GAPP index 7 is wetFuelPerKm.
+  const analyze = analyzeWeather(weather);
+  const rainCommitted = !!(analyze && analyze.commitRain);
+  const gappTrack = lookupGappTrack(track && track.trackName, 'trackData');
+  const fuelIdx = rainCommitted ? 7 : 6;
+  fuelPerLap = gappTrack ? gappTrack.values[fuelIdx] * gappTrack.values[13] : (FUEL_BASE[consStr] || 2.4);
+  const driConc = driver ? numOrDefault(driver.concentration, 100) : 100;
+  const driAggr = driver ? numOrDefault(driver.aggressiveness, 50) : 50;
+  const driExp = driver ? numOrDefault(driver.experience, 50) : 50;
+  const driTech = driver ? numOrDefault(driver.techInsight, 50) : 50;
+  fuelPerLap *= (1.0 - (driConc - 100) * 0.001)
+  * (1.0 + (driAggr - 50) * 0.002)
+  * (1.0 - (driExp - 50) * 0.001)
+  * (1.0 - (driTech - 50) * 0.001);
+  if (car) {
+  const engLvl = parseInt(car.lvlEngine) || 1;
+  fuelPerLap *= (1.0 - (engLvl - 1) * 0.005);
+  }
  }
 
  // === TYRE WEAR MULTIPLIER ===
@@ -1842,9 +1865,9 @@
  let finalRec;
  let recReason;
 
- if (analyze && analyze.commitRain) {
- finalRec = bestWet ? bestWet.name : 'Rain';
- recReason = `Rain expected at race start (${analyze.startRainRisk}%) - Rain tyres mandatory`;
+  if (analyze && analyze.commitRain) {
+  finalRec = bestWet ? bestWet.name : (results.length ? results[0].name : 'Rain');
+  recReason = `Rain expected at race start (${analyze.startRainRisk}%) - Rain tyres mandatory`;
  } else if (analyze && analyze.maxRain >= 30) {
  finalRec = `${bestDry.name}`;
  recReason = `Start on ${bestDry.name} (dry at start) - rain risk rises later in the race (up to ${analyze.maxRain}%), watch for a pit-to-Rain window`;
@@ -1983,7 +2006,7 @@
  const stops = stopsFor(c.idx, c.wetFactor);
  const stints = stops + 1;
  const lapsPerStint = Math.ceil(laps / stints);
- const trackFuelBase = isRain ? trackFuelWet : trackFuelDry;
+  const trackFuelBase = isRain ? (trackFuelWet || trackFuelDry) : trackFuelDry;
  const fuelPerStint = testingFuelPerLap
  ? Math.ceil(testingFuelPerLap * lapsPerStint)
  : Math.ceil(trackDistanceTotal * (trackFuelBase + fuelFactor) / stints);
@@ -2023,9 +2046,9 @@
  }
 
  // Real per-compound total-time data from GPRO Analyzer (internal formulas has none of this -
- // it's OUR OWN captured data in GPRO_DATA.gproAnalyzerCalibration, currently Spa GP + Kaunas GP
- // only). This is actual observed race-strategy output for this exact driver/car, not a formula
- // estimate - so it outranks even GAPP when we have it for the current track.
+  // it's OUR OWN captured data in GPRO_DATA.gproAnalyzerCalibration, currently Spa GP + Kaunas GP
+  // + Bremgarten GP). This is actual observed race-strategy output for this exact driver/car, not a
+  // formula estimate - so it outranks even GAPP when we have it for the current track.
  function lookupCalibratedTyreResults(trackName, ctr) {
  if (!trackName || typeof GPRO_DATA === 'undefined' || !GPRO_DATA.gproAnalyzerCalibration) return null;
  let calib = null;
@@ -2507,10 +2530,12 @@
   // (not in GAPP's trackData, not in our public code). Estimate: boost burns ~12% extra
   // fuel per boosted lap, scaled by the track's fuel consumption rating (FUEL_BASE). This is a
   // rough approximation, not a verified formula - flagged as such below.
+  let extraFuel = 0;
   if (trackFuelRating && lapLengthKm && lapLengthKm > 0) {
   const fuelBase = FUEL_BASE[trackFuelRating] || FUEL_BASE['Medium'];
   const estExtraFuel = Math.ceil(picked.length * lapLengthKm * fuelBase * 0.12);
   note += ` Estimated extra fuel for ${picked.length} boosted laps: ~${estExtraFuel}L (${(fuelBase * 0.12).toFixed(2)}L/km boost coefficient × ${lapLengthKm.toFixed(1)}km × ${picked.length} laps). Rough estimate - per-track coefficient not officially disclosed.`;
+  extraFuel = estExtraFuel;
   } else {
   note += ' Boosts burn extra fuel per the real GPRO formula (laps x lap length x a per-track coefficient) - budget for it, but we don\'t have enough track data to estimate the amount here.';
   }
@@ -2525,7 +2550,7 @@
   note += ` ${phaseGuidance}`;
   }
 
-  return { laps: picked, note };
+  return { laps: picked, note, extraFuel };
   }
 
  // ============================================================
@@ -2968,8 +2993,8 @@
  const laps = trackData ? parseInt(trackData.laps) || 0 : 0;
  const trackWearStr = trackData ? (trackData.tyreWear || 'Medium') : 'Medium';
  let trackWearScale = WEAR_SCALE[trackWearStr] || 0.85;
- // Boost wear scale by season wear intensity if available
  const trackName = trackData ? (trackData.name || trackData.trackName || '') : '';
+ // Boost wear scale by season wear intensity if available
  const seasonTrack = lookupSeasonTrack(trackName);
  if (seasonTrack && seasonTrack.wearIntensity) {
  trackWearScale *= seasonTrack.wearIntensity;
@@ -3044,12 +3069,17 @@
  if (p.flagged) return 3;
  return 4;
  };
- const actionable = parts.filter(p => p.willFail || p.critical || p.flagged || p.belowTarget)
- .sort((a, b) => {
- const ta = tierOf(a), tb = tierOf(b);
- if (ta !== tb) return ta - tb;
- return a.priority - b.priority;
- });
+  const actionable = parts.filter(p => p.willFail || p.critical || p.flagged)
+  .sort((a, b) => {
+  const ta = tierOf(a), tb = tierOf(b);
+  if (ta !== tb) return ta - tb;
+  return a.priority - b.priority;
+  });
+  // Below-target parts that won't break/critically-wear this race get an informational note
+  // only — no budget-consuming upgrade recommendation. This matches the user's requirement:
+  // "recommendations should only happen if a part is breaking."
+  const infoOnly = parts.filter(p => p.belowTarget && !p.willFail && !p.critical && !p.flagged)
+  .sort((a, b) => a.priority - b.priority);
 
  actionable.forEach(p => {
  // All affordable upgrades (higher level), cheapest first
@@ -3244,7 +3274,7 @@
  leagueUpgradeNotes.push('Rookie: prioritize wear-critical parts (Brakes, Suspension) to avoid race failures');
  }
 
- return { parts, recs, cash, projectedCash: runCash, trackWear: trackWearStr, laps, league: league || 'Amateur', leagueNotes: leagueTargets.notes || '', upgradePhaEfficiency: upgradeRecs, leagueUpgradeNotes };
+  return { parts, recs, infoOnly, cash, projectedCash: runCash, trackWear: trackWearStr, laps, league: league || 'Amateur', leagueNotes: leagueTargets.notes || '', upgradePhaEfficiency: upgradeRecs, leagueUpgradeNotes };
  }
 
   // ============================================================
@@ -3607,6 +3637,8 @@
  const domCtrEl = document.querySelector('input[name="DriverRisk"]');
  if (domCtrEl) { const v = parseInt(domCtrEl.value) || 0; setCtr(v); }
  const ctr = getCtr();
+ const trackName = (practice||{}).trackName || (track||{}).trackName || '?';
+ const wearParts = car ? calcPartsWear(car, driver, ctr, trackName) : null;
  const tyre = calcTyreStrategySmart(track, testing, weather, car, driver, supplier, ctr, staffTd);
  // Fuel plan must match the tyre strategy actually recommended (stints/stops depend on which
  // compound is chosen) rather than an independently-computed generic fuel estimate - otherwise
@@ -3614,7 +3646,12 @@
  // same race. GAPP's own tyre-stop formula already accounts for fuel load in its lost-time calc
  // (fuelPerLap/totalFuel/laps below all come straight from `tyre`), so derive the fuel plan from
  // the selected compound's stop count instead of a separate model.
- const chosenTyreResult = tyre && tyre.results.find(r => r.name === tyre.finalRec);
+  let chosenTyreResult = tyre && tyre.results.find(r => r.name === tyre.finalRec);
+  // Safety net: if the exact finalRec name isn't in results (e.g. Rain compound unavailable in
+  // the data), fall back to the best dry result so fuel/stints still render rather than going null.
+  if (!chosenTyreResult && tyre && tyre.results && tyre.results.length) {
+  chosenTyreResult = tyre.results.find(r => r.isRain) || tyre.results[0];
+  }
  // RaceSetup.asp's "Start fuel" field is READ-ONLY - it's whatever amount was actually typed into
  // Q2's "First stint fuel" field, not something chosen here. If that doesn't match an even split of
  // totalFuel/stints (it usually won't, since Q2 and Race Setup can compute their fuel plan from
@@ -3626,7 +3663,7 @@
  // gapp calc this doesn't attempt yet.
  const domFuelStartEl = document.querySelector('input[name="FuelStart"]');
  const domFuelStart = domFuelStartEl ? parseInt(domFuelStartEl.value) || null : null;
- const fuel = (tyre && chosenTyreResult) ? (() => {
+  let fuel = (tyre && chosenTyreResult) ? (() => {
  const laps = tyre.laps;
  const totalFuel = tyre.totalFuel;
  const fuelPerLap = parseFloat(tyre.fuelPerLap);
@@ -3666,35 +3703,47 @@
  const fuelPerStint = Math.ceil(totalFuel / stints);
  const stopLaps = [];
  for (let i = 1; i <= stops; i++) stopLaps.push(Math.round((laps / stints) * i));
- return { laps, fuelPerLap, totalFuel, stints, stops, fuelPerStint, stopLaps };
- })();
+  return { laps, fuelPerLap, totalFuel, stints, stops, fuelPerStint, stopLaps };
+  })();
+
+  // Fallback: if tyre strategy is unavailable (e.g. Rain compound has no valid strategy),
+  // compute fuel directly from track data so the Quick Summary still shows fuel info.
+  if (!fuel && track) {
+  const laps = parseInt(track.laps) || 0;
+  if (laps > 0) {
+  const gappTrack = lookupGappTrack(track.trackName || track.name, 'trackData');
+  const fuelPerLap = gappTrack ? gappTrack.values[6] * gappTrack.values[13] : 2.4;
+  const totalFuel = Math.ceil(fuelPerLap * laps * 1.03);
+  fuel = { laps, fuelPerLap: fuelPerLap.toFixed(2), totalFuel, stints: 1, stops: 0, fuelPerStint: totalFuel, stopLaps: [] };
+  }
+  }
 
   let h = mkStaleBanner(practice, track, testing, driver, carData);
 
   // Quick Race Summary — one-glance overview of key decisions
   {
   const summaryItems = [];
-  const trackName = (practice||{}).trackName || (track||{}).trackName || '?';
   const laps = parseInt(track && track.laps) || 0;
   if (tyre && chosenTyreResult) {
   summaryItems.push({ icon: '🏎', label: chosenTyreResult.name, detail: `${chosenTyreResult.stops} stop${chosenTyreResult.stops !== 1 ? 's' : ''}` });
   }
   if (fuel) {
   summaryItems.push({ icon: '⛽', label: `${fuel.totalFuel}L`, detail: `${fuel.fuelPerLap}L/lap` });
-  if (tyre && chosenTyreResult && chosenTyreResult.stops > 0) {
+  if (tyre && chosenTyreResult) {
    // Different fuel for race start (from Q2) vs remaining stints
    if (fuel.stint1Fuel && fuel.stint1Fuel !== fuel.fuelPerStint) {
-     summaryItems.push({ icon: '🔄', label: `${fuel.stint1Fuel}L start`, detail: `then ${fuel.fuelPerStint}L × ${chosenTyreResult.stops} more stops` });
+     summaryItems.push({ icon: '🔄', label: `${fuel.stint1Fuel}L start`, detail: `then ${fuel.fuelPerStint}L × ${fuel.stops} more stop${fuel.stops === 1 ? '' : 's'}` });
+   } else if (fuel.stops > 0) {
+    const stintFuel = Math.ceil(fuel.totalFuel / (fuel.stops + 1));
+    summaryItems.push({ icon: '🔄', label: `${stintFuel}L/stint`, detail: `${fuel.stops + 1} stints` });
    } else {
-    const stintFuel = Math.ceil(fuel.totalFuel / (chosenTyreResult.stops + 1));
-    summaryItems.push({ icon: '🔄', label: `${stintFuel}L/stint`, detail: `${chosenTyreResult.stops + 1} stints` });
+    summaryItems.push({ icon: '🔄', label: `${fuel.totalFuel}L (no stops)`, detail: `all fuel from start` });
    }
   }
   }
   if (analyze) {
   summaryItems.push({ icon: analyze.commitRain ? '🌧' : '☀', label: analyze.commitRain ? 'RAIN' : 'DRY', detail: analyze.commitRain ? 'Wet strategy' : 'Dry strategy' });
   }
-  const wearParts = car ? calcPartsWear(car, driver, ctr, trackName) : null;
   if (wearParts) {
   const failCount = wearParts.filter(p => p.willFail).length;
   if (failCount > 0) summaryItems.push({ icon: '🔧', label: `${failCount} FAIL`, detail: 'parts need swap' });
@@ -3727,8 +3776,7 @@
  {
  const trackPhaForBoard = (trackPower || trackHandl || trackAccel) ? { power: trackPower, handling: trackHandl, accel: trackAccel } : null;
  const phaMatchForBoard = calcPhaMatch(car, trackPhaForBoard);
- const wearPartsForBoard = car ? calcPartsWear(car, driver, ctr, (practice||{}).trackName || (track||{}).trackName) : null;
- const pushHoldForBoard = calcPushOrHoldSignal(car, track, trackPhaForBoard, tyre, wearPartsForBoard);
+ const pushHoldForBoard = calcPushOrHoldSignal(car, track, trackPhaForBoard, tyre, wearParts);
   h += mkDecisionBoard([
   analyze ? { id: 'gpro-sec-weather', label: 'Weather', verdict: analyze.commitRain ? 'RAIN' : 'DRY', tone: analyze.commitRain ? 'bad' : 'good' } : null,
   phaMatchForBoard ? { id: 'gpro-sec-pha', label: 'PHA Match', verdict: phaMatchForBoard.level === 'none' ? 'No match' : phaMatchForBoard.level, tone: phaMatchForBoard.level === 'perfect' ? 'good' : phaMatchForBoard.level === 'top' ? 'warn' : 'bad' } : null,
@@ -3745,233 +3793,6 @@
  // `fuel`/`analyze` are all still fully computed and drive the Quick Summary and Car Setup/PHA
  // sections elsewhere on this page - only this display block is gone.
 
-   // === UNIFIED RACE STRATEGY (computed, not displayed - see comment above) ===
-   // Combines push-or-hold, tyre compound, fuel plan, rain transition, and wait-to-pit into
-   // one coherent section instead of scattering related data across 4+ separate blocks.
-   {
-  // Push-or-Hold signals (formerly standalone section)
-  const trackPhaForStrategy = (trackPower || trackHandl || trackAccel) ? { power: trackPower, handling: trackHandl, accel: trackAccel } : null;
-  const wearPartsForStrategy = car ? calcPartsWear(car, driver, ctr, (practice||{}).trackName || (track||{}).trackName) : null;
-  const pushHold = calcPushOrHoldSignal(car, track, trackPhaForStrategy, tyre, wearPartsForStrategy);
-
-  // Drying race detection (from old Fuel Strategy)
-  const isDryingRace = analyze && analyze.commitRain && analyze.segs.some(s => s.rainMax < 20);
-  let dryingFuelData = null;
-  if (isDryingRace && tyre && tyre.bestWet && tyre.bestDry) {
-  const laps = parseInt(track.laps) || 0;
-  const segs = analyze.segs;
-  let drySegIdx = segs.findIndex(s => s.rainMax < 20);
-  if (drySegIdx === -1) drySegIdx = segs.length;
-  // Real fix 2026-07-27: weather transitions land on the same ABSOLUTE lap for every league on a
-  // track (per GPRO wiki), NOT a fraction of each race's own distance - so dividing this race's
-  // laps by 4 was wrong (gave 29 for a real Losail 57-lap race whose true window was 40-46).
-  // Now uses estimateLapsPerWeatherPeriod(track) instead of Losail's flat "20". Bounds capped to
-  // this race's own total laps.
-  const TRANSITION_WINDOW_LAPS = 6;
-  const lapsPerPeriod = estimateLapsPerWeatherPeriod(track);
-  const earliestStopLap = drySegIdx > 0 ? Math.min(laps, drySegIdx * lapsPerPeriod) : 0;
-  const latestStopLap = drySegIdx > 0 ? Math.min(laps, earliestStopLap + TRANSITION_WINDOW_LAPS) : 0;
-  const rainLaps = latestStopLap;
-  const dryLaps = laps - rainLaps;
-  const wetPerLap = tyre.bestWet.fuelPerStint / Math.max(1, tyre.bestWet.lapsPerStint);
-  const dryPerLap = tyre.bestDry.fuelPerStint / Math.max(1, tyre.bestDry.lapsPerStint);
-  const wetFuel = Math.ceil(wetPerLap * rainLaps);
-  const dryFuel = Math.ceil(dryPerLap * dryLaps);
-  dryingFuelData = { rainLaps, dryLaps, earliestStopLap, latestStopLap, wetFuel, dryFuel, totalFuel: wetFuel + dryFuel, dryCompoundName: tyre.bestDry.name };
-  }
-
-  let strategyHtml = '';
-
-  // 0. Weather progression analysis (from Elite weather models)
-  if (weather) {
-  const quarters = [];
-  for (let i = 1; i <= 4; i++) {
-  const low = parseInt(weather[`raceQ${i}RainPLow`] || 0);
-  const high = parseInt(weather[`raceQ${i}RainPHigh`] || 0);
-  quarters.push({ q: i, low, high, avg: Math.round((low + high) / 2), delta: high - low });
-  }
-  const avgRain = quarters.reduce((s, q) => s + q.avg, 0) / 4;
-  const maxQ = quarters.reduce((max, q) => q.avg > max.avg ? q : max, quarters[0]);
-  const trend = quarters[3].avg - quarters[0].avg;
-  let progNote = '';
-  if (Math.abs(trend) > 15) {
-  const dir = trend > 0 ? 'increasing' : 'decreasing';
-  progNote = `Rain trend: ${dir} through race (${quarters[0].avg}%→${quarters[3].avg}%). ${trend > 0 ? 'Plan wet tyres later.' : 'Rain may clear - consider staying dry.'}`;
-  } else if (maxQ.avg > 50) {
-  progNote = `Peak rain Q${maxQ.q} (${maxQ.avg}%). ${maxQ.q <= 2 ? 'Early rain risk - consider starting on wets.' : 'Mid/later rain - keep dry tyres but be ready.'}`;
-  } else if (avgRain < 15) {
-  progNote = 'Low rain probability across all quarters. Dry strategy throughout.';
-  }
-  if (progNote) {
-  strategyHtml += `<div style="font-size:9px;color:#60a5fa;margin-top:4px;padding:4px 8px;background:#1e293b;border-radius:4px;">📊 Weather Progression: ${progNote}</div>`;
-  }
-  }
-
-  // 1. Push-or-Hold verdict banner
-  if (pushHold) {
-  const phColor = pushHold.metCount === pushHold.total ? '#10b981' : pushHold.metCount === 0 ? '#ef4444' : '#f59e0b';
-  strategyHtml += `<div style="padding:6px 10px;border-radius:6px;background:#1e293b;margin-bottom:8px;border-left:3px solid ${phColor};">`;
-  strategyHtml += `<div style="color:${phColor};font-weight:700;font-size:11px;">🏁 ${pushHold.metCount}/${pushHold.total} signals — ${pushHold.metCount === pushHold.total ? 'PUSH' : pushHold.metCount === 0 ? 'HOLD' : 'MODERATE RISK'}</div>`;
-  strategyHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:2px;">${pushHold.verdict}</div>`;
-  strategyHtml += `</div>`;
-  }
-
-  // 2. Race context badges
-  {
-  const weatherLabel = analyze && analyze.commitRain ? 'RAIN' : 'DRY';
-  const weatherColor = analyze && analyze.commitRain ? '#60a5fa' : '#10b981';
-  strategyHtml += `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">`;
-  strategyHtml += `<div style="padding:3px 8px;border-radius:4px;background:#1e293b;font-size:10px;"><span style="color:#9ca3af;">Weather:</span> <span style="color:${weatherColor};font-weight:700;">${weatherLabel}</span></div>`;
-  if (tyre) {
-  strategyHtml += `<div style="padding:3px 8px;border-radius:4px;background:#1e293b;font-size:10px;"><span style="color:#9ca3af;">Compound:</span> <span style="color:#f9fafb;font-weight:700;">${tyre.finalRec}</span></div>`;
-  strategyHtml += `<div style="padding:3px 8px;border-radius:4px;background:#1e293b;font-size:10px;"><span style="color:#9ca3af;">Stops:</span> <span style="color:#f9fafb;font-weight:700;">${chosenTyreResult ? chosenTyreResult.stops : '?'}</span></div>`;
-  strategyHtml += `<div style="padding:3px 8px;border-radius:4px;background:#1e293b;font-size:10px;"><span style="color:#9ca3af;">Laps:</span> <span style="color:#f9fafb;font-weight:700;">${tyre.laps}</span></div>`;
-  }
-  strategyHtml += `</div>`;
-  }
-
-  // 3. Fuel plan (integrated)
-  if (dryingFuelData) {
-  const df = dryingFuelData;
-  strategyHtml += `<div style="margin-bottom:6px;">`;
-  strategyHtml += mkRow('Total Fuel', `<strong>${df.totalFuel}L</strong> (wet+dry combined)`);
-  strategyHtml += mkRow('Rain Stop Window', `Lap ${df.earliestStopLap}-${df.latestStopLap} (forecast can't pin an exact lap - see GPRO's own weather rules)`);
-  strategyHtml += mkRow('Start Fuel (Q2)', `<strong>${df.wetFuel}L</strong> — Rain tyres, ${df.rainLaps} wet laps (fuelled for the later/safer end of the window)`);
-  strategyHtml += mkRow('Stop 1 Fuel', `<strong>${df.dryFuel}L</strong> — ${df.dryCompoundName} tyres, ${df.dryLaps} dry laps`);
-  strategyHtml += mkRow('Wet Fuel/Lap', `${(df.wetFuel / df.rainLaps).toFixed(2)}L`);
-  strategyHtml += mkRow('Dry Fuel/Lap', `${(df.dryFuel / df.dryLaps).toFixed(2)}L`);
-  strategyHtml += mkRow('Pit Stops', '1 (wet → dry compound switch)');
-  strategyHtml += `</div>`;
-  } else if (fuel) {
-  const stintsLabel = fuel.fromDomFuelStart
-  ? `${fuel.stint1Fuel}L (start, from Q2) + ${fuel.stints - 1} x ${fuel.fuelPerStint}L`
-  : `${fuel.stints} x ${fuel.fuelPerStint}L`;
-   strategyHtml += `<div style="margin-bottom:6px;">`;
-   strategyHtml += mkRow('Total Fuel', `${fuel.totalFuel}L`);
-   strategyHtml += mkRow('Fuel/Lap', `${fuel.fuelPerLap}L`);
-   strategyHtml += mkRow('Stints', stintsLabel);
-   strategyHtml += mkRow('Pit Stops', `${fuel.stops}`);
-   if (fuel.stopLaps.length) strategyHtml += mkRow('Est. Pit Laps', fuel.stopLaps.join(', '));
-   // Pit window calculator (from Elite): optimal lap range for each pit stop
-   // Based on tyre durability model: tyres should pit between 50-80% remaining
-   if (fuel.stopLaps.length > 0 && track) {
-   const laps = parseInt(track.laps) || 0;
-   const trackName = (practice||{}).trackName || (track||{}).trackName || '';
-   const trackTemp = raceTemp || 25;
-   const tempCoeff = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.tempWearMultiplier) ? GPRO_DATA.tempWearMultiplier.tempCoeff : 0.015;
-   const tempMult = 1 + (trackTemp - 20) * tempCoeff;
-   const gappWearF = lookupGappTrack(trackName, 'tyreWearFactor') || 1.0;
-   const intensityV = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.trackWearIntensity) ? (GPRO_DATA.trackWearIntensity[trackName] || 1.0) : 1.0;
-   const baseWearLap = 0.5 * gappWearF * intensityV * tempMult;
-   // Pit window: when tyre hits 50% (optimal) to 80% (latest safe)
-   const earlyPitLap = baseWearLap > 0 ? Math.ceil(50 / (baseWearLap * 100)) : null;
-   const latePitLap = baseWearLap > 0 ? Math.ceil(20 / (baseWearLap * 100)) : null;
-   if (earlyPitLap && latePitLap && latePitLap <= laps) {
-   strategyHtml += mkRow('Pit Window', `<span style="color:#10b981;">lap ${earlyPitLap}</span> (optimal) to <span style="color:#f59e0b;">lap ${latePitLap}</span> (latest safe)`);
-   }
-   }
-    strategyHtml += `</div>`;
-   }
-
-   // Fuel temperature normalization note (from Elite fuel models)
-   // Hot tracks = fuel is less dense = slightly more volume per lap; cold tracks = opposite
-   if (fuel && track) {
-   const trackTemp = raceTemp || 25;
-   if (trackTemp >= 30) {
-   strategyHtml += `<div style="font-size:9px;color:#f59e0b;margin-top:4px;">🌡 Hot track (${trackTemp}°C): fuel is less dense — actual fuel/lap may be ~1-2% higher than calculated. Consider adding 1-2L extra.</div>`;
-   } else if (trackTemp <= 10) {
-   strategyHtml += `<div style="font-size:9px;color:#60a5fa;margin-top:4px;">❄ Cold track (${trackTemp}°C): fuel is denser — actual fuel/lap may be ~1-2% lower. Standard load should suffice.</div>`;
-   }
-   }
-
-   // 4. Recommendation banner
-  if (dryingFuelData) {
-  strategyHtml += mkRec(`Load <strong>${dryingFuelData.wetFuel}L</strong> for Q2 start (Rain), then <strong>${dryingFuelData.dryFuel}L</strong> at the stop (${dryingFuelData.dryCompoundName}). GPRO pits you automatically somewhere between lap ${dryingFuelData.earliestStopLap}-${dryingFuelData.latestStopLap} - the forecast can't pin an exact lap, only that rain stops sometime within that window.`, 'good');
-  } else if (fuel) {
-  strategyHtml += mkRec(
-  (fuel.fromDomFuelStart
-  ? `Start fuel: <strong>${fuel.stint1Fuel}L</strong> (locked from Q2) — load <strong>${fuel.fuelPerStint}L</strong> per remaining stop`
-  : `Load <strong>${fuel.fuelPerStint}L</strong> per stint (${fuel.stops} stop${fuel.stops === 1 ? '' : 's'})`) +
-  (fuel.stopLaps.length ? ` — auto-pits around lap ${fuel.stopLaps.join('/')}` : ''), 'good');
-   } else {
-   strategyHtml += mkRec('Complete testing to get fuel data', 'warn');
-   }
-
-    // 5. Rain transition details (if drying race)
-  if (dryingFuelData) {
-  const df = dryingFuelData;
-  const pitLoss = parseFloat(track.timeInOutPits) || 13.5;
-  strategyHtml += `<div style="margin-top:8px;padding:6px;background:#1e293b;border-radius:4px;font-size:10px;">`;
-  strategyHtml += `<div style="color:#60a5fa;font-weight:700;margin-bottom:4px;">🌧️ Rain → Dry Transition:</div>`;
-  strategyHtml += `<div style="color:#d1d5db;">1. <strong>Start on Rain tyres</strong> (rain ${analyze.segs[0].rainMin}-${analyze.segs[0].rainMax}%)</div>`;
-  strategyHtml += `<div style="color:#d1d5db;">2. <strong>Stop 1 fuel: ${df.dryFuel}L</strong> — auto-pit somewhere between lap ${df.earliestStopLap}-${df.latestStopLap}</div>`;
-  strategyHtml += `<div style="color:#d1d5db;">3. <strong>Switch to ${df.dryCompoundName}</strong> for remaining ~${df.dryLaps} laps</div>`;
-  strategyHtml += `<div style="color:#9ca3af;margin-top:4px;">⚡ Pit loss: ${pitLoss}s</div>`;
-  strategyHtml += `</div>`;
-  } else if (analyze && analyze.maxRain >= 40 && tyre && tyre.bestDry) {
-  // Full-race rain plan (rain all race, no drying)
-  const laps = parseInt(track.laps) || 0;
-  const pitLoss = parseFloat(track.timeInOutPits) || 13.5;
-  strategyHtml += `<div style="margin-top:8px;padding:6px;background:#1e293b;border-radius:4px;font-size:10px;">`;
-  strategyHtml += `<div style="color:#60a5fa;font-weight:700;margin-bottom:4px;">🌧️ Rain All Race:</div>`;
-  strategyHtml += `<div style="color:#d1d5db;">Start and stay on <strong>Rain</strong> tyres for all ${laps} laps.</div>`;
-  strategyHtml += `<div style="color:#d1d5db;">If rain clears mid-race, switch to <strong>${tyre.bestDry.name}</strong> at the next fuel stop.</div>`;
-  strategyHtml += `<div style="color:#9ca3af;margin-top:4px;">⚡ Pit loss: ${pitLoss}s</div>`;
-  strategyHtml += `</div>`;
-  }
-
-  // 6. Wait-to-pit heuristics (if rain risk)
-  if (analyze && analyze.maxRain >= 15) {
-  const segs = analyze.segs;
-  const startRain = segs[0].rainMax;
-  const waitStartRain = startRain >= 60 ? 0 : startRain >= 30 ? 1 : 2;
-  let maxDrop = 0;
-  for (let i = 1; i < segs.length; i++) maxDrop = Math.max(maxDrop, segs[i - 1].rainMax - segs[i].rainMax);
-  const waitStopRain = maxDrop >= 30 ? 1 : maxDrop >= 15 ? 2 : 3;
-  strategyHtml += `<div style="margin-top:8px;padding:6px;background:#1e293b;border-radius:4px;font-size:10px;">`;
-  strategyHtml += `<div style="color:#f59e0b;font-weight:700;margin-bottom:4px;">⏱️ Wait-to-Pit:</div>`;
-  strategyHtml += mkRow('If it starts raining', `${waitStartRain} laps`);
-  strategyHtml += `<div style="font-size:9px;color:#9ca3af;padding-left:4px;margin-bottom:4px;">Rain risk ${startRain}% — ${startRain >= 60 ? 'react immediately' : startRain >= 30 ? 'brief confirmation wait' : 'wait to avoid false alarm'}</div>`;
-  strategyHtml += mkRow('If it stops raining', `${waitStopRain} laps`);
-  strategyHtml += `<div style="font-size:9px;color:#9ca3af;padding-left:4px;">Steepest drop: ${maxDrop}pp — ${maxDrop >= 30 ? 'dries fast' : maxDrop >= 15 ? 'moderate' : 'gradual, longer buffer'}</div>`;
-  strategyHtml += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Own heuristic — no exact formula for these fields.</div>`;
-  strategyHtml += `</div>`;
-  }
-
-  // 7. Backend detail (Push-or-Hold raw signals, tyre compound comparison table, GAPP/calibrated
-  // cross-checks, recommendation-source note) removed 2026-08-13 from the public Race Setup panel
-  // (explicit user request: "I don't need to see this publicly... used internally by you"). The
-  // verdict banner (item 1) and Weather/Compound/Stops/Laps badges (item 2) above already surface
-  // the actual recommendation these numbers produce - pushHold/tyre are still fully computed and
-  // drive those, only this raw-detail dump is gone.
-   if (fuel && fuel.fromDomFuelStart) {
-   strategyHtml += `<div style="font-size:9px;color:#f59e0b;margin-top:4px;">Start fuel locked from Q2 — simple dry-race split. If rain changes compound mid-race, fuel/lap changes too.</div>`;
-   }
-   // Track evolution note (from Elite: Q2 ~0.6% faster from rubber)
-   if (track && tyre && tyre.laps) {
-   strategyHtml += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Track evolves: rubber builds up, adding ~0.6% grip in Q2. Late boost laps benefit from this grip increase.</div>`;
-   }
-   // Weather severity indicator (from Elite weather analysis)
-   if (weather) {
-   let maxRainChance = 0;
-   for (let i = 1; i <= 4; i++) {
-   const high = parseInt(weather[`raceQ${i}RainPHigh`] || 0);
-   if (high > maxRainChance) maxRainChance = high;
-   }
-   if (maxRainChance >= 70) {
-   strategyHtml += `<div style="font-size:9px;color:#ef4444;font-weight:600;margin-top:4px;">🌧 HIGH RAIN RISK (${maxRainChance}%): Prepare for wet tyres. Rain strategy above is your primary plan.</div>`;
-   } else if (maxRainChance >= 40) {
-   strategyHtml += `<div style="font-size:9px;color:#f59e0b;margin-top:4px;">☁ MODERATE RAIN RISK (${maxRainChance}%): Monitor weather quarters. Keep dry strategy but be ready to pivot.</div>`;
-   } else if (maxRainChance >= 20) {
-   strategyHtml += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">☁ LOW RAIN RISK (${maxRainChance}%): Dry strategy likely, but watch for late showers.</div>`;
-   }
-   }
-   strategyHtml += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">You set fuel amounts per stint on RaceSetup.asp — the game pits automatically when fuel runs low, weather forces a tyre change, or a mechanical issue occurs.</div>`;
-
-  // `strategyHtml` intentionally not appended to `h` - see removal note above. pushHold/fuel/tyre
-  // computed above still feed the Quick Summary and decision board elsewhere on this page.
-
-  }
 
  // === DRIVER STRATEGY (RaceSetup.asp "Driver strategy" risk block) ===
  // Overtake/defend/start-approach/problem-pit-laps from our own RiskAdvisorService
@@ -4049,6 +3870,12 @@
   if (boost.laps.length) {
   drHtml += mkRow('Suggested boost laps', boost.laps.join(', '));
   drHtml += `<div style="font-size:9px;color:#9ca3af;padding-left:4px;">${boost.note}</div>`;
+  // Fuel the boost: the recommended per-stint/start fuel (see Fuel Plan above) should be topped
+  // up for the boosted laps, otherwise you risk running dry during/after a boost stint. Estimated
+  // extra fuel is split across the boosted laps' stints (boost laps cluster around pit windows).
+  if (boost.extraFuel > 0) {
+  drHtml += mkRow('Add for boost fuel', `+${boost.extraFuel}L across the boosted laps (add ~${Math.max(1, Math.ceil(boost.extraFuel / Math.max(1, chosenTyreResult.stops + 1)))}L to each stint)`);
+  }
   }
 
   }
@@ -4088,14 +3915,14 @@
  const t4L = parseFloat(weather.raceQ4TempLow) || 25;
  const t4H = parseFloat(weather.raceQ4TempHigh) || 25;
  raceTemp = ((t1L + t1H) / 2 + (t2L + t2H) / 2 + (t3L + t3H) / 2 + (t4L + t4H) / 2) / 4;
- // Race wet setup flag: the race only gets ONE setup submitted before the start, so this must
- // reflect start-of-race conditions (segment 1), same as the tyre "commitRain" logic - not "rain
- // touches 40% at any point in the 2h race", which was flipping the whole setup to wet-weather
- // coefficients even for races that start dry and only risk rain in the final segment.
+ // Race wet setup flag: RaceSetup.asp uses the Q2/Race-start weather box for the setup submitted
+ // before the start. Prefer that live DOM indicator when present; use forecast segment 1 only when
+ // the page widget is unavailable, preventing stale or rounded forecast data from selecting the
+ // wrong wet/dry setup branch.
  for (let i = 1; i <= 4; i++) {
  rSegs.push(Math.max(parseInt(weather[`raceQ${i}RainPLow`] || 0), parseInt(weather[`raceQ${i}RainPHigh`] || 0)));
  }
- raceWet = rSegs[0] >= 40;
+ raceWet = (rsDomTemps && rsDomTemps.q2Rain !== null) ? rsDomTemps.q2Rain : rSegs[0] >= 40;
  } else if (track) {
  const t = parseFloat(track.trackTemp || track.temperature) || 25;
  q1Temp = q2Temp = raceTemp = t;
@@ -4147,7 +3974,6 @@
   if (chosenTyreResult) checks.push({ ok: true, text: `Tyre: ${chosenTyreResult.name} (${chosenTyreResult.stops} stop${chosenTyreResult.stops !== 1 ? 's' : ''})` });
   if (analyze && analyze.commitRain) checks.push({ ok: false, text: 'Rain expected — load Rain tyres' });
   if (car) {
-  const wearParts = calcPartsWear(car, driver, ctr, (practice||{}).trackName || (track||{}).trackName);
   const failParts = wearParts.filter(p => p.willFail);
   if (failParts.length > 0) checks.push({ ok: false, text: `${failParts.length} part(s) will fail: ${failParts.map(p => p.name).join(', ')}` });
   }
@@ -4348,7 +4174,7 @@
 
  // Parts overview table with wear predictions
  if (trackData) {
- const trackName = trackData.name || trackData.trackName || 'Next Race';
+ const trackName = trackData ? (trackData.name || trackData.trackName || 'Next Race') : '';
  const stData = lookupSeasonTrack(trackName);
  const wearCtx = stData ? `, ${analysis.trackWear} wear (${stData.wearIntensity}x intensity)` : `, ${analysis.trackWear} wear`;
  const tempCtx = stData ? ` | Avg temp: ${stData.avgTemp}C` : '';
@@ -4421,12 +4247,24 @@
  }
  recsHtml += mkRec(text, rc);
  });
- h += mkSection('Recommendations', recsHtml);
- // Summary of parts not needing action
- const okParts = analysis.parts.filter(p => !analysis.recs.find(r => r.part.name === p.name));
- if (okParts.length > 0) {
- h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">${okParts.length} parts OK (no action needed): ${okParts.map(p => p.name).join(', ')}</div>`;
- }
+  h += mkSection('Recommendations', recsHtml);
+  // Summary of parts not needing action
+  const okParts = analysis.parts.filter(p => !analysis.recs.find(r => r.part.name === p.name) && !(analysis.infoOnly || []).find(i => i.name === p.name));
+  if (okParts.length > 0) {
+  h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">${okParts.length} parts OK (no action needed): ${okParts.map(p => p.name).join(', ')}</div>`;
+  }
+  // Below-target informational note: parts that are below league target but won't break this race
+  // get a gentle note instead of a budget-consuming recommendation — this matches the user's
+  // requirement that upgrade recommendations should only appear for parts that will actually break.
+  if (analysis.infoOnly && analysis.infoOnly.length) {
+  let infoHtml = '<div style="font-size:9px;color:#9ca3af;">These parts are below your league target but won\'t break or critically wear this race. Consider upgrading them over the next few races as budget allows:</div>';
+  analysis.infoOnly.forEach(p => {
+  const hasUpgrades = p.opts.some(o => o.isUpgrade);
+  const cheapestUpgrade = hasUpgrades ? p.opts.filter(o => o.isUpgrade).sort((a, b) => (a.cost || Infinity) - (b.cost || Infinity))[0] : null;
+  infoHtml += `<div style="font-size:9px;color:#9ca3af;padding:2px 0;">${p.name} (L${p.lvl} → target L${p.target}, ${p.remaining}% wear)${cheapestUpgrade ? ` — cheapest upgrade: $${cheapestUpgrade.cost.toLocaleString()}` : ''}</div>`;
+  });
+  h += `<div style="margin-top:6px;padding:6px 8px;background:#1e293b;border-radius:4px;border-left:3px solid #3b82f6;">${infoHtml}</div>`;
+  }
  h += `<div style="font-size:9px;color:#6b7280;margin-top:2px;">Wear projections: ${lookupGappTrack(trackData ? (trackData.name || trackData.trackName || '') : '', 'wearData') ? 'track-specific (per-track)' : 'generic (own Montreal-calibrated fallback)'}${driver ? '' : ' (driver data unavailable, using default wear-reduction factor)'}</div>`;
  }
 
@@ -4580,8 +4418,8 @@
   }
 
   // Test Points preview for next race
+ const trackName = trackData ? (trackData.trackName || trackData.name || '') : '';
   if (trackData && car) {
-  const trackName = trackData.trackName || trackData.name || '';
   const tp = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.calculatorFormulas) ? GPRO_DATA.calculatorFormulas.testPointsPerLap : null;
   if (tp) {
   const raceLaps = parseInt(trackData.laps) || 60;
