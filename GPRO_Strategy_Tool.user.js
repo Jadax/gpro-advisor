@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.15.5
+// @version 6.15.6
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -32,7 +32,7 @@
 // @run-at document-idle
 // ==/UserScript==
 
-// GPRO Strategy Tool v6.15.5
+// GPRO Strategy Tool v6.15.6
 // Made with ❤ by Tushant Sharma
 // A comprehensive strategy tool for Grand Prix Racing Online providing
 // fuel calculations, tyre strategy, car setup recommendations,
@@ -1039,20 +1039,25 @@
  try {
  const out = { sponsorName: '', negotiation: 0, progress: 0, questions: [], characteristics: {} };
 
- const h1 = root.querySelector('h1.block');
- if (h1) out.sponsorName = h1.textContent.replace(/negotiat.*with/i, '').replace(/sponsor/i, '').trim();
-
- // Negotiation progress is often a "progress" figure or percentage on the page.
- const progEl = Array.from(root.querySelectorAll('td,th,p,span')).find(el => /progress/i.test(el.textContent || ''));
- if (progEl) {
-  const p = (progEl.parentElement ? progEl.parentElement.textContent : progEl.textContent) || '';
-  const m = p.match(/(\d+)\s*%|\b(\d{1,2})\s*\/\s*(\d{1,2})\b/);
-  if (m) out.progress = parseInt(m[1] || m[2] || '0');
- }
-
+ // Read identity and progress from the page's labelled data rows. The advisor panel is also
+ // inside document, so broad text searches can accidentally read the panel's own old values.
+ const normalizeText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+ const pageRow = (label) => Array.from(root.querySelectorAll('tr')).find((row) => {
+  const header = row.querySelector('th');
+  return header && normalizeText(header.textContent).replace(/:$/, '').toLowerCase() === label;
+ });
+ const cellText = (row) => row && row.querySelector('th')?.nextElementSibling?.textContent
+  ? normalizeText(row.querySelector('th').nextElementSibling.textContent) : '';
+ const companyRow = pageRow('company name');
+ const categoryRow = pageRow('sponsor category');
+ const progressRow = pageRow('negotiation progress');
+ out.sponsorName = cellText(companyRow);
+ out.sponsorCategory = cellText(categoryRow);
+ const progressMatch = cellText(progressRow).match(/(\d+(?:\.\d+)?)\s*%/);
+ if (progressMatch) out.progress = parseFloat(progressMatch[1]);
  // Negotiation questions: GPRO asks up to 5. Markup varies between sponsor pages, so detect
  // normalized question text in any visible container and collect options from the nearest radio group.
- const normalizeText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+
  const questionStems = [
   'Which area of the car would our advertisement be placed on?',
   'What are you expecting to achieve next season?',
@@ -1105,41 +1110,17 @@
    if (text && text.length > 1 && text.length < 120 && !options.includes(text)) options.push(text);
   });
   out.questions.push({ question: stem, options });
- }); // Sponsor characteristics (exposed on NegotiateSponsor.asp as th(label)+td(value) pairs:
- // Finances / Expectations / Patience / Reputation / Image / Negotiation, each a 1-7 scale).
- // Walk every label cell and read the ADJACENT value cell (not the same cell).
- const charLabels = { 'finances': 'finances', 'expectations': 'expectations', 'patience': 'patience', 'reputation': 'reputation', 'image': 'image', 'negotiation': 'negotiation' };
- root.querySelectorAll('th,td').forEach(el => {
-  const raw = (el.textContent || '').trim();
-  const label = raw.replace(/[:\s]/g, '').toLowerCase();
-  for (const [lbl, key] of Object.entries(charLabels)) {
-   if (label === lbl) {
-    // Read adjacent cell value in the same row
-    const row = el.closest('tr');
-    let valCell = el.nextElementSibling;
-    if (!valCell && row) valCell = row.querySelector('td');
-    const valTxt = valCell ? (valCell.textContent || '').trim() : '';
-    const m = valTxt.match(/\d{1,2}/);
-    if (m) out.characteristics[key] = parseInt(m[0]);
-    break;
-   }
-  }
- });
- // Best-effort: some layouts put the number right after the label in one cell.
- ['finances','expectations','patience','reputation','image','negotiation'].forEach(key => {
-  if (out.characteristics[key] == null) {
-   const el = Array.from(root.querySelectorAll('th,td')).find(e => {
-    const t = (e.textContent || '').toLowerCase().replace(/[:\s]/g, '');
-    return t.startsWith(key) && /\d/.test(t);
-   });
-   if (el) {
-    const m = (el.textContent || '').match(/\d{1,2}/);
-    if (m) { const v = parseInt(m[0]); if (v >= 1 && v <= 7) out.characteristics[key] = v; }
-   }
-  }
- });
-
- return out;
+ }); // Sponsor characteristics are rendered as level bars. Their numeric value is in the bar's
+ // title/alt attribute, not in visible cell text, so parse that exact metadata.
+ const charLabels = { finances: 'finances', expectations: 'expectations', patience: 'patience', reputation: 'reputation', image: 'image', negotiation: 'negotiation' };
+ Object.entries(charLabels).forEach(([label, key]) => {
+  const row = pageRow(label);
+  const valueCell = row?.querySelector('th')?.nextElementSibling;
+  const marker = valueCell?.querySelector('.flag[title], .flag[alt]');
+  const raw = marker?.getAttribute('title') || marker?.getAttribute('alt') || '';
+  const value = parseInt(raw, 10);
+  if (value >= 1 && value <= 7) out.characteristics[key] = value;
+ }); return out;
  } catch (e) { return null; }
  }
 
@@ -5738,7 +5719,7 @@
    if (q.question.includes('Which area of the car')) {
    const image = c.image || 4;
    answer = (sa.carSpot && sa.carSpot[image]) || (image <= 1 ? 'Front wing' : image === 2 ? 'Rear wing' : image === 3 ? 'Nose' : image <= 5 ? 'Sidepods' : 'Engine cover');
-   why = `Sponsor's image characteristic is ${image}; place the ad where they want it to maximise the deal.`;
+   why = `Sponsor category: ${data.sponsorCategory || 'unknown'}; image characteristic is ${image}, which selects the sponsor's preferred placement.`;
    } else if (q.question.includes('expecting to achieve')) {
    // Match the answer to the sponsor's expectation characteristic where available,
    // else fall back to the manager's realistic goal.
@@ -5749,10 +5730,15 @@
    : `Based on your ${league} league posture: ${answer.toLowerCase()} is a realistic, credible goal.`;
    } else if (q.question.includes('popular is your driver')) {
    // Reputation + driver charisma weigh how the sponsor perceives your driver's appeal.
+   const driverSnapshot = getStaleData('/DriProfile');
+   const driver = driverSnapshot && driverSnapshot.data ? driverSnapshot.data : {};
+   const driverNote = driver.charisma != null || driver.reputation != null || driver.experience != null
+    ? ' Driver context: charisma ' + (driver.charisma ?? '?') + ', reputation ' + (driver.reputation ?? '?') + ', experience ' + (driver.experience ?? '?') + '.'
+    : ' Driver profile cache unavailable; refresh your own driver profile for a driver-specific check.';
    const popularity = c.image || 4;
    answer = (sa.popularity && sa.popularity[popularity]) || 'My driver is not very popular with the fans';
    const reputationNote = c.reputation >= 6 ? ` High sponsor reputation (${c.reputation}/7) means they care about image - frame your driver positively.` : (c.reputation != null ? ` Sponsor reputation ${c.reputation}/7.` : '');
-   why = `Chosen from the sponsor's image/perception rating.${reputationNote}`;
+   why = `Chosen from the sponsor's image/perception rating.${reputationNote}${driverNote}`;
    } else if (q.question.includes('amount per race')) {
    const pat = c.patience;
    answer = (sa.amount && sa.amount[pat]) || 'A bit too low';
