@@ -59,6 +59,7 @@ Already parsed by `parseUpdateCarDOM()` in the script. Confirmed still accurate:
 - Race forecast: 4 time segments (`Start-0h30m`, `0h30m-1h`, `1h-1h30m`, `1h30m-2h`), each cell has `Temp: L°-H°`, `Humidity: L%-H%`, `Rain probability: L%-H%` (or a single value if L=H).
 - Car setup section (right column): current level/wear per part in adjacent `<td>`s, input fields `name="FWing"|"RWing"|"Engine"|"Brakes"|"Gear"|"Suspension"` (blank until submitted — this is the *input* form, not a readout).
 - Tyre select: `<select name="Tyres">` with option values 1=Extra Soft,2=Soft,3=Medium,4=Hard,6=Rain.
+- Risk dropdown: `<select name="setRisk">` — single driver-risk select for the session (Q1), 4 text options: `Keep the car on the track` / `Push the car a little` / `Push the car a lot` / `Push the car to the limit` (texts confirmed via API spec fields `setRisk`/`q1Risk`/`q2Risk`; DOM select name **not yet verified live** — flag if the selector misses).
 - Car character (Power/Handling/Accel) shown as plain numbers here (unlike the level-dot bars): `<td>78</td>` etc, next to the tyre/risk rows.
 - Practice laps done count: `<th colspan="12">Practice laps data (laps done 0/8)</th>`.
 
@@ -66,6 +67,7 @@ Already parsed by `parseUpdateCarDOM()` in the script. Confirmed still accurate:
 
 Same track/weather block as Qualify.asp. Additional:
 - Fuel input: `<input name="Fuel" ... >&nbsp;(10 - 180 liters)`.
+- Risk dropdowns: same 4-option risk select as Q1 (see Qualify.asp above); API spec exposes per-session values as `q1Risk` + `q2Risk`.
 - Q1 lap result summary table (Pos/Lap time/Gap) — shows `-` until Q1 done.
 - Starting grid preview table, same shape.
 
