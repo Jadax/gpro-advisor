@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.27.0
+// @version 6.27.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1750,7 +1750,7 @@ if (h.includes('TrainingSession.asp')) return 'training';
  // ============================================================
  // WEATHER STRATEGY
  // ============================================================
-  function analyzeWeather(weather, totalLaps) {
+  function analyzeWeather(weather, totalLaps, lapsPerPeriod) {
   if (!weather) return null;
   const segs = [];
   for (let i = 1; i <= 4; i++) {
@@ -1768,24 +1768,40 @@ if (h.includes('TrainingSession.asp')) return 'training';
   const startRainRisk = segs[0].rainMax;
   const isRainAllRace = startRainRisk >= 40 && segs.every(s => s.rainMax >= 40);
   // Full race weather profile — drives mixed-condition setup/tyre/fuel decisions.
-  // GPRO has 4 equal race-forecast segments. Each segment is classified dry (<40%) or wet (≥40%).
-  // Consecutive same-condition segments merge into a single "phase". Transitions between phases
+  // Each forecast window is classified dry (<40%) or wet (≥40% on its max rain probability).
+  // Consecutive same-condition windows merge into a single "phase". Transitions between phases
   // are the points where the driver must pit for a compound change (dry↔wet).
   const RAIN_THRESHOLD = 40;
   const segCondition = segs.map(s => s.rainMax >= RAIN_THRESHOLD ? 'wet' : 'dry');
+  // Window → lap mapping: GPRO's race forecast shows four 30-MINUTE windows (Start-0h30m …
+  // 1h30m-2h), and wiki says weather periods are ABSOLUTE laps tied to Elite pace — each window is
+  // a fixed number of laps per track (estimateLapsPerWeatherPeriod), NOT a quarter of the race's
+  // lap count. The old totalLaps/4 split only lines up when a race lasts exactly 2h; a ~90-min
+  // race (Portimao 66 laps ≈ 91 min) made each quarter ~22 min instead of 30, so rain arrived
+  // several laps early — real bug: the Rain plan started at L18 instead of L21. Call sites pass
+  // the per-track laps/period; flat Losail fallback otherwise. Window 4 extends to the final lap
+  // (a race past 2h keeps the last window's condition); windows the race never reaches are
+  // dropped (a short race must not inherit rain from windows it doesn't run).
+  const lpp = (lapsPerPeriod !== null && lapsPerPeriod !== undefined && lapsPerPeriod > 0 && isFinite(lapsPerPeriod)) ? Math.round(lapsPerPeriod) : LAPS_PER_PERIOD_FALLBACK;
+  const segRange = (k) => {
+  if (!(totalLaps > 0)) return { startLap: 0, endLap: 0, empty: false };
+  const sL = k * lpp + 1;
+  const eL = k === 3 ? totalLaps : Math.min((k + 1) * lpp, totalLaps);
+  return { startLap: sL, endLap: eL, empty: sL > eL };
+  };
+  const ranges = [0, 1, 2, 3].map(segRange);
   // Build phases: [{condition, segStart, segEnd, startLap, endLap, laps}]
   const phases = [];
   let i = 0;
   while (i < 4) {
+  if (ranges[i].empty) break; // windows past the race end contribute no laps
   const cond = segCondition[i];
   let j = i;
-  while (j < 4 && segCondition[j] === cond) j++;
-  const segStart = i;
-  const segEnd = j - 1;
-  const startLap = totalLaps > 0 ? Math.round((segStart / 4) * totalLaps) + 1 : 0;
-  const endLap = totalLaps > 0 ? Math.round((segEnd + 1) / 4 * totalLaps) : 0;
+  while (j < 4 && segCondition[j] === cond && !ranges[j].empty) j++;
+  const startLap = ranges[i].startLap;
+  const endLap = ranges[j - 1].endLap;
   const laps = endLap - startLap + (totalLaps > 0 ? 1 : 0);
-  phases.push({ condition: cond, segStart, segEnd, startLap, endLap, laps: Math.max(0, laps) });
+  phases.push({ condition: cond, segStart: i, segEnd: j - 1, startLap, endLap, laps: Math.max(0, laps) });
   i = j;
   }
   // Transitions: the lap where condition changes (pit stop required for compound change)
@@ -2084,7 +2100,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const dryCompounds = ['Extra Soft', 'Soft', 'Medium', 'Hard'];
 
   // Total race fuel with 3% safety margin — use mixed calculation when available
-  const analyzeM = analyzeWeather(weather, laps);
+  const analyzeM = analyzeWeather(weather, laps, estimateLapsPerWeatherPeriod(track));
   const raceProfileM = analyzeM ? analyzeM.raceProfile : null;
   let totalFuel;
   if (raceProfileM && raceProfileM.type === 'mixed') {
@@ -2231,7 +2247,9 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const bestWet = results.find(r => r.isRain);
 
   // === FINAL RECOMMENDATION ===
-  const analyze = analyzeWeather(weather);
+  // laps + per-track laps/period: raceProfile phase laps must be real window boundaries (without
+  // them transitions rendered as phantom "lap 0" and windows followed the quarter split).
+  const analyze = analyzeWeather(weather, laps, estimateLapsPerWeatherPeriod(track));
   // Use DOM widget rain state when provided (overrides forecast-based commitRain)
   if (domRaceWet !== null && domRaceWet !== undefined && analyze) {
   analyze.commitRain = !!domRaceWet;
@@ -2403,7 +2421,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
 
   const results = [];
   const pt = gapp.pitTimeCalc;
-  const analyze = analyzeWeather(weather, laps);
+  const analyze = analyzeWeather(weather, laps, estimateLapsPerWeatherPeriod(track));
   // Use DOM widget rain state when provided (overrides forecast-based commitRain)
   if (domRaceWet !== null && domRaceWet !== undefined && analyze) {
   analyze.commitRain = !!domRaceWet;
@@ -3891,7 +3909,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // ============================================================
  function renderQualify(practice, track, driver, supplier, isQ2, carData, staffTd) {
  const weather = extractWeather(practice);
- const analyze = analyzeWeather(weather, parseInt(track && track.laps) || 0);
+  const analyze = analyzeWeather(weather, parseInt(track && track.laps) || 0, estimateLapsPerWeatherPeriod(track));
  const car = carData || (practice ? { lvlEngine: practice.lvlEngine, lvlSusp: practice.lvlSusp } : null);
  const ctr = getCtr();
  const tyre = calcTyreStrategySmart(track, null, weather, car, driver, supplier, ctr, staffTd, null);
@@ -4246,7 +4264,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   function renderRaceSetup(practice, track, testing, driver, supplier, carData, staffTd, league) {
   const weather = extractWeather(practice);
   const totalLaps = track ? (parseInt(track.laps) || 0) : 0;
-  const analyze = analyzeWeather(weather, totalLaps);
+  const analyze = analyzeWeather(weather, totalLaps, estimateLapsPerWeatherPeriod(track));
   // Scrape DOM widget early — the tyre strategy needs the actual game rain state (from the
   // widget) rather than relying solely on the forecast. When the widget shows dry but the
   // forecast has ≥40% rain in segment 1, commitRain should follow the widget (dry).
@@ -4343,7 +4361,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   if (laps > 0) {
   const gappTrack = lookupGappTrack(track.trackName || track.name, 'trackData');
   const fuelPerLapDry = gappTrack ? gappTrack.values[6] * gappTrack.values[13] : 2.4;
-  const analyzeFallback = analyzeWeather(weather, laps);
+  const analyzeFallback = analyzeWeather(weather, laps, estimateLapsPerWeatherPeriod(track));
   const rpFallback = analyzeFallback ? analyzeFallback.raceProfile : null;
   let totalFuelFb;
   if (rpFallback && rpFallback.type === 'mixed' && gappTrack) {
@@ -4500,8 +4518,19 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const trackPhaForBoard = (trackPower || trackHandl || trackAccel) ? { power: trackPower, handling: trackHandl, accel: trackAccel } : null;
  const phaMatchForBoard = calcPhaMatch(car, trackPhaForBoard);
  const pushHoldForBoard = calcPushOrHoldSignal(car, track, trackPhaForBoard, tyre, wearParts);
+  // Weather tile: DRY/RAIN alone reflects the race START, which reads as a contradiction when the
+  // stint plan below switches compounds mid-race (real report: Portimao dry start, rain from the
+  // 2nd forecast window, tile said DRY while the plan ran Rain from L18). 2-phase mixed races show
+  // the direction; 3+ phases show MIXED — the Quick Summary carries the exact transition laps.
+  const mixedWeather = !!(analyze && analyze.raceProfile && analyze.raceProfile.type === 'mixed');
+  const weatherVerdict = mixedWeather
+  ? (analyze.raceProfile.phases.length === 2
+    ? (analyze.raceProfile.phases[0].condition === 'wet' ? 'RAIN→DRY' : 'DRY→RAIN')
+    : 'MIXED')
+  : (analyze && analyze.commitRain ? 'RAIN' : 'DRY');
+  const weatherTone = mixedWeather ? 'warn' : (analyze && analyze.commitRain ? 'bad' : 'good');
   h += mkDecisionBoard([
-  analyze ? { id: 'gpro-sec-weather', label: 'Weather', verdict: analyze.commitRain ? 'RAIN' : 'DRY', tone: analyze.commitRain ? 'bad' : 'good' } : null,
+  analyze ? { id: 'gpro-sec-weather', label: 'Weather', verdict: weatherVerdict, tone: weatherTone } : null,
   phaMatchForBoard ? { id: 'gpro-sec-pha', label: 'PHA Match', verdict: phaMatchForBoard.level === 'none' ? 'No match' : phaMatchForBoard.level, tone: phaMatchForBoard.level === 'perfect' ? 'good' : phaMatchForBoard.level === 'top' ? 'warn' : 'bad' } : null,
   pushHoldForBoard ? { id: 'gpro-sec-strategy', label: 'Strategy', verdict: `${pushHoldForBoard.metCount}/${pushHoldForBoard.total}`, tone: pushHoldForBoard.metCount === pushHoldForBoard.total ? 'good' : pushHoldForBoard.metCount === 0 ? 'bad' : 'warn' } : null,
   { id: 'gpro-sec-setup', label: 'Setup', verdict: 'view', tone: 'info' },
@@ -7247,7 +7276,13 @@ training: 'Parsing driver training data...',
  // empirically unreachable for most of the market, see the "no trustworthy numeric floor" note
  // elsewhere) - this is a manually-requested starting value, same editable/clearable field as
  // everything else.
- if (cfgLabel === 'driver') filterDefaults.concentration = 200;
+  if (cfgLabel === 'driver') filterDefaults.concentration = 200;
+  // Talent default added 2026-08-14 (explicit user request: "driver talent needs to be at least a
+  // 100 - so going forward add that to the driver market filter"). Same class as the concentration
+  // default above - talent has no trustworthy numeric floor from the league sources (see the
+  // "no trustworthy numeric target" concentration note), so this is a manually-requested starting
+  // value, same editable/clearable field as everything else.
+  if (cfgLabel === 'driver') filterDefaults.talent = 100;
  h += `<div style="font-size:9px;color:#9ca3af;margin-bottom:6px;">${floorNote}</div>`;
  h += mkFilterBar(sectionId, idKey, filterDefaults);
  h += `<div id="gpro-shortlist-${sectionId}">${mkMarketTable(capped, idKey, targetOA)}</div>`;

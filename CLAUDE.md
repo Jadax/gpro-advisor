@@ -70,7 +70,7 @@ GPRO exposes ONE risk `<select>` per qualify session — options exactly: `Keep 
 
 ## Mixed-condition race weather (`raceProfile`)
 
-`analyzeWeather(weather, totalLaps)` returns a `raceProfile` object that classifies the race as `dry`/`wet`/`mixed` based on per-segment rain probabilities (4 equal segments, threshold ≥40%). The profile handles **multiple transitions** (e.g. Dry→Wet→Dry→Wet):
+`analyzeWeather(weather, totalLaps, lapsPerPeriod)` returns a `raceProfile` object that classifies the race as `dry`/`wet`/`mixed` based on the four forecast windows (threshold ≥40% on each window's max rain%). Windows map to ABSOLUTE laps per track via `estimateLapsPerWeatherPeriod(track)` (passed by call sites; flat Losail fallback 20) because the forecast windows are 30-minute periods tied to Elite pace (wiki), NOT quarters of the race — the old `totalLaps/4` split put Portimao's rain transition at L18 instead of L21 (fixed v6.27.1, was previously defined-but-never-called dead code). Window 4 extends to the final lap; windows the race never reaches are dropped (short races must not inherit their rain). The profile handles **multiple transitions** (e.g. Dry→Wet→Dry→Wet):
 
 - **`phases`**: consecutive runs of same condition — `[{condition: 'dry'|'wet', startLap, endLap, laps}]`
 - **`transitions`**: lap numbers where condition changes — `[{lap, from, to}]`
@@ -78,6 +78,7 @@ GPRO exposes ONE risk `<select>` per qualify session — options exactly: `Keep 
 
 This profile drives:
 - **Quick Summary**: shows all transitions (e.g. "Lap 14: ☀→🌧, Lap 27: 🌧→☀, Lap 40: ☀→🌧") plus dry/wet fuel split
+- **Race Setup Weather tile** (v6.27.1): uniform races show DRY/RAIN, 2-phase mixed shows DRY→RAIN/RAIN→DRY (warn tone), 3+ phases show MIXED — the old plain DRY read as a contradiction next to a plan that pitted for Rain mid-race (Portimao report)
 - **Car Setup** (v6.26.0): the Race column is now optimised for the **DOMINANT** condition (most laps), not the race-start — a fixed setup should serve the majority of the race. E.g. Monza (wet start, 13 wet + 40 dry) shows a **DRY** Race setup but the note says "race starts on rain — use rain tyres for the opening stint". `dominantWet` is computed from `raceProfile.phases` (wetLaps > dryLaps), falling back to `raceWet` when no profile/uniform. `startIsWet` (= `raceWet`, the DOM/segment-1 start) still independently drives the fuel/tyre START compound (rain for Monza) — tyre choice is separate from setup numbers. The mixed-note block shows the alt (non-dominant) setup + transitions, and both the initial render and `updateRaceSetupInPlace` hot-rebuild use `dominantWet` for the Race column.
 - **Fuel/tyre**: `calcMixedRaceFuel()` splits total fuel across dry/wet phases using different per-lap consumption rates (wet ~12% higher). Dry compounds in GAPP get weather-transition stops added (minimum stops = transitions count). Legacy fallback also adjusts stop ranges for mixed conditions. `finalizeTyreStrategy` recommends starting dry with transition-lap pit guidance.
 
