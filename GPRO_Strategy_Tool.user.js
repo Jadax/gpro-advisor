@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.27.1
+// @version 6.27.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -2233,12 +2233,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   }
  }
 
- return finalizeTyreStrategy(results, weather, trackTempAvg, laps, pitLoss, fuelPerLap, totalFuel, combinedWearMult, ctrValue, supplier, supDurability, supPeakTemp, 'own', domRaceWet);
+ return finalizeTyreStrategy(results, weather, trackTempAvg, laps, pitLoss, fuelPerLap, totalFuel, combinedWearMult, ctrValue, supplier, supDurability, supPeakTemp, 'own', domRaceWet, track);
  }
 
  // Shared "pick the best strategy" tail, used by both the legacy calibrated model above and
  // the GAPP-formula model below - keeps the recommendation logic in exactly one place.
- function finalizeTyreStrategy(results, weather, trackTempAvg, laps, pitLoss, fuelPerLap, totalFuel, combinedWearMult, ctrValue, supplier, supDurability, supPeakTemp, source, domRaceWet) {
+ function finalizeTyreStrategy(results, weather, trackTempAvg, laps, pitLoss, fuelPerLap, totalFuel, combinedWearMult, ctrValue, supplier, supDurability, supPeakTemp, source, domRaceWet, track) {
  // Sort by total lost time (lower = better)
  results.sort((a, b) => parseFloat(a.total) - parseFloat(b.total));
 
@@ -2503,7 +2503,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   } else {
   totalFuel = Math.ceil(fuelPerLapDry * laps * 1.03);
   }
-   return finalizeTyreStrategy(results, weather, rTemp, laps, pitInOut, fuelPerLapDry, totalFuel, null, ctrValue, supplier, parseInt(supplier.durability) || 4, parseInt(supplier.peakTemperature) || 25, 'gapp', domRaceWet);
+   return finalizeTyreStrategy(results, weather, rTemp, laps, pitInOut, fuelPerLapDry, totalFuel, null, ctrValue, supplier, parseInt(supplier.durability) || 4, parseInt(supplier.peakTemperature) || 25, 'gapp', domRaceWet, track);
  }
 
   // Real per-compound total-time data from GPRO Analyzer (internal formulas has none of this -
@@ -2552,7 +2552,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   let result = gappResult || (calibrated
   ? finalizeTyreStrategy(calibrated.results, weather, parseFloat(legacyResult.trackTemp), calibrated.laps || legacyResult.laps,
   calibrated.pitLoss || legacyResult.pitLoss, parseFloat(legacyResult.fuelPerLap), legacyResult.totalFuel, null, ctr || 0,
-  supplier, supplier ? (parseInt(supplier.durability) || 4) : null, supplier ? (parseInt(supplier.peakTemperature) || 25) : null, 'calibrated', domRaceWet)
+  supplier, supplier ? (parseInt(supplier.durability) || 4) : null, supplier ? (parseInt(supplier.peakTemperature) || 25) : null, 'calibrated', domRaceWet, track)
   : legacyResult);
 
  if (result !== legacyResult) {

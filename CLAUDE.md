@@ -44,6 +44,7 @@ Tampermonkey userscript for gpro.net. Two files: `GPRO_Strategy_Tool.user.js` (l
 
 ## Durable bug lessons (each shipped real bugs here — check before repeating)
 
+- **`node --check` passes ≠ runs.** Runtime scope errors (e.g. referencing a caller-local variable inside a shared helper — `finalizeTyreStrategy` used a `track` variable that only existed in its call sites, shipped v6.27.1) survive syntax check AND ship. When extracting/hoisting math into a harness, call the extracted functions, don't just parse them.
 - **0/falsy ≠ missing for user-derived numbers.** Driver attrs (aggressiveness/motivation/stamina) legitimately sit at 0. Use `numOrDefault(v, def)` (only falls back on genuinely non-numeric), not `parseInt(x) || def` — that pattern existed in 15 places, all fixed. Same class in DOM parsing: use explicit `found` booleans (`wearFound`/`levelFound` in `parseUpdateCarDOM`), never `=== 0`/`> 0` as discovery signals.
 - **A valid live DOM reading wins outright over cache** — don't gate merges on value sign/size. Cash bug: `domCash > apiCash` meant post-purchase lower balances could never refresh. Part-wear bug: same gate on `> 0`. Cached cash also refreshes from gpro.asp's Money row every visit.
 - **No "largest dollar amount" fallbacks** for financial figures — pages are full of unrelated prices; wrong number < no number.
