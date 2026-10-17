@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.27.2
+// @version 6.27.3
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1860,7 +1860,12 @@ if (h.includes('TrainingSession.asp')) return 'training';
   return dryRate;
   };
   // Fuel to cover inclusive lap range [from, to].
-  const need = (from, to) => { if (to < from) return 0; let f = 0; for (let l = from; l <= to; l++) f += rateLap(l); return Math.ceil(f * SAFETY); };
+  // First (start) stint gets a slightly fatter margin: it covers the standing-start laps and the
+ // in-race data (S113 R1 Portimao) showed a 1.03 plan arriving at the pit with only ~2% reserve -
+ // running dry mid-lap costs a whole slow lap plus a position drop, while 1 extra liter costs
+ // ~0.03s. Stints after the first pit keep the lean 1.03.
+ const FIRST_STINT_SAFETY = 1.06;
+ const need = (from, to) => { if (to < from) return 0; let f = 0; for (let l = from; l <= to; l++) f += rateLap(l); return Math.ceil(f * (from === 1 ? FIRST_STINT_SAFETY : SAFETY)); };
 const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
 // Weather transitions are MANDATORY stops (compound change) — keep them always.
   const trans = (transitionLaps || []).slice().filter(t => t >= 2 && t < laps).map(intLap).sort((a, b) => a - b);
@@ -2988,14 +2993,21 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // Boost-lap placement (3 sets of 3 laps): pays where pace converts into something - passing
   // chances in a pack, track position through the pit cycle (overcut via boosted in-laps), or gap
   // defence in the closing laps. Also from our own RiskAdvisorService.
-  function calcBoostLapSuggestion(laps, stops, overtaking, raceWet, rainAvg, trackFuelRating, lapLengthKm, raceProfile, totalLaps) {
-  if (laps < 12) return { laps: [], note: 'Too few laps to plan boost sets - place them by feel.' };
-  const easyPassing = overtaking === 'Very Easy' || overtaking === 'Easy';
-  const stintLen = Math.floor(laps / Math.max(1, stops + 1));
-  const candidates = [];
-  if (easyPassing) candidates.push(2);
-  for (let i = 1; i <= stops; i++) candidates.push(i * stintLen - 2);
-  candidates.push(laps - 2);
+ function calcBoostLapSuggestion(laps, stops, overtaking, raceWet, rainAvg, trackFuelRating, lapLengthKm, raceProfile, totalLaps, stopLapsHint) {
+ if (laps < 12) return { laps: [], note: 'Too few laps to plan boost sets - place them by feel.' };
+ const easyPassing = overtaking === 'Very Easy' || overtaking === 'Easy';
+ const stintLen = Math.floor(laps / Math.max(1, stops + 1));
+ const candidates = [];
+ if (easyPassing) candidates.push(2);
+ // v6.27.3: anchor boost sets to the REAL planned pit laps (2 laps before each stop) when the
+ // fuel plan is known - the old even-split guess (i*stintLen-2) could land mid-stint, far from
+ // any actual stop. Falls back to the even-split guess when no plan is passed.
+ if (Array.isArray(stopLapsHint) && stopLapsHint.length) {
+ stopLapsHint.forEach(sl => { const slInt = parseInt(sl) || 0; if (slInt >= 3 && slInt <= laps) candidates.push(Math.max(1, slInt - 2)); });
+ } else {
+ for (let i = 1; i <= stops; i++) candidates.push(i * stintLen - 2);
+ }
+ candidates.push(laps - 2);
   if (!easyPassing) candidates.push(2);
   candidates.push(Math.floor(laps / 2));
 
@@ -4391,7 +4403,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const boostTrackName = (practice||{}).trackName || (track||{}).trackName || '';
   const boostTrackProf = TRACK_PROFILES[boostTrackName] || {};
   const boostLapLen = gappTrackForRisk && tyre.laps ? gappTrackForRisk.values[8] / tyre.laps : null;
-  const boostC = calcBoostLapSuggestion(tyre.laps, chosenTyreResult.stops, driverRiskRec.overtaking, raceWetForRisk, rainAvgForRisk, boostTrackProf.fuel, boostLapLen, analyze && analyze.raceProfile, tyre.laps);
+  const boostC = calcBoostLapSuggestion(tyre.laps, chosenTyreResult.stops, driverRiskRec.overtaking, raceWetForRisk, rainAvgForRisk, boostTrackProf.fuel, boostLapLen, analyze && analyze.raceProfile, tyre.laps, fuel && fuel.stopLaps && fuel.stopLaps.length ? fuel.stopLaps : null);
   boostLapsList = boostC.laps;
   boostExtraFuel = boostC.extraFuel || 0;
   boostNote = boostC.note || '';
@@ -4458,6 +4470,25 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     const startFuelVal = fuel.stint1Fuel || fuelForStint(0) || Math.ceil(fuel.totalFuel / (fuel.stops + 1));
     const startComp = compoundForLap(1);
     const stopList = fuel.stopLaps || [];
+ // v6.27.3: boost sets are now accounted for in the fills - each boosted lap burns extra fuel, so
+ // the fill shown for a stint that contains boost laps must cover it. The boost-fuel estimate
+ // itself is a rough heuristic (per-track coefficient undisclosed - see calcBoostLapSuggestion).
+ const perBoostLap = (boostLapsList && boostLapsList.length && boostExtraFuel > 0) ? Math.ceil(boostExtraFuel / boostLapsList.length) : 0;
+ // v6.27.3 weather contingency (S113 R1 Portimao lesson: forecast said rain to the flag, the race
+ // actually dried from L43 and the plan gave no branch to switch back). If any wet-phase forecast
+ // window averages <=55% rain probability, surface what to fit instead if it turns out dry.
+ const wetContingency = (() => {
+ if (!phases || !phases.length) return null;
+ const segs = [];
+ phases.forEach(p => { if (p.condition === 'wet') { for (let k = ((p.segStart != null ? p.segStart : 0)) + 1; k <= ((p.segEnd != null ? p.segEnd : 0)) + 1; k++) if (k >= 1 && k <= 4) segs.push(k); } });
+ if (!segs.length) return null;
+ const bands = [];
+ segs.forEach(k => { const lo = parseFloat(weather['raceQ' + k + 'RainPLow']) || 0, hi = parseFloat(weather['raceQ' + k + 'RainPHigh']) || 0; bands.push({ k, lo, hi, avg: (lo + hi) / 2 }); });
+ const minAvg = Math.min.apply(null, bands.map(b => b.avg));
+ if (minAvg > 55) return null;
+ const bandText = bands.map(b => `${b.lo}-${b.hi}%`).filter((v, i, a) => a.indexOf(v) === i).join(', ');
+ return { bandText };
+ })();
     const totalLapsV = fuel.laps || (parseInt(track && track.laps) || 0);
     const stintStartOf = (i) => (i === 0 ? 1 : stopList[i - 1]);
     const stintEndOf = (i) => (i < stopList.length ? stopList[i] : totalLapsV + 1) - 1;
@@ -4487,17 +4518,25 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     fsHtml += `<table style="width:100%;border-collapse:collapse;font-size:10px;"><tr style="color:#9ca3af;text-align:left;"><th style="padding:2px 6px;">Stint</th><th style="padding:2px 6px;">Laps</th><th style="padding:2px 6px;">Tyre</th><th style="padding:2px 6px;">Fuel</th></tr>`;
     // Start stint (stint 0)
     fsHtml += `<tr><td style="padding:2px 6px;color:#9ca3af;">Start</td><td style="padding:2px 6px;color:#f1f5f9;">${stintStartOf(0)}–${Math.max(stintStartOf(0), stintEndOf(0))}</td><td style="padding:2px 6px;font-weight:700;color:#f1f5f9;">${startComp}</td><td style="padding:2px 6px;font-weight:700;color:#f1f5f9;">${startFuelVal}L</td></tr>`;
-  for (let i = 1; i <= fuel.stops; i++) {
-  const stopIdx = i - 1;
-  const stopLap = stopList[stopIdx];
-  const fill = stintFuelOf(i);
-  const comp = compoundForLap(stopLap || 0);
-  const stStart = stintStartOf(i);
-  const stEnd = stintEndOf(i);
-  fsHtml += `<tr><td style="padding:2px 6px;color:#9ca3af;">Stop ${i}</td><td style="padding:2px 6px;color:#f1f5f9;">${stStart}–${Math.max(stStart, stEnd)}</td><td style="padding:2px 6px;font-weight:700;color:#f1f5f9;">${comp}</td><td style="padding:2px 6px;font-weight:700;color:#f1f5f9;">${fill}L${stopLap ? `<span style="color:#6b7280;font-size:9px;"> @L${stopLap}</span>` : ''}</td></tr>`;
-  }
+ for (let i = 1; i <= fuel.stops; i++) {
+ const stopIdx = i - 1;
+ const stopLap = stopList[stopIdx];
+ const stStart = stintStartOf(i);
+ const stEnd = stintEndOf(i);
+ const boostInStint = boostLapsList.filter(l => l >= stStart && l <= stEnd).length;
+ const fillRaw = stintFuelOf(i) + boostInStint * perBoostLap;
+ const fill = Math.min(TANK_MAX, fillRaw);
+ const fillCapped = fillRaw > TANK_MAX;
+ const comp = compoundForLap(stopLap || 0);
+ fsHtml += `<tr><td style="padding:2px 6px;color:#9ca3af;">Stop ${i}</td><td style="padding:2px 6px;color:#f1f5f9;">${stStart}–${Math.max(stStart, stEnd)}</td><td style="padding:2px 6px;font-weight:700;color:#f1f5f9;">${comp}</td><td style="padding:2px 6px;font-weight:700;color:#f1f5f9;">${fill}L${stopLap ? `<span style="color:#6b7280;font-size:9px;"> @L${stopLap}</span>` : ''}${boostInStint ? `<span style="color:#f59e0b;font-size:9px;"> ⚡${boostInStint}</span>` : ''}${fillCapped ? `<span style="color:${VERDICT.warn};font-size:9px;"> capped</span>` : ''}</td></tr>`;
+ }
   fsHtml += `</table>`;
-  fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">Total ${fuel.totalFuel}L · ${fuel.fuelPerLap}L/lap · ${fuel.stops} stop${fuel.stops !== 1 ? 's' : ''}. Max tank ${TANK_MAX}L. Stints sized at phase-aware fuel need +3%.</div>`;
+  // v6.27.3: the carried-fuel total must match the stint rows above (the old bar showed
+ // tyre.totalFuel — a dry-only mixed estimate that contradicted the fills; S113 R1 screenshot).
+ let planTotal = startFuelVal;
+ for (let i = 1; i <= fuel.stops; i++) planTotal += Math.min(TANK_MAX, stintFuelOf(i) + boostLapsList.filter(l => l >= stintStartOf(i) && l <= stintEndOf(i)).length * perBoostLap);
+ fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">Plan carries ~${planTotal}L (fills above, ⚡boost included) over ${fuel.stops} stop${fuel.stops !== 1 ? 's' : ''} · dry ${fuel.fuelPerLap}L/lap. Max tank ${TANK_MAX}L. Fills sized at phase-aware need +3% (+6% on the start stint).</div>`;
+ if (wetContingency) fsHtml += `<div style="font-size:9px;color:${VERDICT.warn};margin-top:4px;">🌦 Weather contingency — the wet windows are only ${wetContingency.bandText} rain-probability: if the track is clearly dry at any forward pit, fit ${dryCompound} instead of Rain and the fuel numbers still hold (±few L). (own heuristic)</div>`;
   fsHtml += `</div>`;
   h += fsHtml;
   }
