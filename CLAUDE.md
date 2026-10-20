@@ -89,7 +89,7 @@ This profile drives:
 
 ## Current-season data notes
 
-- Real current calendar (Estoril→Singapore, 17 tracks) lives in `D.currentSeasonCTR`/`D.currentSeasonPHA`/`D.currentSeasonAvgTemp`; `.slice(0,5)` call sites prefer these over legacy S111 arrays (kept as superseded historical record). Real season number still unconfirmed — `D.currentSeason`/`seasons.S111` untouched pending user answer.
+- The **raced-now calendar (Portimao→Sepang, S113-era)** lives in `D.currentSeasonCTR`/`D.currentSeasonPHA` (scraped 2026-10-20; race 1 Portimao + race 2 Bremgarten = the S113 R1/R2 races validated against). Previous calendar (Estoril→Singapore = S112, renamed to `s112Season*`) is kept as historical record, as is `seasonCTR`/`seasonPHA` (S111). Per-track specs are stable across seasons — repeated tracks (Bremgarten/Mexico City/Sepang) carry identical values, only the calendar order changes. `D.currentSeason` still says `'S111'` pending the user's confirmation — renaming it would break `D.seasons['S111']` lookups, so it needs a deliberate decision. "Season" cumulative P/H/A columns were inconsistent AGAIN in the S113 screenshot (same as S112's) — still dropped. Bar-chart sections (per-part OA, fuel Dry/Wet, tyre wear) had no printed numbers — never transcribed (project rule). `.slice(0,5)` call sites show races 1-5 (raced ones included) — upgrading them to skip raced race numbers is a deliberate open TODO.
 - PHA "Season" cumulative columns dropped (internally inconsistent source); bar-chart-only screenshots not transcribed (project doesn't guess numbers from bars).
 
 ## Known calibration facts (sourced — never re-derive)
