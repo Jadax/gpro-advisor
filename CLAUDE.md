@@ -55,7 +55,12 @@ Tampermonkey userscript for gpro.net. Two files: `GPRO_Strategy_Tool.user.js` (l
 ## Car Advisor (UpdateCar.asp)
 
 - **Recommend ONLY when a part is projected to FAIL this race** (explicit, repeated user rule: "upgrade/downgrade etc should only ever be recommended if a part will break during the next race"). `analyzeCar`'s actionable set is `willFail` only; critical/flagged/atRisk parts that still finish are a **watch list**, below-league-target parts collapse into one summary line (all-L1 Rookie cars are below target on every part). With nothing failing the Recommendations section says so explicitly. The old WAIT/SAVE verdicts, the critical/flagged/below-target spend branches, the "Upgrade Timing" section and `calcUpgradeCostExact`/`D.carCosts` were removed as unreachable/duplicate after this rule (v6.27.6).
+- **Rookie recommended max part level = L4** (user-provided 2026-10-24): `D.carTargets.Rookie` targets are 4 with `maxLevel: 4`; analyzeCar never recommends an upgrade above a league's `maxLevel` (a failing part at the max gets a same-level replace).
 - Multi-race projection no longer applies a ×1.2/×1.5 "wear acceleration" above 50%/70% start wear — unsourced, and Austin showed parts starting at 52%/56% wearing at the same observed/predicted ratio as parts at 20–39%.
+
+## Staff Advisor (StaffAndFacilities.asp)
+
+- Facility upgrade costs come from the page's own dropdowns (`slWindtunnel`/`slPitStop`/`slRDWorkshop`/`slRDDesignCenter`/`slEngineering`/`slLab`/`slCommercial`, option text "Upgrade to level N ($X)" = price to jump straight to N) via `parseStaffFacilitiesDOM().upgradeCosts`; the old flat "$500K/level" guess showed $2.5M for L0→L5 vs the real $656,250. Max training level is read from GPRO's own "maximum level of training is currently N" line (`maxTrainingLevel`), facility average only as fallback. A cap of 0 shows "Locked", not "MAXED".
 
 ## Market advisor (AvailDrivers.asp / AvailTechDirectors.asp)
 

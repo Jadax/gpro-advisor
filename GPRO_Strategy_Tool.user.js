@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.27.7
+// @version 6.27.8
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -28,7 +28,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.6.4
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.6.5
 // @run-at document-idle
 // ==/UserScript==
 
@@ -1079,6 +1079,26 @@ if (h.includes('TrainingSession.asp')) return 'training';
  if (staffLabels[label]) out[staffLabels[label]] = val;
  else if (facilityLabels[label]) out[facilityLabels[label]] = val;
  });
+ // GPRO's own cap ("Your maximum level of training is currently N") - authoritative, so the
+ // advisor never has to re-derive it from the facility average.
+ const capMatch = (root.body ? root.body.textContent : root.textContent || '').match(/maximum level of training is currently\s*(\d+)/i);
+ if (capMatch) out.maxTrainingLevel = parseInt(capMatch[1]);
+ // Real upgrade prices from each facility's dropdown ("Upgrade to level 5 ($656.250)" - the
+ // price of going straight from the current level to N). Added 2026-10-24: the advisor used a
+ // flat guessed $500K/level, showing $2.5M for L0->L5 when the page itself said $656,250.
+ const facilitySelects = { slWindtunnel: 'windtunnel', slPitStop: 'pitstopTrainingCenter', slRDWorkshop: 'rdWorkshop', slRDDesignCenter: 'rdDesign', slEngineering: 'engineering', slLab: 'lab', slCommercial: 'commercial' };
+ const upgradeCosts = {};
+ Object.keys(facilitySelects).forEach((name) => {
+ const sel = root.querySelector(`select[name="${name}"]`);
+ if (!sel) return;
+ const byLevel = {};
+ Array.from(sel.options).forEach((opt) => {
+ const m = (opt.textContent || '').match(/level\s*(\d+)\s*\(\s*(\$[\d.,]+)\s*\)/i);
+ if (m && /upgrade/i.test(opt.textContent)) byLevel[parseInt(m[1])] = parseGproCash(m[2]);
+ });
+ if (Object.keys(byLevel).length) upgradeCosts[facilitySelects[name]] = byLevel;
+ });
+ if (Object.keys(upgradeCosts).length) out.upgradeCosts = upgradeCosts;
  return Object.keys(out).length ? out : null;
  } catch (e) { return null; }
  }
@@ -3609,9 +3629,13 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const infoOnly = parts.filter(p => !p.willFail && (p.belowTarget || p.critical || p.flagged || p.atRisk))
   .sort((a, b) => a.priority - b.priority);
 
+ // A league may carry a recommended MAX part level (Rookie: L4, user-provided 2026-10-24 - the car
+ // resets each season, so spending beyond it is wasted). Upgrades past it are never recommended;
+ // a failing part at the max gets a same-level replace instead.
+ const maxPartLevel = leagueTargets.maxLevel || 9;
  actionable.forEach(p => {
- // All affordable upgrades (higher level), cheapest first
- const upgrades = p.opts.filter(o => o.isUpgrade && o.cost <= runCash)
+ // All affordable upgrades (higher level, within the league max), cheapest first
+ const upgrades = p.opts.filter(o => o.isUpgrade && o.newLvl <= maxPartLevel && o.cost <= runCash)
  .sort((a, b) => (a.cost || 0) - (b.cost || 0));
 
  // Same-level replacements (cheaper, resets wear)
@@ -5674,7 +5698,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  { key: 'commercial', label: 'Commercial' },
  ];
  const avgFacLevel = facilities.reduce((a, f) => a + (parseInt(staff[f.key]) || 0), 0) / facilities.length;
- const maxTraining = Math.floor(avgFacLevel);
+ // GPRO's own stated cap when the page provided it; the facility-average derivation is the fallback.
+ const maxTraining = staff.maxTrainingLevel != null ? staff.maxTrainingLevel : Math.floor(avgFacLevel);
 
  // Training recommendations - order by the league's real priority list when we have one.
  // Real bug fixed 2026-07-27 (confirmed against the official GPRO wiki,
@@ -5691,8 +5716,11 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  orderedStaffSkills.forEach(s => {
  const val = parseInt(staff[s.key]) || 0;
  const isMaxed = val >= maxTraining;
- const status = isMaxed ? '✅ MAXED' : `Training to ${maxTraining}... (${maxTraining - val} more)`;
- const color = isMaxed ? '#10b981' : '#f59e0b';
+ // "MAXED" read as "nothing left to gain" even when the cap was 0 (no facilities) - the real
+ // situation is "training is locked until facilities are raised" (2026-10-24 screenshot).
+ const status = maxTraining === 0 ? '🔒 Locked — max training level is 0'
+ : isMaxed ? `At training cap (${maxTraining})` : `Can train to ${maxTraining} (${maxTraining - val} more)`;
+ const color = maxTraining === 0 ? '#6b7280' : isMaxed ? '#10b981' : '#f59e0b';
  const costStr = s.cost ? ` — $${s.cost.toLocaleString()}/session` : '';
  trainHtml += `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid #1f2937;font-size:11px;">
  <span style="width:4px;height:4px;border-radius:50%;background:${color};flex-shrink:0;"></span>
@@ -5727,7 +5755,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  `<span style="font-size:9px;color:#6b7280;">${league || 'Amateur'} max: L${facilityMax}. Targets for balanced development.</span>`);
 
   h += mkSection('Training Level',
-  mkRow('Average Facility Level', maxTraining.toFixed(0)) +
+  mkRow('Average Facility Level', avgFacLevel.toFixed(1)) +
   mkRow('Max Training Level', `${maxTraining} (skill cap)`) +
    `<span style="font-size:9px;color:#6b7280;">Training level = average of all facility levels. Raise facilities to train staff higher.</span>`
    );
@@ -5739,23 +5767,21 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
    const val = parseInt(staff[f.key]) || 0;
    const target = leagueFacilityTargets[f.label] || 0;
    const gap = Math.max(0, target - val);
-   // Cost to upgrade = $500K per level (approximate GPRO facility cost)
-   const costPerLevel = 500000;
-   const totalCost = gap * costPerLevel;
-   // Impact on avg = gap / numFacilities (improves average by 1 level per upgrade)
-   const impactPerUpgrade = 1 / facilities.length;
-   const roi = gap > 0 ? (impactPerUpgrade / (costPerLevel / 1e6)).toFixed(3) : '0';
-   return { ...f, val, target, gap, totalCost, roi };
+   // Real price from the page's own dropdown (cost of going straight to the target level); null
+   // when the dropdown wasn't readable - never a guessed per-level figure.
+   const costs = staff.upgradeCosts && staff.upgradeCosts[f.key];
+   const totalCost = costs && costs[target] != null ? costs[target] : null;
+   return { ...f, val, target, gap, totalCost };
   }).filter(f => f.gap > 0).sort((a, b) => b.gap - a.gap);
 
   if (facList.length > 0) {
    let facHtml = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:9px;">';
    facHtml += '<tr style="color:#60a5fa;font-weight:700;"><td style="padding:2px;">Facility</td><td style="text-align:center;">Lvl</td><td style="text-align:center;">Target</td><td style="text-align:center;">Gap</td><td style="text-align:center;">Cost</td></tr>';
    facList.forEach(f => {
-    facHtml += `<tr><td style="padding:2px;color:#d1d5db;">${f.label}</td><td style="text-align:center;color:#9ca3af;">L${f.val}</td><td style="text-align:center;color:#9ca3af;">L${f.target}</td><td style="text-align:center;color:${f.gap > 5 ? '#ef4444' : '#f59e0b'};">+${f.gap}</td><td style="text-align:center;color:#f59e0b;">$${(f.totalCost/1e6).toFixed(1)}M</td></tr>`;
+    facHtml += `<tr><td style="padding:2px;color:#d1d5db;">${f.label}</td><td style="text-align:center;color:#9ca3af;">L${f.val}</td><td style="text-align:center;color:#9ca3af;">L${f.target}</td><td style="text-align:center;color:${f.gap > 5 ? '#ef4444' : '#f59e0b'};">+${f.gap}</td><td style="text-align:center;color:#f59e0b;">${f.totalCost != null ? '$' + f.totalCost.toLocaleString() : '?'}</td></tr>`;
    });
    facHtml += '</table></div>';
-   h += mkSection('Facility Upgrade Priority', facHtml + `<span style="font-size:9px;color:#6b7280;">Sorted by gap to league target. Each upgrade costs ~$500K/level and raises training cap by ~${(1/facilities.length).toFixed(2)} levels.</span>`);
+   h += mkSection('Facility Upgrade Priority', facHtml + `<span style="font-size:9px;color:#6b7280;">Sorted by gap to league target. Cost = the page's own price to go straight to the target level (? = dropdown not readable). Training cap = average of the ${facilities.length} facilities, so each facility level adds ~${(1/facilities.length).toFixed(2)} to it. Upgrades add per-race maintenance too.</span>`);
   }
   }
 

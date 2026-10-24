@@ -63,15 +63,16 @@ var GPRO_DATA = {
  // balance PHA for upcoming tracks, save money for promotion
  carTargets: {
 Rookie: {
-  // Don't spend much - car resets anyway
-  // Focus on driver, not car
-  target: { avg: 2, range: [1, 3] },
+  // Don't spend much - car resets anyway. Recommended MAX part level L4 (user-provided
+  // 2026-10-24); analyzeCar never recommends an upgrade beyond maxLevel.
+  target: { avg: 4, range: [1, 4] },
+  maxLevel: 4,
   parts: {
-  'Chassis': 2, 'Engine': 2, 'Front Wing': 2, 'Rear Wing': 2,
-  'Underbody': 2, 'Sidepods': 2, 'Cooling': 2, 'Gearbox': 2,
-  'Brakes': 2, 'Suspension': 2, 'Electronics': 2,
+  'Chassis': 4, 'Engine': 4, 'Front Wing': 4, 'Rear Wing': 4,
+  'Underbody': 4, 'Sidepods': 4, 'Cooling': 4, 'Gearbox': 4,
+  'Brakes': 4, 'Suspension': 4, 'Electronics': 4,
   },
-  notes: 'Targets are recommendations, NOT caps - GPRO allows parts up to L9 in every league. Car resets each season in Rookie: only replace worn parts, save money for Amateur.',
+  notes: 'Rookie: recommended max L4 per part (GPRO itself allows L9). Car resets each season - only replace worn parts, save money for Amateur.',
   },
  Amateur: {
  // Balanced L5-7 build, prioritize Engine/Brakes for PHA
