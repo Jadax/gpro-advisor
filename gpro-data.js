@@ -147,27 +147,6 @@ Rookie: {
  montrealPower: 12,
  },
 
- // Base cost ($) to upgrade each part from level N-1 to N (Edit: first-entry = L1 cost).
- // Used by calcUpgradeCostExact fallback when one specific part's level cost isn't DOM-scraped.
- carCosts: {
- partBaseCost: {
-  'Chassis': 1292539, 'Engine': 3311737, 'Front Wing': 1551354,
-  'Rear Wing': 1504126, 'Underbody': 510128, 'Sidepods': 459831,
-  'Cooling': 454545, 'Gearbox': 3098104, 'Brakes': 697674,
-  'Suspension': 1181545, 'Electronics': 938416,
- },
- },
-
- // Per-part base race wear + track wear scale, used by the legacy (non-GAPP) wear model.
- wearPerLap: {
- base: {
-  'Chassis': 21, 'Engine': 37, 'Front Wing': 21, 'Rear Wing': 14,
-  'Underbody': 13, 'Sidepods': 12, 'Cooling': 13, 'Gearbox': 16,
-  'Brakes': 22, 'Suspension': 19, 'Electronics': 10,
- },
- scale: { 'Low': 0.6, 'Medium': 0.85, 'High': 1.0 },
- },
-
  // Part upgrade priority order (most impactful for Power PHA first).
  upgradePriority: {
   'Engine': 1, 'Brakes': 2, 'Chassis': 3, 'Front Wing': 3, 'Rear Wing': 3,

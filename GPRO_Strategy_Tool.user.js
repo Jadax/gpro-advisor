@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.27.5
+// @version 6.27.6
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -28,7 +28,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.6.3
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.6.4
 // @run-at document-idle
 // ==/UserScript==
 
@@ -3097,33 +3097,6 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  }
 
  // ============================================================
- // CAR COSTS MATRIX
- // ============================================================
- // Base cost to upgrade from level N-1 to level N (in $M, from GPRO UpdateCar page)
- const PART_BASE_COST = D.carCosts?.partBaseCost || {
- 'Chassis': 1292539, 'Engine': 3311737, 'Front Wing': 1551354,
- 'Rear Wing': 1504126, 'Underbody': 510128, 'Sidepods': 459831,
- 'Cooling': 454545, 'Gearbox': 3098104, 'Brakes': 697674,
- 'Suspension': 1181545, 'Electronics': 938416,
- };
-
- function calcUpgradeCostExact(part, targetLvl) {
- const base = PART_BASE_COST[part];
- if (!base) return 0;
- let total = 0;
- for (let i = 1; i <= targetLvl; i++) {
- total += Math.round(Math.pow(1.2385, i - 1) * base);
- }
- return total;
- }
-
- // Note: getUpgradeCost/calcDowngradeWear (formula-estimated upgrade cost/downgrade wear) were
- // removed 2026-07-19, confirmed dead - analyzeCar's real upgrade/downgrade recommendations use
- // calcUpgradeCostExact and DOM-scraped option data (parseUpdateCarDOM reads real cost/wear
- // straight out of UpdateCar.asp's own dropdown text, e.g. "$X - Wear: Y%") instead, which is
- // authoritative rather than a formula guess - these two were superseded, not a missed feature.
-
- // ============================================================
  // CAR PARTS WEAR PREDICTOR
  // ============================================================
  // Base race wear per part at CTR=0, Conc=100, Tal=50, Exp=50 (baseline driver)
@@ -3138,6 +3111,15 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  'Underbody': 0.08, 'Sidepods': 0.08, 'Cooling': 0.04, 'Gearbox': 0.14,
  'Brakes': 0.46, 'Suspension': 0.12, 'Electronics': 0.06,
  };
+ // Own-calibration whole-race wear for one part (fallback when the track has no GAPP wearData, and
+ // the "(own)" cross-check column). Single shared model - fixed 2026-10-24: analyzeCar and the
+ // multi-race projection used a second, separate "own" model (D.wearPerLap.base x laps) whose data
+ // file values were WHOLE-RACE numbers (Chassis 21, Engine 37...) read as PER-LAP, so the "End (own)"
+ // column showed 100% on every part (visible in a Bremgarten screenshot) and any no-wearData track
+ // projected instant failure. Now all three call sites use this one Montreal-calibrated model.
+ function ownPartRaceWear(name, driverFactor, ctr) {
+ return Math.round(driverFactor * ((PART_BASE_RACE_WEAR[name] || 0) + (ctr || 0) * (PART_CTR_WEAR[name] || 0)));
+ }
 
  // Driver wear factor: higher attributes = lower factor = less wear
  // Derived by Tushant Sharma from driver attribute analysis
@@ -3186,10 +3168,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const parts = PART_NAMES.map((name, i) => {
  const lvl = parseInt(carData[PART_LVL_KEYS[i]]) || 0;
  const wear = parseInt(carData[PART_WEAR_KEYS[i]]) || 0;
- const baseRace = PART_BASE_RACE_WEAR[name] || 0;
- const ctrEffect = PART_CTR_WEAR[name] || 0;
- // CTR effect also scales with driver factor (better drivers handle CTR better)
- const ownRaceWear = Math.round(driverFactor * (baseRace + ctr * ctrEffect));
+ const ownRaceWear = ownPartRaceWear(name, driverFactor, ctr);
  const gappRaceWear = gappPartRaceWear(gappWear, levelFactors, i, lvl, ctr, driverFactor);
  const raceWear = gappRaceWear !== null ? gappRaceWear : ownRaceWear;
  const endWear = wear + raceWear;
@@ -3437,12 +3416,6 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  'Engine': 1, 'Brakes': 2, 'Chassis': 3, 'Front Wing': 3, 'Rear Wing': 3,
  'Suspension': 4, 'Gearbox': 4, 'Electronics': 5, 'Underbody': 6, 'Sidepods': 6, 'Cooling': 6,
  };
- const BASE_WEAR_PER_LAP = D.wearPerLap?.base || {
- 'Chassis': 0.48, 'Engine': 0.80, 'Front Wing': 0.45, 'Rear Wing': 0.52,
- 'Underbody': 0.52, 'Sidepods': 0.34, 'Cooling': 0.30, 'Gearbox': 0.64,
- 'Brakes': 0.70, 'Suspension': 0.77, 'Electronics': 0.30,
- };
- const WEAR_SCALE = D.wearPerLap?.scale || { 'Low': 0.6, 'Medium': 0.85, 'High': 1.0 };
 
  // ============================================================
  // SEASON TRACK DATA — loaded from gpro-data.js via @require
@@ -3534,13 +3507,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const cash = parseInt(carData.cash) || 0;
  const laps = trackData ? parseInt(trackData.laps) || 0 : 0;
  const trackWearStr = trackData ? (trackData.tyreWear || 'Medium') : 'Medium';
- let trackWearScale = WEAR_SCALE[trackWearStr] || 0.85;
  const trackName = trackData ? (trackData.name || trackData.trackName || '') : '';
- // Boost wear scale by season wear intensity if available
- const seasonTrack = lookupSeasonTrack(trackName);
- if (seasonTrack && seasonTrack.wearIntensity) {
- trackWearScale *= seasonTrack.wearIntensity;
- }
  // Per-track wear data is PRIMARY here, driving the real-money recommendations below.
  // NOTE: a numeric check at Montreal found it runs ~25-30% higher than our our calibrated model
  // calibration - own calibration is attached as `ownTotalRaceWear` for visibility.
@@ -3556,8 +3523,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const target = leagueTargets.parts[name] || 6;
  const priority = UPGRADE_PRIORITY[name] || 99;
 
- const wearPerLap = (BASE_WEAR_PER_LAP[name] || 0.5) * trackWearScale;
- const ownTotalRaceWear = laps > 0 ? wearPerLap * laps : 0;
+ const ownTotalRaceWear = laps > 0 ? ownPartRaceWear(name, driverFactor, ctrValueCar) : 0;
  const gappRaceWear = gappPartRaceWear(gappWear, levelFactors, i, lvl, ctrValueCar, driverFactor);
  const totalRaceWear = gappRaceWear !== null ? gappRaceWear : ownTotalRaceWear;
  const endWear = Math.min(100, wear + totalRaceWear);
@@ -3605,22 +3571,20 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // the race) must always be funded first, before static importance. So an ultra-urgent carve-out
   // (remaining <= ULTRA_URGENT_WEAR) wins regardless; below that extreme, priority still governs.
   const ULTRA_URGENT_WEAR = 5; // remaining % - essentially already fully worn, not just "will wear out later"
- const tierOf = (p) => {
- if (p.willFail) return p.remaining <= ULTRA_URGENT_WEAR ? 0 : 1;
- if (p.critical) return 2;
- if (p.flagged) return 3;
- return 4;
- };
-  const actionable = parts.filter(p => p.willFail || p.critical || p.flagged)
+  const tierOf = (p) => (p.remaining <= ULTRA_URGENT_WEAR ? 0 : 1);
+  // Explicit user rule (restated 2026-10-24 with a screenshot where nothing would break yet the
+  // advisor still recommended upgrades): "upgrade/downgrade etc should only ever be recommended if a
+  // part will break during the next race." Only parts projected to FAIL this race get a
+  // budget-consuming recommendation. Low-remaining / critically-worn / below-league-target parts
+  // that still finish the race are a watch-list note (infoOnly), never a spend - the previous
+  // version still recommended UPGRADE/REPLACE for "critical"/"flagged" parts that would survive.
+  const actionable = parts.filter(p => p.willFail)
   .sort((a, b) => {
   const ta = tierOf(a), tb = tierOf(b);
   if (ta !== tb) return ta - tb;
   return a.priority - b.priority;
   });
-  // Below-target parts that won't break/critically-wear this race get an informational note
-  // only — no budget-consuming upgrade recommendation. This matches the user's requirement:
-  // "recommendations should only happen if a part is breaking."
-  const infoOnly = parts.filter(p => p.belowTarget && !p.willFail && !p.critical && !p.flagged)
+  const infoOnly = parts.filter(p => !p.willFail && (p.belowTarget || p.critical || p.flagged || p.atRisk))
   .sort((a, b) => a.priority - b.priority);
 
  actionable.forEach(p => {
@@ -3655,7 +3619,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const dgLvl = Math.min(9, Math.max(1, o.newLvl || 1));
  projectedRaceWear = gappWear.values[p.idx] * Math.pow(levelFactors[dgLvl - 1], ctrValueCar) * driverFactor;
  } else {
- projectedRaceWear = laps > 0 ? (BASE_WEAR_PER_LAP[p.name] || 0.5) * trackWearScale * laps : 0;
+ projectedRaceWear = laps > 0 ? ownPartRaceWear(p.name, driverFactor, ctrValueCar) : 0;
  }
  const raceEndWear = o.wear + projectedRaceWear;
  return raceEndWear < 95;
@@ -3711,76 +3675,6 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  detail: `FAIL at ~${Math.round(p.endWear)}%! This part is projected to break mid-race (real DNF/retirement risk), not just lose performance.${gapNote} Consider: sell/downgrade a lower-priority part instead to free up cash, or accept the failure risk this race and prioritize fixing it before the next.`,
  cost: 0, remainingCash: runCash, color: '#ef4444' });
  }
- } else if (p.critical) {
- // Part critically worn — replace if possible, but same logic as willFail: only prefer replace
- // over upgrade when the part is at/above target (leagueResetsCar shortcut). At level 1 below
- // target, upgrade first — you gain real performance this race.
- if (replacements.length > 0 && ((leagueResetsCar && p.atTarget) || upgrades.length === 0)) {
- const best = replacements[0];
- const cost = best.cost || 0;
- runCash -= cost;
- recs.push({ part: p, verdict: 'REPLACE',
- detail: `Only ${p.remaining}% left! Replace L${p.lvl} — $${cost.toLocaleString()}`,
- cost, newLvl: best.newLvl, newWear: best.wear, remainingCash: runCash, color: '#ef4444' });
- } else if (upgrades.length > 0) {
- const best = upgrades[0];
- const cost = best.cost || 0;
- runCash -= cost;
- recs.push({ part: p, verdict: 'UPGRADE',
- detail: `Only ${p.remaining}% left! Upgrade to L${best.newLvl} — $${cost.toLocaleString()}`,
- cost, newLvl: best.newLvl, newWear: best.wear, remainingCash: runCash, color: '#ef4444' });
- } else {
- recs.push({ part: p, verdict: 'WAIT',
- detail: `${p.remaining}% remaining — no affordable option. Budget: $${runCash.toLocaleString()}`,
- cost: 0, remainingCash: runCash, color: '#f59e0b' });
- }
- } else if (p.atRisk || p.flagged) {
- // Part at risk — upgrade if affordable
- if (upgrades.length > 0) {
- const best = upgrades[0];
- const cost = best.cost || 0;
- runCash -= cost;
- recs.push({ part: p, verdict: 'UPGRADE',
- detail: `End wear ~${Math.round(p.endWear)}% — Upgrade to L${best.newLvl} — $${cost.toLocaleString()} (${Math.round(cost/cash*100)}% budget)`,
- cost, newLvl: best.newLvl, newWear: best.wear, remainingCash: runCash, color: '#10b981' });
- } else if (replacements.length > 0 && p.remaining <= 30) {
- const best = replacements[0];
- const cost = best.cost || 0;
- runCash -= cost;
- recs.push({ part: p, verdict: 'REPLACE',
- detail: `${p.remaining}% remaining — Replace L${p.lvl} — $${cost.toLocaleString()}`,
- cost, newLvl: best.newLvl, newWear: best.wear, remainingCash: runCash, color: '#3b82f6' });
- } else {
- recs.push({ part: p, verdict: 'WAIT',
- detail: `End wear ~${Math.round(p.endWear)}% — no affordable fix. Budget: $${runCash.toLocaleString()}`,
- cost: 0, remainingCash: runCash, color: '#f59e0b' });
- }
- } else if (p.belowTarget) {
- // Below league target — recommend upgrade or save
- // Upgrade ROI: performanceGain = (maxLevel - currentLevel) * 5; roi = (gain * 1000) / cost
- // Max level is 9 (confirmed: wiki.gpro.net/Update_Car/Car_Wear — "upgrade the car parts up to level 9")
- const upgradeRoi = upgrades.length > 0 ? (() => {
- const best = upgrades[0];
- const gain = (9 - p.lvl) * 5;
- const cost = best.cost || 1;
- return Math.round((gain * 1000) / cost * 100) / 100;
- })() : null;
- if (upgrades.length > 0) {
- const best = upgrades[0];
- const cost = best.cost || 0;
- runCash -= cost;
- const roiLabel = upgradeRoi !== null ? ` (ROI: ${upgradeRoi})` : '';
- recs.push({ part: p, verdict: 'UPGRADE',
- detail: `Below target (L${p.lvl}→L${p.target}) — Upgrade to L${best.newLvl} — $${cost.toLocaleString()}${roiLabel}`,
- cost, newLvl: best.newLvl, newWear: best.wear, remainingCash: runCash, color: '#10b981' });
- } else {
- const cheapest = p.opts.filter(o => o.isUpgrade).sort((a, b) => (a.cost || Infinity) - (b.cost || Infinity));
- const need = cheapest.length > 0 ? cheapest[0].cost : (calcUpgradeCostExact(p.name, p.lvl + 1) - calcUpgradeCostExact(p.name, p.lvl));
- const affordStr = need <= runCash ? '— you can afford this now!' : `— need $${(need - runCash).toLocaleString()} more`;
- recs.push({ part: p, verdict: 'SAVE',
- detail: `Below target (L${p.lvl}→L${p.target}) — next upgrade $${need.toLocaleString()} ${affordStr}`.trim(),
- cost: 0, remainingCash: runCash, color: '#8b5cf6' });
- }
  }
  });
 
@@ -3800,7 +3694,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  });
  }
 
- const sortOrder = { FAIL: 0, CRITICAL: 1, UPGRADE: 2, REPLACE: 3, DOWNGRADE: 4, WAIT: 5, SAVE: 6 };
+ const sortOrder = { CRITICAL: 0, UPGRADE: 1, REPLACE: 2, DOWNGRADE: 3 };
  recs.sort((a, b) => (sortOrder[a.verdict] || 99) - (sortOrder[b.verdict] || 99));
 
  // Cost-efficiency ranking: for parts that need upgrading, rank by PHA impact per dollar
@@ -4525,14 +4419,17 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // treated as a game constant.
   if (supplier && supplier.peakTemperature != null && raceTemp > 0) {
   const peak = parseInt(supplier.peakTemperature) || 25;
-  const diff = raceTemp - peak;
+  // Gap is derived from the SAME rounded temp that's printed - rounding the two independently
+  // printed "28°C is 4°C below the 31°C peak" for Austin's 27.5°C race (S113 R3 screenshot).
+  const shownTemp = Math.round(raceTemp);
+  const diff = shownTemp - peak;
   const near = Math.abs(diff) <= 3;
   const fitColor = near ? VERDICT.good : VERDICT.warn;
   const fitText = near
-  ? `race temp ${raceTemp.toFixed(0)}°C is within ~3°C of ${peak}°C peak — compounds should sit in their working range.`
+  ? `race temp ${shownTemp}°C is within ~3°C of ${peak}°C peak — compounds should sit in their working range.`
   : diff < 0
-  ? `race temp ${raceTemp.toFixed(0)}°C is ${Math.round(-diff)}°C below the ${peak}°C peak — cold track, soft compounds are harder to keep in their working window.`
-  : `race temp ${raceTemp.toFixed(0)}°C is ${Math.round(diff)}°C above the ${peak}°C peak — hot track, risk of overheating/extra wear.`;
+  ? `race temp ${shownTemp}°C is ${-diff}°C below the ${peak}°C peak — cold track, soft compounds are harder to keep in their working window.`
+  : `race temp ${shownTemp}°C is ${diff}°C above the ${peak}°C peak — hot track, risk of overheating/extra wear.`;
   fsHtml += `<div style="font-size:9px;color:${fitColor};margin-bottom:4px;">🌡️ Tyre temp fit (${supplier.name || 'supplier'}: ${peak}°C peak) — ${fitText} <span style="color:#6b7280;">(own heuristic)</span></div>`;
   }
     fsHtml += `<table style="width:100%;border-collapse:collapse;font-size:10px;"><tr style="color:#9ca3af;text-align:left;"><th style="padding:2px 6px;">Stint</th><th style="padding:2px 6px;">Laps</th><th style="padding:2px 6px;">Tyre</th><th style="padding:2px 6px;">Fuel</th></tr>`;
@@ -4542,6 +4439,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     const startFillRaw = startFuelVal + boostInStart * perBoostLap;
     const startFill = Math.min(TANK_MAX, startFillRaw);
     const startCapped = startFillRaw > TANK_MAX;
+    let planTotal = startFill;
     fsHtml += `<tr><td style="padding:2px 6px;color:#9ca3af;">Start</td><td style="padding:2px 6px;color:#f1f5f9;">${stintStartOf(0)}–${Math.max(stintStartOf(0), stintEndOf(0))}</td><td style="padding:2px 6px;font-weight:700;color:#f1f5f9;">${startComp}</td><td style="padding:2px 6px;font-weight:700;color:#f1f5f9;">${startFill}L${boostInStart ? `<span style="color:#f59e0b;font-size:9px;"> ⚡${boostInStart}</span>` : ''}${startCapped ? `<span style="color:${VERDICT.warn};font-size:9px;"> capped</span>` : ''}</td></tr>`;
  for (let i = 1; i <= fuel.stops; i++) {
  const stopIdx = i - 1;
@@ -4552,14 +4450,14 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const fillRaw = stintFuelOf(i) + boostInStint * perBoostLap;
  const fill = Math.min(TANK_MAX, fillRaw);
  const fillCapped = fillRaw > TANK_MAX;
+ planTotal += fill;
  const comp = compoundForLap(stopLap || 0);
  fsHtml += `<tr><td style="padding:2px 6px;color:#9ca3af;">Stop ${i}</td><td style="padding:2px 6px;color:#f1f5f9;">${stStart}–${Math.max(stStart, stEnd)}</td><td style="padding:2px 6px;font-weight:700;color:#f1f5f9;">${comp}</td><td style="padding:2px 6px;font-weight:700;color:#f1f5f9;">${fill}L${stopLap ? `<span style="color:#6b7280;font-size:9px;"> @L${stopLap}</span>` : ''}${boostInStint ? `<span style="color:#f59e0b;font-size:9px;"> ⚡${boostInStint}</span>` : ''}${fillCapped ? `<span style="color:${VERDICT.warn};font-size:9px;"> capped</span>` : ''}</td></tr>`;
  }
   fsHtml += `</table>`;
   // v6.27.3: the carried-fuel total must match the stint rows above (the old bar showed
  // tyre.totalFuel — a dry-only mixed estimate that contradicted the fills; S113 R1 screenshot).
-  let planTotal = Math.min(TANK_MAX, startFuelVal + boostLapsList.filter(l => l >= stintStartOf(0) && l <= stintEndOf(0)).length * perBoostLap);
-  for (let i = 1; i <= fuel.stops; i++) planTotal += Math.min(TANK_MAX, stintFuelOf(i) + boostLapsList.filter(l => l >= stintStartOf(i) && l <= stintEndOf(i)).length * perBoostLap);
+  fuel.carriedTotal = planTotal;
   fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">Plan carries ~${planTotal}L (fills above, ⚡boost included) over ${fuel.stops} stop${fuel.stops !== 1 ? 's' : ''} · dry ${fuel.fuelPerLap}L/lap. Max tank ${TANK_MAX}L. Fills sized at phase-aware need +3% (+6% on the first and last stints — no pit after the last one to recover a shortfall).</div>`;
  if (wetContingency) fsHtml += `<div style="font-size:9px;color:${VERDICT.warn};margin-top:4px;">🌦 Weather contingency — the wet windows are only ${wetContingency.bandText} rain-probability: if the track is clearly dry at any forward pit, fit ${dryCompound} instead of Rain and the fuel numbers still hold (±few L). (own heuristic)</div>`;
   fsHtml += `</div>`;
@@ -4729,7 +4627,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   drHtml += `<div style="font-size:9px;color:#9ca3af;padding-left:4px;">${boostNote}</div>`;
   // Boost fuel is already folded into totalFuel/fuelPerStint above — show the integrated total
   if (boostExtraFuel > 0) {
-  drHtml += mkRow('Boost fuel (included)', `+${boostExtraFuel}L already in total fuel (${fuel ? fuel.totalFuel : '?'}L)`);
+  drHtml += mkRow('Boost fuel (included)', `+${boostExtraFuel}L already in the ~${fuel ? (fuel.carriedTotal || fuel.totalFuel) : '?'}L the plan carries`);
   }
   }
   h += mkSection('Driver Strategy', drHtml, 'gpro-sec-driver-strategy');
@@ -5054,17 +4952,15 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (gappWear && levelFactors) {
  raceWear = gappWear.values[i] * Math.pow(levelFactors[Math.min(lvl, 9) - 1], ctr || 0) * driverFactor;
  } else {
- const wearIntensity = D.trackWearIntensity?.[trackName] || 1.0;
- const baseWear = (BASE_WEAR_PER_LAP[name] || 0.5) * wearIntensity;
-  raceWear = baseWear * raceLaps;
+ raceWear = ownPartRaceWear(name, driverFactor, ctr);
   }
-  // Wear acceleration: higher wear → faster degradation (non-linear)
-  // wear > 70 → ×1.5, wear > 50 → ×1.2, else ×1.0
-  const wearAccel = startWear > 70 ? 1.5 : startWear > 50 ? 1.2 : 1.0;
-  const adjustedRaceWear = raceWear * wearAccel;
-  const endWear = Math.min(100, startWear + adjustedRaceWear);
+  // A ×1.2/×1.5 "wear acceleration" for parts starting above 50%/70% wear was removed 2026-10-24:
+  // unsourced, and contradicted by the S113 R3 Austin result - Underbody (52%) and Suspension (56%)
+  // wore at the same observed/predicted ratio (0.73) as parts starting at 20-39%. It also made this
+  // projection disagree with analyzeCar's single-race number for the very same race.
+  const endWear = Math.min(100, startWear + raceWear);
   runningWear[name] = endWear;
-  return { name, startWear: Math.round(startWear), endWear: Math.round(endWear), raceWear: Math.round(adjustedRaceWear), willFail: endWear >= 100, atRisk: endWear >= 85, wearAccel };
+  return { name, startWear: Math.round(startWear), endWear: Math.round(endWear), raceWear: Math.round(raceWear), willFail: endWear >= 100, atRisk: endWear >= 85 };
  });
  const willFailCount = parts.filter(p => p.willFail).length;
  const atRiskCount = parts.filter(p => p.atRisk && !p.willFail).length;
@@ -5206,15 +5102,14 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  h += mkSection('Parts Overview', tbl);
  }
 
- // Recommendations
- if (analysis.recs.length > 0) {
- let recsHtml = '';
+ // Recommendations - only ever for parts projected to FAIL this race (user rule, see analyzeCar).
+ // Always rendered: with nothing failing it says so plainly instead of the section silently vanishing.
+ {
+ let recsHtml = analysis.recs.length ? '' : mkRec('No part is projected to break this race — no upgrade, replace or downgrade needed.', 'good');
  analysis.recs.forEach(r => {
  const rc = r.color === '#ef4444' ? 'bad' : r.color === '#f59e0b' ? 'warn' : 'info';
  let text = `<strong>${r.part.name}</strong> (L${r.part.lvl}, ${Math.round(r.part.wear)}% wear / ${Math.round(r.part.remaining)}% remaining): ${r.verdict}`;
- if (r.verdict === 'FAIL') {
- text += `<br><span style="font-size:10px;color:#ef4444;font-weight:700;">${r.detail}</span>`;
- } else if (r.verdict === 'CRITICAL') {
+ if (r.verdict === 'CRITICAL') {
  text += `<br><span style="font-size:10px;color:#ef4444;">${r.detail}</span>`;
  } else if (r.verdict === 'UPGRADE' || r.verdict === 'REPLACE') {
  text += `<br><span style="font-size:10px;">${r.detail}</span>`;
@@ -5223,12 +5118,6 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  } else if (r.verdict === 'DOWNGRADE') {
  text += `<br><span style="font-size:10px;color:#f59e0b;">${r.detail}</span>`;
  text += `<br><span style="font-size:10px;color:#6b7280;">⚠ Loses performance — free option to survive race</span>`;
- } else if (r.verdict === 'WAIT') {
- text += `<br><span style="font-size:10px;color:#f59e0b;">${r.detail}</span>`;
- } else if (r.verdict === 'SAVE') {
- text += `<br><span style="font-size:10px;color:#8b5cf6;">${r.detail}</span>`;
- } else {
- text += `<br><span style="font-size:10px;color:#6b7280;">${r.detail}</span>`;
  }
  recsHtml += mkRec(text, rc);
  });
@@ -5238,16 +5127,24 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   if (okParts.length > 0) {
   h += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">${okParts.length} parts OK (no action needed): ${okParts.map(p => p.name).join(', ')}</div>`;
   }
-  // Below-target informational note: parts that are below league target but won't break this race
-  // get a gentle note instead of a budget-consuming recommendation — this matches the user's
-  // requirement that upgrade recommendations should only appear for parts that will actually break.
-  if (analysis.infoOnly && analysis.infoOnly.length) {
-  let infoHtml = '<div style="font-size:9px;color:#9ca3af;">These parts are below your league target but won\'t break or critically wear this race. Consider upgrading them over the next few races as budget allows:</div>';
-  analysis.infoOnly.forEach(p => {
-  const hasUpgrades = p.opts.some(o => o.isUpgrade);
-  const cheapestUpgrade = hasUpgrades ? p.opts.filter(o => o.isUpgrade).sort((a, b) => (a.cost || Infinity) - (b.cost || Infinity))[0] : null;
-  infoHtml += `<div style="font-size:9px;color:#9ca3af;padding:2px 0;">${p.name} (L${p.lvl} → target L${p.target}, ${p.remaining}% wear)${cheapestUpgrade ? ` — cheapest upgrade: $${cheapestUpgrade.cost.toLocaleString()}` : ''}</div>`;
+  // Watch list: parts that finish this race but are low on remaining life - informational only,
+  // never a spend (user rule: only recommend when a part will break). Parts that are merely below
+  // the league target collapse into ONE line: on an all-L1 Rookie car every part is below target,
+  // and listing all 11 individually was pure noise (Austin S113 R3 harness run).
+  const watch = (analysis.infoOnly || []).filter(p => p.critical || p.flagged || p.atRisk);
+  const belowTargetOnly = (analysis.infoOnly || []).filter(p => !(p.critical || p.flagged || p.atRisk));
+  if (watch.length || belowTargetOnly.length) {
+  let infoHtml = '';
+  if (watch.length) {
+  infoHtml += '<div style="font-size:9px;color:#9ca3af;">Watch list — these finish this race, so no action now. Plan for them over the next few races:</div>';
+  watch.forEach(p => {
+  const why = p.atRisk ? `ends ~${Math.round(p.endWear)}% worn` : `only ${Math.round(p.remaining)}% left`;
+  infoHtml += `<div style="font-size:9px;color:#9ca3af;padding:2px 0;">${p.name} — ${why}</div>`;
   });
+  }
+  if (belowTargetOnly.length) {
+  infoHtml += `<div style="font-size:9px;color:#6b7280;padding-top:${watch.length ? 4 : 0}px;">Below the ${esc(analysis.league)} target level (no action needed this race): ${belowTargetOnly.map(p => `${p.name} L${p.lvl}→L${p.target}`).join(', ')}.</div>`;
+  }
   h += `<div style="margin-top:6px;padding:6px 8px;background:#1e293b;border-radius:4px;border-left:3px solid #3b82f6;">${infoHtml}</div>`;
   }
  h += `<div style="font-size:9px;color:#6b7280;margin-top:2px;">Wear projections: ${lookupGappTrack(trackData ? (trackData.name || trackData.trackName || '') : '', 'wearData') ? 'track-specific (per-track)' : 'generic (own Montreal-calibrated fallback)'}${driver ? '' : ' (driver data unavailable, using default wear-reduction factor)'}</div>`;
@@ -5286,9 +5183,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const pp = p.parts.find(x => x.name === name);
  if (!pp) { mpTbl += `<td style="text-align:center;">-</td>`; return; }
  const color = pp.willFail ? '#ef4444' : pp.atRisk ? '#f59e0b' : '#10b981';
- // Wear acceleration indicator: show if degradation is accelerating non-linearly
- const accelIcon = pp.wearAccel > 1.2 ? ' 🔥' : pp.wearAccel > 1.0 ? ' ⚡' : '';
- mpTbl += `<td style="text-align:center;color:${color};font-weight:${pp.willFail ? 700 : 400};">${pp.startWear}%→${pp.endWear}%${pp.willFail ? ' ❌' : pp.atRisk ? ' ⚠' : ''}${accelIcon}</td>`;
+ mpTbl += `<td style="text-align:center;color:${color};font-weight:${pp.willFail ? 700 : 400};">${pp.startWear}%→${pp.endWear}%${pp.willFail ? ' ❌' : pp.atRisk ? ' ⚠' : ''}</td>`;
  });
  mpTbl += `</tr>`;
  });
@@ -5300,7 +5195,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  ? `${projection.filter(p => p.willFailCount > 0).map(p => p.trackName.split(' ')[0]).join(', ')}: parts will fail`
  : anyRisk ? 'Parts finish in the red at some tracks' : 'All parts survive the next ' + projection.length + ' races comfortably';
  h += mkSection('Multi-Race Wear Projection (next ' + projection.length + ')', mkRec(headline, tone) + mpTbl +
- `<div style="font-size:8px;color:#6b7280;margin-top:3px;">Track-specific wear data when available; own calibration fallback otherwise. Chains forward from current wear. ❌ = fails mid-race, ⚠ = ends above 85%. 🔥 = high wear acceleration (>70%), ⚡ = moderate acceleration (>50%).</div>`);
+ `<div style="font-size:8px;color:#6b7280;margin-top:3px;">Track-specific wear data when available; own calibration fallback otherwise. Chains forward from current wear. ❌ = fails mid-race, ⚠ = ends above 85%.</div>`);
  }
 
  // Track type wear classification (from Elite spreadsheet models)
@@ -5326,31 +5221,6 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   });
   wearHtml += '</table></div>';
   h += mkSection('Recent Race Setups (Reference)', wearHtml + `<span style="font-size:8px;color:#6b7280;">Actual setups used in your last 5 races (scraped from gproanalyzer.info). Use as calibration reference for future races.</span>`);
-  }
-
-  // Upgrade Timing Intelligence (from Elite: optimize when to spend cash)
- // Cross-references upcoming tracks' wear data with current part wear to recommend timing
- if (projection && projection.length > 0 && analysis.recs.length > 0) {
- const upgradeRecs = analysis.recs.filter(r => r.verdict === 'UPGRADE' || r.verdict === 'SAVE');
-  if (upgradeRecs.length > 0) {
-  const highWearUpcoming = projection.some(p => p.willFailCount > 0 || p.atRiskCount > 0);
-  const timingNotes = [];
-  upgradeRecs.forEach(r => {
-  const partProj = projection.map(p => { const part = p.parts.find(x => x.name === r.part.name); return part ? { ...part, trackName: p.trackName } : null; }).filter(Boolean);
- const nextFail = partProj.find(pp => pp.willFail);
- const nextRisk = partProj.find(pp => pp.atRisk);
- if (nextFail) {
- timingNotes.push(`<span style="color:#ef4444;font-weight:600;">${r.part.name}</span>: UPGRADE NOW — will fail at ${nextFail.trackName.split(' ')[0]} (Race #${projection.indexOf(nextFail) + 1})`);
- } else if (nextRisk && r.verdict === 'SAVE') {
- timingNotes.push(`<span style="color:#f59e0b;">${r.part.name}</span>: Save cash now, upgrade before ${nextRisk.trackName.split(' ')[0]} (Race #${projection.indexOf(nextRisk) + 1}) — ends at risk`);
- } else if (r.verdict === 'SAVE' && !highWearUpcoming) {
- timingNotes.push(`<span style="color:#10b981;">${r.part.name}</span>: No rush — parts survive next ${projection.length} races. Save for higher-impact upgrade.`);
- }
- });
- if (timingNotes.length > 0) {
- h += mkSection('Upgrade Timing', `<div style="font-size:9px;color:#d1d5db;">${timingNotes.map(n => `<div style="margin:2px 0;padding:2px 4px;">• ${n}</div>`).join('')}</div>`);
- }
- }
   }
 
   // Car PHA display (power/handling/acceleration from part levels)
