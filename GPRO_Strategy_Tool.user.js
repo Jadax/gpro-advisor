@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.27.6
+// @version 6.27.7
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1850,24 +1850,35 @@ if (h.includes('TrainingSession.asp')) return 'training';
   // dry stints by the DRY rate. Mandatory tyre-transition stops are always included; extra fuel
   // stops are inserted (bisecting the longest stint) whenever a non-start stint's phase-aware fuel
   // need exceeds TANK_MAX — so the numbers shown are actually enterable in-game. v6.25.0.
-  // Convention (matches the Fuel & Tyre table): bounds = [1, ...stopLaps, laps]; stint i covers
-  // laps [bounds[i], bounds[i+1]-1]; stopLaps[i] is the pit lap AFTER stint i (i.e. before lap
-  // stopLaps[i]). First stint fuel is the user's locked Q2 value when provided.
-  function buildPhaseFuelPlan(laps, phases, transitionLaps, dryRate, wetRate, tyreStops, startFuel) {
-  const SAFETY = 1.03;
+  // Convention (v6.27.7): internally bounds = [1, ...stint start laps..., laps+1]; stint i covers
+  // laps [bounds[i], bounds[i+1]-1]. The RETURNED stopLaps are GPRO's own pit laps - the lap at
+  // whose END the car pits ("Stop 1 (Lap 19)" in the race analysis) = bound - 1. The pit lap is
+  // driven on the PREVIOUS stint's fuel; the stop + out-lap belong to the next stint. S113 R3
+  // Austin proved the old convention wrong: we labelled stint 1 as laps 1-18 / stop @L19, but the
+  // car drove lap 19 on its start fuel (lap 20 carried the 24s stop), so stint 1 was really 1-19.
+  function buildPhaseFuelPlan(laps, phases, transitionLaps, dryRate, wetRate, tyreStops) {
   const rateLap = (lap) => {
   if (phases && phases.length) { for (const p of phases) { if (lap >= p.startLap && lap <= p.endLap) return p.condition === 'wet' ? wetRate : dryRate; } }
   return dryRate;
   };
-  // Fuel to cover inclusive lap range [from, to].
-  // EDGE stints (first and last) get a slightly fatter margin: first covers the standing-start laps
-  // (S113 R1 Portimao: a 1.03 plan arrived at the pit with only ~2% reserve), and the LAST stint
-  // has no pit behind it to recover a marginal shortfall — S113 R2 Bremgarten ran the final fill
-  // (+3%) to within 2L of dry with the race win on the line. Running dry mid-lap costs a whole
-  // slow lap plus the position(s), while 1 extra liter costs ~0.03s. Middle stints stay 1.03
-  // (their risk is recoverable at the next pit).
-  const EDGE_STINT_SAFETY = 1.06;
-  const need = (from, to) => { if (to < from) return 0; let f = 0; for (let l = from; l <= to; l++) f += rateLap(l); return Math.ceil(f * (from === 1 || to >= laps ? EDGE_STINT_SAFETY : SAFETY)); };
+  // Fuel to cover inclusive lap range [from, to] (fill-TO level: GPRO "refills to" the entered
+  // amount, topping up whatever is left). v6.27.7, from the S113 R3 Austin result:
+  // - A stint WITH a pit after it gets its laps plus a sub-lap reserve (PIT_RESERVE_LAPS). GPRO
+  //   pits at the end of the lap after which the fuel can't do another lap ("No more fuel was
+  //   left" at 1%/2% in the tank) - so any margin >= one lap doesn't sit in the tank, it just
+  //   carries the car a lap further and moves the pit. Austin's 6% first-stint margin (~1.1 laps)
+  //   was exactly what covered lap 19, the lap the old convention forgot; arriving with 1% caused
+  //   no slow lap. A half-lap reserve absorbs model error (Austin per-stint use ran within 1%)
+  //   without shifting the planned pit lap.
+  // - The LAST stint keeps LAST_STINT_SAFETY: there's no pit behind it, so a shortfall means an
+  //   unplanned stop (S113 R2 Bremgarten ran its final fill close to dry).
+  const LAST_STINT_SAFETY = 1.06;
+  const PIT_RESERVE_LAPS = 0.5;
+  const need = (from, to) => {
+  if (to < from) return 0;
+  let f = 0; for (let l = from; l <= to; l++) f += rateLap(l);
+  return Math.ceil(to >= laps ? f * LAST_STINT_SAFETY : f + PIT_RESERVE_LAPS * rateLap(to + 1));
+  };
 const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
 // Weather transitions are MANDATORY stops (compound change) — keep them always.
   const trans = (transitionLaps || []).slice().filter(t => t >= 2 && t < laps).map(intLap).sort((a, b) => a - b);
@@ -1898,12 +1909,17 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   for (let k = 1; k <= wearOnly; k++) {
   const target = (k * totalSpan) / (wearOnly + 1);
   let phaseIdx = 0, running = 0;
-  for (let i = 0; i < spans.length; i++) { if (target > running + spans[i].laps) { running += spans[i].laps; phaseIdx = i + 1; } }
+  // Cumulative walk - must stop at the first span that contains the target. Without the break, a
+  // LATER span shorter than the target re-matched against the un-advanced running total and
+  // pushed phaseIdx past the end, silently dropping the wear stop (dry 29 / wet 15 / dry 16 laps:
+  // one dry set was planned for all 29 opening laps; found by a v6.27.7 harness run).
+  for (let i = 0; i < spans.length; i++) { if (target > running + spans[i].laps) { running += spans[i].laps; phaseIdx = i + 1; } else break; }
   if (phaseIdx >= spans.length) break;
   const p = spans[phaseIdx];
   const off = Math.max(1, Math.round(target - running));
-  const lap = intLap(p.startLap + Math.max(0, off - 1));
-  if (lap >= 2 && lap < laps && !wearStops.includes(lap)) wearStops.push(lap);
+  const pitLap = intLap(p.startLap + Math.max(0, off - 1)); // last lap on this tyre set/fuel
+  const bound = pitLap + 1; // next stint starts the lap after the pit lap
+  if (pitLap >= 2 && pitLap < laps && !wearStops.includes(bound)) wearStops.push(bound);
   }
   }
   const nearTrans = (lap) => { for (const t of trans) { if (Math.abs(t - lap) <= Math.max(3, Math.floor(stintLaps / 3))) return true; } return false; };
@@ -1913,13 +1929,15 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  bounds = Array.from(new Set(bounds)).filter(b => b >= 1 && b <= laps + 1).sort((a, b) => a - b);
  for (let i = bounds.length - 1; i >= 1; i--) if (bounds[i] <= bounds[i - 1]) bounds.splice(i, 1);
   // Stint i covers [bounds[i], bounds[i+1]-1]; its length = bounds[i+1] - bounds[i].
-  // Iteratively bisect the longest non-first stint whose phase-aware fuel need exceeds the tank.
+  // Iteratively bisect the longest stint whose phase-aware fuel need exceeds the tank. The START
+  // stint is included since v6.27.7 - start fuel is a recommendation typed into Q2 (same 180L
+  // tank), not a committed value to plan around; a 70-lap/1-stop harness plan asked for 213L at the
+  // start. Only over-tank stints are candidates (the old pick could choose a longer stint that fit).
   let guard = 200;
   const stintOver = (i) => need(bounds[i], bounds[i + 1] - 1) > TANK_MAX;
-  const anyNonFirstOver = () => { for (let i = 1; i < bounds.length - 1; i++) if (stintOver(i)) return true; return false; };
-  while (guard-- > 0 && anyNonFirstOver()) {
+  while (guard-- > 0) {
   let li = -1, longest = 0;
-  for (let i = 1; i < bounds.length - 1; i++) { const len = bounds[i + 1] - bounds[i]; if (len > longest) { longest = len; li = i; } }
+  for (let i = 0; i < bounds.length - 1; i++) { const len = bounds[i + 1] - bounds[i]; if (stintOver(i) && len > longest) { longest = len; li = i; } }
     if (li < 0) break;
     const mid = bounds[li] + Math.floor((bounds[li + 1] - bounds[li]) / 2);
     if (mid <= bounds[li]) break;
@@ -1927,10 +1945,11 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     bounds = Array.from(new Set(bounds)).sort((a, b) => a - b);
     for (let i = bounds.length - 1; i >= 1; i--) if (bounds[i] <= bounds[i - 1]) bounds.splice(i, 1);
   }
-  const stopLaps = bounds.slice(1, -1); // every bound after lap 1 and before the sentinel is a pit
+  // Every bound after lap 1 and before the sentinel is a stint start; GPRO's pit lap is the lap before it.
+  const stopLaps = bounds.slice(1, -1).map(b => b - 1);
    const stintFuels = [];
    for (let i = 0; i < bounds.length - 1; i++) stintFuels.push(need(bounds[i], bounds[i + 1] - 1));
-   return { stopLaps, stints: stopLaps.length + 1, stintFuels, firstNeed: stintFuels[0] || 0 };
+   return { stopLaps, stints: stopLaps.length + 1, stintFuels };
    }
 
   // Shared race-profile resolution used by BOTH renderQualify (Q2 "First Stint Fuel") and
@@ -1975,11 +1994,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const wetRate = (dryRate || 2.4) * 1.12; // wet consumption ~12% higher (documented GAPP ratio)
   let plan = null;
   try {
-  plan = buildPhaseFuelPlan(laps, phases, transLaps, dryRate || 2.4, wetRate, tyreStops, committedFuel);
+  plan = buildPhaseFuelPlan(laps, phases, transLaps, dryRate || 2.4, wetRate, tyreStops);
   } catch (e) { logDebug('[GPRO][Fuel] buildPhaseFuelPlan failed: ' + e.message); }
-  if (!plan || !plan.stopLaps || plan.stopLaps.length === 0) {
-  // Simple / single-stint case (dry race, or no weather transitions and tyre needs no stops):
-  // even split across the chosen compound's stint count.
+  if (!plan || !plan.stopLaps || !plan.stintFuels) {
+  // Planner failed - even split across the chosen compound's stint count. (A zero-stop plan is
+  // NOT routed here any more: its single stint is a last stint and gets the planner's last-stint
+  // margin, instead of this path's flat 1.03.) stopLaps here are GPRO pit laps like the planner's.
   const stintsSimple = Math.max(1, (tyreStops || 0) + 1);
   const needTotal = (dryRate || 2.4) * laps * 1.03;
   const perStint = Math.ceil(needTotal / Math.max(1, stintsSimple));
@@ -2284,7 +2304,9 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // If so, recommend starting on Rain and pitting for dry when rain ends.
   if (analyze.raceProfile && analyze.raceProfile.type === 'mixed' && analyze.raceProfile.transitions.length > 0) {
   finalRec = bestWet ? bestWet.name : 'Rain';
-  const transDesc = analyze.raceProfile.transitions.map(tr => `lap ${tr.lap}`).join(', ');
+  // tr.lap is the first lap of the new condition; the pit is at the END of the lap before it -
+  // the same GPRO pit-lap convention the fuel plan's @L labels use (v6.27.7).
+  const transDesc = analyze.raceProfile.transitions.map(tr => `the end of lap ${Math.max(1, tr.lap - 1)}`).join(', ');
   recReason = `Rain at start — start on ${finalRec}, pit for dry at ${transDesc} when rain stops`;
   } else {
   finalRec = bestWet ? bestWet.name : (results.length ? results[0].name : 'Rain');
@@ -3992,7 +4014,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     const q2PerBoostLap = (q2BoostFuel > 0 && q2BoostLapsList.length) ? Math.ceil(q2BoostFuel / q2BoostLapsList.length) : 0;
     const q2FirstStopLap = (q2Plan && q2Plan.stopLaps && q2Plan.stopLaps.length) ? q2Plan.stopLaps[0] : null;
     const q2BoostInStint1 = (q2PerBoostLap && q2BoostLapsList.length)
-    ? q2BoostLapsList.filter(l => l <= (q2FirstStopLap ? q2FirstStopLap - 1 : (chosenRace.lapsPerStint || raceLaps))).length
+    ? q2BoostLapsList.filter(l => l <= (q2FirstStopLap ? q2FirstStopLap : (chosenRace.lapsPerStint || raceLaps))).length
     : 0;
     const adjustedFuelPerStint = q2FirstStint + q2BoostInStint1 * q2PerBoostLap;
     const boostNote = q2BoostInStint1 > 0 ? `<br><span style="font-size:9px;color:#f59e0b;">Includes ~${q2BoostInStint1 * q2PerBoostLap}L for the ⚡${q2BoostInStint1} boost lap${q2BoostInStint1 !== 1 ? 's' : ''} in stint 1 (boost laps ${q2BoostLapsList.join(', ')}, ~${q2BoostFuel}L total over the race)</span>` : '';
@@ -4007,7 +4029,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
    }
    q2PlanHtml += `</div>`;
    }
-   const q2FirstLapEnd = (q2Plan && q2Plan.stopLaps && q2Plan.stopLaps[0]) ? (q2Plan.stopLaps[0] - 1) : 0;
+   // stopLaps are GPRO pit laps: stint 1 runs laps 1..stopLaps[0] inclusive (v6.27.7).
+   const q2FirstLapEnd = (q2Plan && q2Plan.stopLaps && q2Plan.stopLaps[0]) ? q2Plan.stopLaps[0] : 0;
     const q2FirstLaps = q2FirstLapEnd > 0 ? q2FirstLapEnd : chosen.lapsPerStint;
     h += `<div data-first-stint-fuel>${mkRec(`<strong>First Stint Fuel: ${adjustedFuelPerStint}L</strong><br><span style="font-size:10px;">Enter this in Q2's "First stint fuel" field - covers ${q2FirstLaps} lap${q2FirstLaps !== 1 ? 's' : ''} on ${chosenRace.name || chosen.name} before the first planned pit${q2FirstLapEnd > 0 ? ' @L' + q2Plan.stopLaps[0] : ''}</span>${boostNote}${q2PlanHtml}`, 'good')}</div>`;
   }
@@ -4131,31 +4154,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const verdictDiv = boardTyreTile.querySelector('div:nth-child(2)');
  if (verdictDiv) { verdictDiv.textContent = tr; verdictDiv.style.color = curSessionWet ? '#ef4444' : '#10b981'; }
  }
-    if (isQ2) {
-    const fuelEl = document.querySelector('[data-first-stint-fuel]');
-    if (fuelEl) {
-    // The race "First Stint Fuel" depends on the RACE-start wet (analyze.commitRain), which is NOT
-    // changed by this Q1/Q2 qualifying-weather dropdown. Recompute the race-wet tyre exactly like the
-    // initial render (shared computeRaceFuelPlan) so Q2 and Race Setup never drift on this update.
-    let q2Fs = null;
-    try {
-    const raceWetQ2 = !!(analyze && analyze.commitRain);
-    const tyreRace = calcTyreStrategySmart(track, null, weather, car, driver, supplier, ctr, staffTd, raceWetQ2);
-    if (tyreRace && tyreRace.results && tyreRace.results.length) {
-    const chosenRace = tyreRace.results.find(r => r.name === tyreRace.finalRec) || tyreRace.results.find(r => r.isRain) || tyreRace.results[0];
-    const rLaps = tyreRace.laps || tyre.laps;
-    const rFuel = parseFloat(tyreRace.fuelPerLap || tyre.fuelPerLap) || 2.4;
-    const q2Plan = computeRaceFuelPlan(rLaps, rFuel, analyze.raceProfile, chosenRace.stops, null);
-    if (q2Plan && q2Plan.startRecommend) q2Fs = q2Plan.startRecommend;
-    }
-    } catch (e) { logDebug('[GPRO][Q2Fuel] dropdown race-wet first stint failed: ' + e.message); }
-    if (q2Fs === null) {
-    const fb = newTyreRec && newTyreRec.results && newTyreRec.results.length ? newTyreRec.results[0] : null;
-    q2Fs = fb ? fb.fuelPerStint : null;
-    }
-    fuelEl.innerHTML = mkRec(`<strong>First Stint Fuel: ${q2Fs == null ? '?' : q2Fs}L</strong><br><span style="font-size:10px;">Enter this in Q2's "First stint fuel" field</span>`, 'good');
-    }
-    }
+    // (Q2 First Stint Fuel is not touched here: it depends on the race-start weather, not this
+    // qualifying dropdown - an older recompute here dropped its boost liters, v6.27.7.)
   }
   // Update qualifying risk recommendation (shared builder with the initial render; uses the
   // dropdown's NEW wet state so toggling Q1/Q2 weather re-derives the advice in place).
@@ -4266,19 +4266,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
    const firstStint = plan.startRecommend;
    const stintFuels = plan.stintFuels;
    return { laps, fuelPerLap: tyre.fuelPerLap, totalFuel, stints, stops, fuelPerStint: Math.ceil(totalFuel / Math.max(1, stints)), stint1Fuel: firstStint, stopLaps: plan.stopLaps, stintFuels, fuelNote: '', tyreStops, fromDomFuelStart: !!domFuelStart, committedFuel: plan.committedFuel };
-   })() : (() => {
-   // Fallback: compute from tyre strategy data when DOM FuelStart is unavailable
-   if (!tyre || !chosenTyreResult) return null;
-   const laps = tyre.laps;
-   const totalFuel = tyre.totalFuel;
-   const fuelPerLap = parseFloat(tyre.fuelPerLap) || 0;
-   const stops = chosenTyreResult.stops;
-   const stints = stops + 1;
-   const fuelPerStint = Math.ceil(totalFuel / stints);
-   const stopLaps = [];
-   for (let i = 1; i <= stops; i++) stopLaps.push(Math.round((laps / stints) * i));
-     return { laps, fuelPerLap, totalFuel, stints, stops, fuelPerStint, stopLaps, fuelNote: '', tyreStops: stops };
-     })();
+   })() : null;
 
   // Fallback: if tyre strategy is unavailable (e.g. Rain compound has no valid strategy),
   // compute fuel directly from track data so the Quick Summary still shows fuel info.
@@ -4356,8 +4344,6 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   if (fuel && fuel.stops > 0) {
   const dryCompound = (tyre && tyre.bestDry && tyre.bestDry.name) ? tyre.bestDry.name : (chosenTyreResult ? chosenTyreResult.name : '?');
   const phases = (analyze && analyze.raceProfile && analyze.raceProfile.phases) ? analyze.raceProfile.phases : null;
-  const dryRate = parseFloat(fuel.fuelPerLap) || 2.4;
-  const wetRate = dryRate * 1.12;
   const compoundForLap = (lap) => {
   if (!phases || phases.length === 0) return chosenTyreResult ? chosenTyreResult.name : '?';
   for (const p of phases) {
@@ -4365,23 +4351,10 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   }
   return chosenTyreResult ? chosenTyreResult.name : '?';
   };
-  // Stint boundaries: [1 start, stopLaps..., laps+1 sentinel] so the last stint runs to the final lap.
-  const boundaries = [1].concat(fuel.stopLaps || []).concat([(fuel.laps || (parseInt(track && track.laps) || 0)) + 1]);
-  const fuelForStint = (s) => {
-  const segStart = boundaries[s];
-  const segEnd = boundaries[s + 1];
-  const segLaps = Math.max(1, segEnd - segStart);
-  let rate = dryRate;
-  const midLap = segStart + Math.round(segLaps / 2);
-  if (phases && phases.length > 0) {
-  for (const p of phases) {
-  if (midLap >= p.startLap && midLap <= p.endLap) { rate = p.condition === 'wet' ? wetRate : dryRate; break; }
-  }
-  }
-  return Math.round(rate * segLaps * 1.03);
-  };
-    // Recommended start fuel = phase-aware need for the first stint, shown cleanly in the Start cell.
-    const startFuelVal = fuel.stint1Fuel || fuelForStint(0) || Math.ceil(fuel.totalFuel / (fuel.stops + 1));
+    // Recommended start fuel = phase-aware need for the first stint (computeRaceFuelPlan always
+    // supplies stintFuels for a fuel object with stops - the old per-stint rate fallback here was
+    // unreachable and used a different margin, so it was removed in v6.27.7).
+    const startFuelVal = fuel.stint1Fuel;
     const startComp = compoundForLap(1);
     const stopList = fuel.stopLaps || [];
  // v6.27.3: boost sets are now accounted for in the fills - each boosted lap burns extra fuel, so
@@ -4404,15 +4377,13 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return { bandText };
  })();
     const totalLapsV = fuel.laps || (parseInt(track && track.laps) || 0);
-    const stintStartOf = (i) => (i === 0 ? 1 : stopList[i - 1]);
-    const stintEndOf = (i) => (i < stopList.length ? stopList[i] : totalLapsV + 1) - 1;
-    // Phase-aware per-stint fuel (wet/dry) from the plan; falls back to the rate estimate.
-    const stintFuelOf = (i) => {
-    if (fuel.stintFuels && fuel.stintFuels[i]) return Math.min(fuel.stintFuels[i], TANK_MAX);
-    return Math.min(fuelForStint(i), TANK_MAX);
-    };
+    // stopList holds GPRO pit laps: stint i runs from the lap after the previous pit up to and
+    // including its own pit lap (the pit lap is driven on that stint's fuel).
+    const stintStartOf = (i) => (i === 0 ? 1 : stopList[i - 1] + 1);
+    const stintEndOf = (i) => (i < stopList.length ? stopList[i] : totalLapsV);
+    const stintFuelOf = (i) => Math.min(fuel.stintFuels[i], TANK_MAX);
     let fsHtml = `<div style="${ST.section}"><div style="${ST.sectionTitle}">⛽ Fuel &amp; Tyre Strategy</div>`;
-    fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Start fuel is entered in Q2's "First stint fuel" (read-only here); fill = what to add after each pit stop. Wet stints burn ~12% more fuel/lap.</div>`;
+    fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Start fuel is entered in Q2's "First stint fuel" (read-only here); fill = the level each stop refills the tank TO (GPRO tops up what's left). @L = the lap you pit at the end of. Wet stints burn ~12% more fuel/lap.</div>`;
   // Tyre temp-fit advisory: whole-race avg temp vs the supplier's declared peak working temp
   // (surfaced on TyreSuppliers.asp). The ±3°C fit band is our own heuristic — GPRO exposes no
   // formula linking track temp to compound performance, so this is disclosed as such, never
@@ -4440,6 +4411,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     const startFill = Math.min(TANK_MAX, startFillRaw);
     const startCapped = startFillRaw > TANK_MAX;
     let planTotal = startFill;
+    fuel.startFill = startFill;
+    fuel.stopFills = [];
     fsHtml += `<tr><td style="padding:2px 6px;color:#9ca3af;">Start</td><td style="padding:2px 6px;color:#f1f5f9;">${stintStartOf(0)}–${Math.max(stintStartOf(0), stintEndOf(0))}</td><td style="padding:2px 6px;font-weight:700;color:#f1f5f9;">${startComp}</td><td style="padding:2px 6px;font-weight:700;color:#f1f5f9;">${startFill}L${boostInStart ? `<span style="color:#f59e0b;font-size:9px;"> ⚡${boostInStart}</span>` : ''}${startCapped ? `<span style="color:${VERDICT.warn};font-size:9px;"> capped</span>` : ''}</td></tr>`;
  for (let i = 1; i <= fuel.stops; i++) {
  const stopIdx = i - 1;
@@ -4451,14 +4424,15 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const fill = Math.min(TANK_MAX, fillRaw);
  const fillCapped = fillRaw > TANK_MAX;
  planTotal += fill;
- const comp = compoundForLap(stopLap || 0);
+ fuel.stopFills.push({ lap: stopLap, fill });
+ const comp = compoundForLap(stStart);
  fsHtml += `<tr><td style="padding:2px 6px;color:#9ca3af;">Stop ${i}</td><td style="padding:2px 6px;color:#f1f5f9;">${stStart}–${Math.max(stStart, stEnd)}</td><td style="padding:2px 6px;font-weight:700;color:#f1f5f9;">${comp}</td><td style="padding:2px 6px;font-weight:700;color:#f1f5f9;">${fill}L${stopLap ? `<span style="color:#6b7280;font-size:9px;"> @L${stopLap}</span>` : ''}${boostInStint ? `<span style="color:#f59e0b;font-size:9px;"> ⚡${boostInStint}</span>` : ''}${fillCapped ? `<span style="color:${VERDICT.warn};font-size:9px;"> capped</span>` : ''}</td></tr>`;
  }
   fsHtml += `</table>`;
   // v6.27.3: the carried-fuel total must match the stint rows above (the old bar showed
  // tyre.totalFuel — a dry-only mixed estimate that contradicted the fills; S113 R1 screenshot).
   fuel.carriedTotal = planTotal;
-  fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">Plan carries ~${planTotal}L (fills above, ⚡boost included) over ${fuel.stops} stop${fuel.stops !== 1 ? 's' : ''} · dry ${fuel.fuelPerLap}L/lap. Max tank ${TANK_MAX}L. Fills sized at phase-aware need +3% (+6% on the first and last stints — no pit after the last one to recover a shortfall).</div>`;
+  fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">Plan carries ~${planTotal}L (fills above, ⚡boost included) over ${fuel.stops} stop${fuel.stops !== 1 ? 's' : ''} · dry ${fuel.fuelPerLap}L/lap. Max tank ${TANK_MAX}L. Each fill covers its laps up to the pit + ~½ lap reserve (GPRO pits once the next lap can't be completed, so extra fuel only moves the pit later); the last stint gets +6% since there's no pit behind it.</div>`;
  if (wetContingency) fsHtml += `<div style="font-size:9px;color:${VERDICT.warn};margin-top:4px;">🌦 Weather contingency — the wet windows are only ${wetContingency.bandText} rain-probability: if the track is clearly dry at any forward pit, fit ${dryCompound} instead of Rain and the fuel numbers still hold (±few L). (own heuristic)</div>`;
   fsHtml += `</div>`;
   h += fsHtml;
@@ -4759,11 +4733,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   {
   const checks = [];
     if (fuel && fuel.fromDomFuelStart) {
-    // Match the F&T Start row: the entered start fuel covers stint 1's boost laps too (v6.27.4).
-    const firstStopLap = (fuel.stopLaps && fuel.stopLaps.length) ? fuel.stopLaps[0] : (fuel.laps || 0) + 1;
-    const boostInStartChk = boostLapsList.filter(l => l < firstStopLap).length;
+    // Same number as the F&T Start row (which already carries stint 1's boost laps) - reused, not
+    // recomputed (the old recompute used a different lap boundary than the table, v6.27.7).
+    const firstStopLap = (fuel.stopLaps && fuel.stopLaps.length) ? fuel.stopLaps[0] : (fuel.laps || 0);
+    const boostInStartChk = boostLapsList.filter(l => l <= firstStopLap).length;
     const perBoostChk = (boostLapsList.length && boostExtraFuel > 0) ? Math.ceil(boostExtraFuel / boostLapsList.length) : 0;
-    const startRecChk = fuel.stint1Fuel + boostInStartChk * perBoostChk;
+    const startRecChk = fuel.startFill != null ? fuel.startFill : Math.min(TANK_MAX, fuel.stint1Fuel + boostInStartChk * perBoostChk);
     checks.push({ ok: true, text: `Start fuel: set ${startRecChk}L in Q2${boostInStartChk ? ` (incl ~${boostInStartChk * perBoostChk}L ⚡boost)` : ''}` });
     }
     else if (fuel) checks.push({ ok: false, text: `Enter start fuel in Q2: ~${fuel.fuelPerStint}L per stint` });
@@ -4773,8 +4748,9 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     checks.push({ ok: true, text: `Tyre: ${chosenTyreResult.name} (${stopText}${weatherNote})` });
     // Show fuel per stop with compound
     if (fuel && fuel.stops > 0) {
-     const fuelPerStop = fuel.stint1Fuel && fuel.stint1Fuel !== fuel.fuelPerStint ? fuel.fuelPerStint : Math.ceil(fuel.totalFuel / (fuel.stops + 1));
-     checks.push({ ok: true, text: `Fuel per stop: ${fuelPerStop}L ${chosenTyreResult.name}` });
+     // Quote the F&T table's own per-stop fills - the old even split (totalFuel / stints, e.g. 87L
+     // at Austin) contradicted the 84L / 94L rows printed above it.
+     if (fuel.stopFills && fuel.stopFills.length) checks.push({ ok: true, text: `Stop fills: ${fuel.stopFills.map(sf => `${sf.fill}L @L${sf.lap}`).join(', ')}` });
      if (fuel.tyreStops !== undefined && fuel.stops > fuel.tyreStops) {
       checks.push({ ok: false, text: `⚠️ ${fuel.stops - fuel.tyreStops} extra fuel stop(s) needed (tank max ${TANK_MAX}L)` });
      }
@@ -5208,19 +5184,6 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (trackType !== 'road' && typeData && typeData.note) {
  h += mkSection('Track Type Wear Note', `<div style="font-size:9px;color:#f59e0b;padding:4px 8px;background:#1e293b;border-radius:4px;border-left:3px solid #f59e0b;">${typeData.note}. Prioritize the affected parts above.</div>`);
   }
-  }
-
-  // Real Race Wear Data (from scraped gproanalyzer.info Season 111)
-  // Shows actual per-part wear from your last 10 races for calibration reference
-  if (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.scrapedRaceData && GPRO_DATA.scrapedRaceData.races) {
-  const races = GPRO_DATA.scrapedRaceData.races.slice(-5); // Last 5 races
-  let wearHtml = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:8px;">';
-  wearHtml += '<tr style="color:#60a5fa;font-weight:700;"><td style="padding:2px;">Race</td><td style="text-align:center;">FW</td><td style="text-align:center;">RW</td><td style="text-align:center;">UB</td><td style="text-align:center;">GB</td><td style="text-align:center;">Brk</td><td style="text-align:center;">Susp</td></tr>';
-  races.forEach(r => {
-   wearHtml += `<tr><td style="padding:2px;color:#d1d5db;">R${r.race} ${r.track.split(' ')[0]}</td><td style="text-align:center;color:#9ca3af;">${r.setup.fw}</td><td style="text-align:center;color:#9ca3af;">${r.setup.rw}</td><td style="text-align:center;color:#9ca3af;">${r.setup.ub || '?'}</td><td style="text-align:center;color:#9ca3af;">${r.setup.gb || '?'}</td><td style="text-align:center;color:#9ca3af;">${r.setup.brakes || '?'}</td><td style="text-align:center;color:#9ca3af;">${r.setup.susp || '?'}</td></tr>`;
-  });
-  wearHtml += '</table></div>';
-  h += mkSection('Recent Race Setups (Reference)', wearHtml + `<span style="font-size:8px;color:#6b7280;">Actual setups used in your last 5 races (scraped from gproanalyzer.info). Use as calibration reference for future races.</span>`);
   }
 
   // Car PHA display (power/handling/acceleration from part levels)
