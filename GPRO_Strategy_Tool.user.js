@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.28.0
+// @version 6.28.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -29,7 +29,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.7.0
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.7.1
 // @run-at document-idle
 // ==/UserScript==
 
@@ -2406,6 +2406,15 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return undefined;
  }
 
+ // Whole-race temperature = average of the 8 low/high values over the 4 race-forecast segments
+ // (missing values count as 25, as before). Used for the Race setup column and tyre wear - Heino's
+ // tyre model also takes the race-average temp ('Setup & Strategy' Y2), not the start segment.
+ function raceForecastAvgTemp(weather) {
+ let sum = 0;
+ for (let i = 1; i <= 4; i++) sum += ((parseFloat(weather[`raceQ${i}TempLow`]) || 25) + (parseFloat(weather[`raceQ${i}TempHigh`]) || 25)) / 2;
+ return sum / 4;
+ }
+
  function calcTyreStrategyGapp(track, testing, weather, car, driver, supplier, ctr, staffTd, domRaceWet) {
  const gapp = typeof GPRO_DATA !== 'undefined' ? GPRO_DATA.gapp : null;
  const trackName = track && track.trackName;
@@ -2430,7 +2439,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const wearRatingStr = track ? (track.tyreWear || 'Medium') : 'Medium';
  const wearLevelLookup = gappLookupByName(sc.trackWearLevelMap, wearRatingStr);
  const trackWearLevel = wearLevelLookup !== undefined ? wearLevelLookup : 2;
- const rTemp = weather ? ((weather.raceQ1TempLow + weather.raceQ1TempHigh) / 2 || 25) : 25;
+ const rTemp = weather ? raceForecastAvgTemp(weather) : 25;
 
  const conc = numOrDefault(driver.concentration, 100);
  const aggr = numOrDefault(driver.aggressiveness, 50);
@@ -2444,10 +2453,13 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const ctrValue = ctr || 0;
  const wearLimit = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.tyreConstants) ? GPRO_DATA.tyreConstants.wearThreshold : 15;
 
- function stopsFor(tyreTypeIdx, wetFactor) {
+ // ctFactor: compound-specific constant ^ clear-track risk (Heino 'Setup & Strategy' BO31:BO35 / BS31:BS35;
+ // GAPP's calcs.py received it but never applied it). Rain uses the WET clear-track risk in Heino,
+ // which this tool doesn't read, so it's left at 1 for Rain.
+ function stopsFor(tyreTypeIdx, wetFactor, ctFactor) {
  const productFactors = Math.pow(sc.trackWearLevelExp, trackWearLevel) * Math.pow(sc.tempExp, rTemp) * Math.pow(sc.supplierExp, supFactor) *
  Math.pow(sc.tyreTypeExp, tyreTypeIdx) * Math.pow(sc.suspensionExp, suspLvl) * Math.pow(sc.aggressivenessExp, aggr) *
- Math.pow(sc.experienceExp, exp) * Math.pow(sc.weightExp, weight);
+ Math.pow(sc.experienceExp, exp) * Math.pow(sc.weightExp, weight) * (ctFactor || 1);
  const stops = Math.ceil(trackDistanceTotal / ((productFactors * sc.baseWear * trackWearFactor * wetFactor) * ((100 - wearLimit) / 100))) - 1;
  return Math.max(0, stops);
  }
@@ -2497,7 +2509,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const weatherStops = raceProfile ? raceProfile.transitions.length : 0;
   compounds.forEach(c => {
   const isRain = c.name === 'Rain';
-  let stops = stopsFor(c.idx, c.wetFactor);
+  const ctFactor = isRain ? 1 : Math.pow(sc.wearFactors[c.idx], ctr || 0);
+  let stops = stopsFor(c.idx, c.wetFactor, ctFactor);
   // Mixed conditions: dry compounds MUST pit at each weather transition to switch compound.
   // Rain compound is already wet — no weather stops needed.
   if (weatherStops > 0 && !isRain) stops = Math.max(stops, weatherStops);
@@ -3174,23 +3187,24 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // Concentration: ~0.025% per point
  // Talent: ~0.024% per point
  // Experience: ~0.021% per point
+ // Driver factor on part wear: 0.998789138^Con x 0.998751839^Tal x 0.998707677^Exp (v6.28.1).
+ // Source: BLACK STAR RACING Heino.xlsx 'Setup & Strategy' CO25:CR28 ("Dr Concentration/Talent/
+ // Experience"); the same three constants appear in the user's MASTER.xlsx 'Season' row 2, which
+ // labels the middle input TECH INS instead of Talent - unresolved (one driver logged so far, whose
+ // Tal/TI can't separate them; Heino's labelling kept). Replaced an unsourced additive guess
+ // (1 - 0.00025c - 0.00024t - 0.00021e) that gave 0.90 for Dave Cooper vs this 0.60: S113 Austin/
+ // Bucharest observed wear ran 0.70/0.74x of the old prediction and 1.06/1.12x of this one.
  function calcDriverWearFactor(driver) {
  if (!driver) return 1.0;
  const conc = numOrDefault(driver.concentration, 100);
  const talent = numOrDefault(driver.talent, 50);
  const exp = numOrDefault(driver.experience, 50);
- // Using additive model from zero baseline
- const concEffect = conc * 0.00025;
- const talentEffect = talent * 0.00024;
- const expEffect = exp * 0.00021;
- // Total reduction (higher = less wear)
- const reduction = concEffect + talentEffect + expEffect;
- return Math.max(0.5, 1.0 - reduction);
+ return Math.pow(0.998789138, conc) * Math.pow(0.998751839, talent) * Math.pow(0.998707677, exp);
  }
 
  // Predicted whole-race wear % for one part (GAPP formula, PRIMARY wherever the track is known),
  // or null if track/data unavailable. Scaled by the race log's per-part observed/predicted median
- // once partWearCalibration() is active (S113 Austin/Bucharest ran ~0.70-0.74x of this formula).
+ // once partWearCalibration() is active (S113 Austin/Bucharest ran 1.06/1.12x of this formula).
  function gappPartRaceWear(gappWear, levelFactors, partIdx, lvl, ctr, driverFactor) {
  if (!gappWear || !levelFactors) return null;
  const clampedLvl = Math.min(9, Math.max(1, lvl || 1));
@@ -3209,7 +3223,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // its seed. The log is the tool's growing memory of what REALLY happened with this car/driver:
  // - part wear: observed vs predicted per part. Once MIN_WEAR_CAL_RACES races agree, the median
  //   observed/predicted ratio per part scales the prediction (partWearCalibration). Two races so far
- //   (S113 R3 Austin 0.70x, R4 Bucharest 0.74x, uniform across parts) - not active until a third.
+ //   (S113 R3 Austin 1.06x, R4 Bucharest 1.12x of the v6.28.1 driver factor) - not active until a third.
  // - fuel and tyres: measured per stint, shown as track memory on Race Setup. No automatic
  //   correction: GAPP's dry fuel rate matched reality at Austin, Bremgarten and Bucharest.
  // Copy/Import on the Race Log panel move the log between browsers (or back to this repo as a seed).
@@ -4414,11 +4428,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // DOM-temp block below. Uses same avg-of-8-values formula as the later authoritative copy.
   let raceTemp = 25;
   if (weather) {
-  const t1L = parseFloat(weather.raceQ1TempLow) || 25, t1H = parseFloat(weather.raceQ1TempHigh) || 25;
-  const t2L = parseFloat(weather.raceQ2TempLow) || 25, t2H = parseFloat(weather.raceQ2TempHigh) || 25;
-  const t3L = parseFloat(weather.raceQ3TempLow) || 25, t3H = parseFloat(weather.raceQ3TempHigh) || 25;
-  const t4L = parseFloat(weather.raceQ4TempLow) || 25, t4H = parseFloat(weather.raceQ4TempHigh) || 25;
-  raceTemp = ((t1L + t1H) / 2 + (t2L + t2H) / 2 + (t3L + t3H) / 2 + (t4L + t4H) / 2) / 4;
+  raceTemp = raceForecastAvgTemp(weather);
   } else if (track) {
   raceTemp = parseFloat(track.trackTemp || track.temperature) || 25;
   }
@@ -4794,6 +4804,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const q = pm.qual[lgForIntel]; const r = pm.race[lgForIntel];
  const fp = (arr, i) => (arr[i] != null) ? '$' + (arr[i] / 1e6).toFixed(2) + 'M' : '?';
  tiHtml += mkRow(`Prize money (${lgForIntel})`, `Race P1 ${fp(r, 0)} · P10 ${fp(r, 9)} · P20 ${fp(r, 19)} · Qual P1 ${fp(q, 0)}`);
+ const fsArr = pm.finalStandings && pm.finalStandings[lgForIntel];
+ if (pm.fastestLap || fsArr) tiHtml += mkRow('Bonuses', `${pm.fastestLap ? `Fastest lap ${fp([pm.fastestLap], 0)}` : ''}${fsArr ? `${pm.fastestLap ? ' · ' : ''}Season P1 ${fp(fsArr, 0)} · P10 ${fp(fsArr, 9)}` : ''}`);
  }
  if (tiHtml) {
  drHtml += `<details style="margin-top:2px;"><summary style="cursor:pointer;color:#60a5fa;font-size:10px;font-weight:700;">Track intel + prize money (${esc(trackNameForIntel || '?')})</summary>${tiHtml}<div style="font-size:9px;color:#6b7280;margin-top:2px;">From BLACK STAR RACING Heino.xlsx "GPRO Single by Jay" (v1.69.11.A) port - historical reference data, not a live formula.</div></details>`;
@@ -4839,14 +4851,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // Race temperature: matches GAPP's rTemp exactly — average of all 8 low/high values across the
  // 4 real race-forecast segments. The widget's "Qualify 2/Race start" box (domTemps.q2) is only
  // the RACE-START reading; a fixed setup serves all 4 segments, so a whole-race average is correct.
- const t1L = pTL, t1H = pTH;
- const t2L = parseFloat(weather.raceQ2TempLow) || 25;
- const t2H = parseFloat(weather.raceQ2TempHigh) || 25;
- const t3L = parseFloat(weather.raceQ3TempLow) || 25;
- const t3H = parseFloat(weather.raceQ3TempHigh) || 25;
- const t4L = parseFloat(weather.raceQ4TempLow) || 25;
- const t4H = parseFloat(weather.raceQ4TempHigh) || 25;
- raceTemp = ((t1L + t1H) / 2 + (t2L + t2H) / 2 + (t3L + t3H) / 2 + (t4L + t4H) / 2) / 4;
+ raceTemp = raceForecastAvgTemp(weather);
  // Race wet setup flag: RaceSetup.asp uses the Q2/Race-start weather box for the setup submitted
  // before the start. Prefer that live DOM indicator when present; use forecast segment 1 only when
  // the page widget is unavailable, preventing stale or rounded forecast data from selecting the
