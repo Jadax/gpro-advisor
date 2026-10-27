@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.27.8
+// @version 6.28.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -19,6 +19,7 @@
 // @match https://www.gpro.net/gb/AvailTechDirectors.asp*
 // @match https://www.gpro.net/gb/NegotiationsOverview.asp
 // @match https://www.gpro.net/gb/NegotiateSponsor.asp*
+// @match https://www.gpro.net/gb/RaceAnalysis.asp*
 // @match https://app.gpro.net/*
 // @grant GM_xmlhttpRequest
 // @grant GM_getValue
@@ -28,7 +29,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.6.5
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.7.0
 // @run-at document-idle
 // ==/UserScript==
 
@@ -366,6 +367,7 @@ if (h.includes('TrainingSession.asp')) return 'training';
   if (h.includes('NegotiationsOverview.asp')) return 'negotiations';
   if (h.includes('NegotiateSponsor.asp')) return 'negotiateSponsor';
   if (h.includes('DriverProfile.asp')) return 'driverOffer';
+  if (h.includes('RaceAnalysis.asp')) return 'raceAnalysis';
   return null;
  }
 
@@ -1892,12 +1894,15 @@ if (h.includes('TrainingSession.asp')) return 'training';
   //   without shifting the planned pit lap.
   // - The LAST stint keeps LAST_STINT_SAFETY: there's no pit behind it, so a shortfall means an
   //   unplanned stop (S113 R2 Bremgarten ran its final fill close to dry).
+  // - Pit-stint fills ROUND, not ceil (v6.28.0, S113 R4 Bucharest): at 2.57 L/lap the ceil's up to
+  //   +1 L is ~0.4 lap on top of the half-lap reserve - the 107 L start fill ran exactly 41 laps
+  //   (0% left) and pitted a lap after the planned L40.
   const LAST_STINT_SAFETY = 1.06;
   const PIT_RESERVE_LAPS = 0.5;
   const need = (from, to) => {
   if (to < from) return 0;
   let f = 0; for (let l = from; l <= to; l++) f += rateLap(l);
-  return Math.ceil(to >= laps ? f * LAST_STINT_SAFETY : f + PIT_RESERVE_LAPS * rateLap(to + 1));
+  return to >= laps ? Math.ceil(f * LAST_STINT_SAFETY) : Math.round(f + PIT_RESERVE_LAPS * rateLap(to + 1));
   };
 const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
 // Weather transitions are MANDATORY stops (compound change) — keep them always.
@@ -3183,17 +3188,191 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return Math.max(0.5, 1.0 - reduction);
  }
 
- // Computes Predicted whole-race wear % for one part, or null if track/data unavailable.
- // Own calibration stays PRIMARY here too - a numeric check at Montreal showed GAPP's wearData
- // runs a consistent ~25-30% higher than our our calibrated model-calibrated numbers across all 11
- // parts (same "systematically different, not obviously wrong, but not proven either" pattern
- // as the tyre-stop formula) - so it's exposed as a cross-check, not swapped in as primary,
- // since these numbers directly drive real-money upgrade/downgrade recommendations.
+ // Predicted whole-race wear % for one part (GAPP formula, PRIMARY wherever the track is known),
+ // or null if track/data unavailable. Scaled by the race log's per-part observed/predicted median
+ // once partWearCalibration() is active (S113 Austin/Bucharest ran ~0.70-0.74x of this formula).
  function gappPartRaceWear(gappWear, levelFactors, partIdx, lvl, ctr, driverFactor) {
  if (!gappWear || !levelFactors) return null;
  const clampedLvl = Math.min(9, Math.max(1, lvl || 1));
  const levelExp = Math.pow(levelFactors[clampedLvl - 1], ctr);
- return Math.round(gappWear.values[partIdx] * levelExp * driverFactor);
+ const cal = partWearCalibration();
+ const calFactor = (cal.active && cal.factors[partIdx] != null) ? cal.factors[partIdx] : 1;
+ return Math.round(gappWear.values[partIdx] * levelExp * driverFactor * calFactor);
+ }
+
+ // ============================================================
+ // RACE LOG + SELF-CALIBRATION (v6.28.0)
+ // ============================================================
+ // Every visit to RaceAnalysis.asp parses GPRO's own post-race report (parseRaceAnalysisText) into
+ // one compact record per season/race, stored in GM storage. Seeded records from races the user
+ // sent as screenshots live in D.raceLogSeed; a captured record with the same season/race replaces
+ // its seed. The log is the tool's growing memory of what REALLY happened with this car/driver:
+ // - part wear: observed vs predicted per part. Once MIN_WEAR_CAL_RACES races agree, the median
+ //   observed/predicted ratio per part scales the prediction (partWearCalibration). Two races so far
+ //   (S113 R3 Austin 0.70x, R4 Bucharest 0.74x, uniform across parts) - not active until a third.
+ // - fuel and tyres: measured per stint, shown as track memory on Race Setup. No automatic
+ //   correction: GAPP's dry fuel rate matched reality at Austin, Bremgarten and Bucharest.
+ // Copy/Import on the Race Log panel move the log between browsers (or back to this repo as a seed).
+ const RACE_LOG_KEY = 'gpro_race_log';
+ const MIN_WEAR_CAL_RACES = 3;
+
+ function getRaceLog() {
+ let stored = [];
+ try { stored = JSON.parse(GM_getValue(RACE_LOG_KEY, '[]')) || []; } catch (e) { logError('race log unreadable', e); }
+ const byKey = {};
+ const seed = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.raceLogSeed) || [];
+ seed.concat(stored).forEach((r) => { if (r && r.season && r.race) byKey[`${r.season}-${r.race}`] = r; });
+ return Object.values(byKey).sort((a, b) => (a.season - b.season) || (a.race - b.race));
+ }
+
+ function saveRaceRecord(rec) {
+ let stored = [];
+ try { stored = JSON.parse(GM_getValue(RACE_LOG_KEY, '[]')) || []; } catch (e) { stored = []; }
+ stored = stored.filter((r) => !(r.season === rec.season && r.race === rec.race));
+ stored.push(rec);
+ GM_setValue(RACE_LOG_KEY, JSON.stringify(stored));
+ partWearCalibration.cache = null;
+ }
+
+ // Stints from a record: stint k runs [prevPit+1 .. pitLap] (GPRO labels a stop by the lap it pits
+ // at the END of), the last one to the flag. Fuel in = start fuel / "refilled to"; fuel out = the
+ // next pit's "fuel left" (a % - at most a couple of liters at a planned pit) or the exact finish
+ // liters. Boost/wet counts come from the lap table when it was captured.
+ function raceStints(rec) {
+ const pits = (rec.pits || []).slice().sort((a, b) => a.lap - b.lap);
+ const stints = [];
+ for (let k = 0; k <= pits.length; k++) {
+ const from = k === 0 ? 1 : pits[k - 1].lap + 1;
+ const to = k < pits.length ? pits[k].lap : rec.laps;
+ if (!(to >= from)) continue;
+ const fuelIn = k === 0 ? rec.startFuel : pits[k - 1].refilledTo;
+ const fuelOut = k < pits.length ? (pits[k].fuelLeftPct || 0) / 100 * TANK_MAX : rec.finishFuel;
+ const tyreEnd = k < pits.length ? pits[k].tyreCond : rec.finishTyres;
+ const inStint = (l) => l >= from && l <= to;
+ const lapRows = (rec.lapRows || []).filter((r) => inStint(r.lap));
+ const compound = (rec.compounds && rec.compounds[k]) || (lapRows.length ? lapRows[lapRows.length - 1].tyres : null);
+ stints.push({
+ from, to, laps: to - from + 1, compound, fuelIn, fuelOut, tyreEnd,
+ fuelUsed: (fuelIn != null && fuelOut != null) ? fuelIn - fuelOut : null,
+ boostLaps: rec.boostLaps ? rec.boostLaps.filter(inStint).length : null,
+ wetLaps: lapRows.length ? lapRows.filter((r) => /rain/i.test(r.weather || '')).length : null,
+ tyrePerLap: tyreEnd != null ? (100 - tyreEnd) / (to - from + 1) : null,
+ });
+ }
+ return stints;
+ }
+
+ // Observed vs predicted race wear per part for one record. Prediction = GAPP's formula with the
+ // record's own driver, levels and clear-track risk, unrounded and UNcalibrated (so the ratio
+ // measures the raw model, not a model already corrected by earlier races).
+ function racePartWearRatios(rec) {
+ const gappWear = lookupGappTrack(rec.track, 'wearData');
+ const levelFactors = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.gapp) ? GPRO_DATA.gapp.levelFactors : null;
+ if (!gappWear || !levelFactors || !rec.partLevels || !rec.startWear || !rec.finishWear) return null;
+ const d = rec.driver || {};
+ const df = calcDriverWearFactor({ concentration: d.con, talent: d.tal, experience: d.exp });
+ const ctr = (rec.risks && rec.risks.clearDry) || 0;
+ return PART_NAMES.map((name, i) => {
+ const lvl = Math.min(9, Math.max(1, rec.partLevels[i] || 1));
+ const pred = gappWear.values[i] * Math.pow(levelFactors[lvl - 1], ctr) * df;
+ const obs = rec.finishWear[i] - rec.startWear[i];
+ // A part that hit 100% may have been capped (or broke) - its true wear is unknown.
+ const usable = obs >= 0 && rec.finishWear[i] < 100 && pred > 0;
+ return { name, lvl, obs, pred, ratio: usable ? obs / pred : null };
+ });
+ }
+
+ // Per-part median observed/predicted over the log. `active` only once MIN_WEAR_CAL_RACES races
+ // contribute - until then predictions stay pure GAPP (user decision 2026-10-24: collect first).
+ function partWearCalibration() {
+ if (partWearCalibration.cache) return partWearCalibration.cache;
+ const perPart = PART_NAMES.map(() => []);
+ let races = 0;
+ getRaceLog().forEach((rec) => {
+ const rows = racePartWearRatios(rec);
+ if (!rows) return;
+ races++;
+ rows.forEach((r, i) => { if (r.ratio != null) perPart[i].push(r.ratio); });
+ });
+ const median = (a) => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+ const factors = perPart.map((a) => (a.length >= MIN_WEAR_CAL_RACES ? median(a) : null));
+ const known = perPart.map(median).filter((v) => v != null);
+ const avg = known.length ? known.reduce((a, b) => a + b, 0) / known.length : null;
+ partWearCalibration.cache = { races, factors, active: races >= MIN_WEAR_CAL_RACES, avg };
+ return partWearCalibration.cache;
+ }
+
+ // Parses RaceAnalysis.asp from its visible TEXT (document.body.innerText), not DOM selectors: the
+ // page's markup was never inspected, but its printed labels are known from screenshots (S113 R4).
+ // Text survives cosmetic markup changes, and the same parser would accept a pasted copy of the
+ // page. Returns null unless the heading, parts levels and both wear rows were all found.
+ function parseRaceAnalysisText(text) {
+ if (!text) return null;
+ const t = text.replace(/\r/g, '');
+ const head = t.match(/Race analysis:\s*([^\n]+?)\s*\(([^)\n]+)\)\s*-\s*Season\s*(\d+)\s*-\s*Race\s*(\d+)\s*\(\s*([A-Za-z]+)/i);
+ if (!head) return null;
+ const ints = (s, n) => (s.match(/-?\d+/g) || []).slice(0, n).map(Number);
+ const pcts = (s, n) => (s.match(/(\d+)\s*%/g) || []).slice(0, n).map((x) => parseInt(x));
+ const parts = t.match(/Car parts level([\s\S]*?)Car parts wear \(at the start\)([\s\S]*?)Car parts wear \(at the finish\)([\s\S]*)/i);
+ if (!parts) return null;
+ const partLevels = ints(parts[1], 11), startWear = pcts(parts[2], 11), finishWear = pcts(parts[3], 11);
+ if (partLevels.length !== 11 || startWear.length !== 11 || finishWear.length !== 11) return null;
+ const num = (re) => { const m = t.match(re); return m ? parseInt(m[1]) : null; };
+ const rec = {
+ season: parseInt(head[3]), race: parseInt(head[4]), track: head[1].trim(), league: head[5],
+ partLevels, startWear, finishWear,
+ startFuel: num(/Start fuel:\s*(\d+)/i),
+ finishTyres: num(/Tyres condition after finish:\s*(\d+)\s*%/i),
+ finishFuel: num(/Fuel left in the car after finish:\s*(\d+)/i),
+ source: 'RaceAnalysis.asp', capturedAt: new Date().toISOString().slice(0, 10),
+ };
+ const pos = t.match(/Positions\s*Start\s*Finish\s*(\d+)\s+(\d+)/i);
+ if (pos) { rec.startPos = parseInt(pos[1]); rec.finishPos = parseInt(pos[2]); }
+ const risks = t.match(/Malfunct\w*\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/i);
+ if (risks) rec.risks = { overtake: +risks[1], defend: +risks[2], clearDry: +risks[3], clearWet: +risks[4], malf: +risks[5] };
+ const drv = t.match(/Driver attributes[\s\S]*?\bWei\b([\s\S]*?)Driver energy/i);
+ if (drv) {
+ const v = ints(drv[1].replace(/\([^)]*\)/g, ' '), 11);
+ if (v.length === 11) rec.driver = { oa: v[0], con: v[1], tal: v[2], agr: v[3], exp: v[4], tei: v[5], sta: v[6], cha: v[7], mot: v[8], rep: v[9], wei: v[10] };
+ }
+ const setup = t.match(/\bRace\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(Extra Soft|Soft|Medium|Hard|Rain)/i);
+ if (setup) rec.raceSetup = { fw: +setup[1], rw: +setup[2], eng: +setup[3], bra: +setup[4], gear: +setup[5], susp: +setup[6], tyres: setup[7] };
+ const pha = t.match(/Power\s+Handling\s+Acceleration\s+(\d+)\s+(\d+)\s+(\d+)/i);
+ if (pha) rec.carPHA = { p: +pha[1], h: +pha[2], a: +pha[3] };
+ rec.pits = [];
+ const pitRe = /Stop\s*(\d+)\s*\(\s*Lap\s*(\d+)\s*\)\s*([\s\S]*?)\s*(\d+)\s*%\s*(\d+)\s*%\s*(\d+)\s*liters?\s*([\d.]+)\s*s/gi;
+ let m;
+ while ((m = pitRe.exec(t))) rec.pits.push({ lap: +m[2], reason: m[3].replace(/\s+/g, ' ').trim(), tyreCond: +m[4], fuelLeftPct: +m[5], refilledTo: +m[6], pitTime: parseFloat(m[7]) });
+ // Lap table rows: "12 [B] 1:23.269 3 Medium Cloudy 33° 60% -". B marks a boost lap.
+ rec.lapRows = [];
+ const lapRe = /^\s*(\d{1,3})\s*(B)?\s+(\d+:\d{2}\.\d{3}|-)\s+(\d{1,2})\s+(Extra Soft|Soft|Medium|Hard|Rain)\s+([A-Za-z][A-Za-z ]*?)\s+(-?\d+)\s*°\s+(\d+)\s*%/gim;
+ while ((m = lapRe.exec(t))) rec.lapRows.push({ lap: +m[1], boost: !!m[2], pos: +m[4], tyres: m[5], weather: m[6].trim(), temp: +m[7], hum: +m[8] });
+ const raced = rec.lapRows.filter((r) => r.lap > 0);
+ rec.laps = raced.length ? Math.max(...raced.map((r) => r.lap)) : null;
+ rec.boostLaps = raced.length ? raced.filter((r) => r.boost).map((r) => r.lap) : null;
+ if (raced.length) {
+ const temps = raced.map((r) => r.temp);
+ rec.temp = { min: Math.min(...temps), max: Math.max(...temps), avg: Math.round(temps.reduce((a, b) => a + b, 0) / temps.length * 10) / 10 };
+ rec.wetLaps = raced.filter((r) => /rain/i.test(r.weather)).length;
+ }
+ return rec;
+ }
+
+ // One-line memory of earlier races at this track (shown on Race Setup). null when none logged.
+ function trackMemoryLine(trackName) {
+ if (!trackName) return null;
+ const key = (lookupGappTrack(trackName, 'wearData') || {}).key || trackName;
+ const recs = getRaceLog().filter((r) => ((lookupGappTrack(r.track, 'wearData') || {}).key || r.track) === key);
+ if (!recs.length) return null;
+ return recs.map((r) => {
+ const st = raceStints(r);
+ const byComp = {};
+ st.filter((s) => s.tyrePerLap != null).forEach((s) => { const c = s.compound || '?'; byComp[c] = byComp[c] || { wear: 0, laps: 0 }; byComp[c].wear += 100 - s.tyreEnd; byComp[c].laps += s.laps; });
+ const tyre = Object.keys(byComp).map((c) => `${c} ${(byComp[c].wear / byComp[c].laps).toFixed(1)}%/lap`).join(', ');
+ const fuel = st.filter((s) => s.fuelUsed != null && s.laps > 0);
+ const totF = fuel.reduce((a, s) => a + s.fuelUsed, 0), totL = fuel.reduce((a, s) => a + s.laps, 0);
+ return `S${r.season} R${r.race}: ${st.length - 1} stop${st.length - 1 !== 1 ? 's' : ''}${r.startPos ? `, P${r.startPos}→P${r.finishPos}` : ''}${totL ? `, ${(totF / totL).toFixed(2)} L/lap` : ''}${tyre ? `, ${tyre}` : ''}`;
+ }).join(' · ');
  }
 
 
@@ -4458,6 +4637,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   fuel.carriedTotal = planTotal;
   fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">Plan carries ~${planTotal}L (fills above, ⚡boost included) over ${fuel.stops} stop${fuel.stops !== 1 ? 's' : ''} · dry ${fuel.fuelPerLap}L/lap. Max tank ${TANK_MAX}L. Each fill covers its laps up to the pit + ~½ lap reserve (GPRO pits once the next lap can't be completed, so extra fuel only moves the pit later); the last stint gets +6% since there's no pit behind it.</div>`;
  if (wetContingency) fsHtml += `<div style="font-size:9px;color:${VERDICT.warn};margin-top:4px;">🌦 Weather contingency — the wet windows are only ${wetContingency.bandText} rain-probability: if the track is clearly dry at any forward pit, fit ${dryCompound} instead of Rain and the fuel numbers still hold (±few L). (own heuristic)</div>`;
+  const memLine = trackMemoryLine(trackName);
+  if (memLine) fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">📒 Your history here (race log): ${esc(memLine)}</div>`;
   fsHtml += `</div>`;
   h += fsHtml;
   }
@@ -5121,6 +5302,16 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  }
  recsHtml += mkRec(text, rc);
  });
+  const wearCal = partWearCalibration();
+  recsHtml += `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Wear model: GAPP${wearCal.active ? ` × your race-log calibration (${wearCal.races} races, avg ${wearCal.avg.toFixed(2)}×)` : ` (race-log calibration collecting: ${wearCal.races}/${MIN_WEAR_CAL_RACES} races${wearCal.avg != null ? `, your parts have worn ${wearCal.avg.toFixed(2)}× of it so far` : ''} - visit each Race Analysis page to log it)`}.</div>`;
+  // Effective car level from total P/H/A (experienced-manager rule of thumb, via the user
+  // 2026-10-27): an all-L1 car has 13 each of P/H/A, and every +39 CCP (testing included) is
+  // worth one more car level - so level = (P+H+A)/39.
+  const phaSum = ['carPower', 'carHandl', 'carAccel'].map(k => parseInt(car[k])).filter(v => v > 0);
+  if (phaSum.length === 3) {
+  const tot = phaSum.reduce((a, b) => a + b, 0);
+  recsHtml += `<div style="font-size:9px;color:#6b7280;">Car P/H/A ${phaSum.join('/')} = ${tot} → effective car level ≈ ${(tot / 39).toFixed(1)} (all-L1 car = 13/13/13; each +39 CCP from testing ≈ one extra level - community rule of thumb).</div>`;
+  }
   h += mkSection('Recommendations', recsHtml);
   // Summary of parts not needing action
   const okParts = analysis.parts.filter(p => !analysis.recs.find(r => r.part.name === p.name) && !(analysis.infoOnly || []).find(i => i.name === p.name));
@@ -5781,12 +5972,78 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     facHtml += `<tr><td style="padding:2px;color:#d1d5db;">${f.label}</td><td style="text-align:center;color:#9ca3af;">L${f.val}</td><td style="text-align:center;color:#9ca3af;">L${f.target}</td><td style="text-align:center;color:${f.gap > 5 ? '#ef4444' : '#f59e0b'};">+${f.gap}</td><td style="text-align:center;color:#f59e0b;">${f.totalCost != null ? '$' + f.totalCost.toLocaleString() : '?'}</td></tr>`;
    });
    facHtml += '</table></div>';
+   // Affordability against the live cash balance (refreshed from gpro.asp / UpdateCar visits).
+   const knownCosts = facList.filter(f => f.totalCost != null);
+   const totalToTargets = knownCosts.reduce((a, f) => a + f.totalCost, 0);
+   const cashNow = (getCachedCarData() || {}).cash;
+   if (knownCosts.length) {
+    const short = cashNow != null && cashNow > 0 ? totalToTargets - cashNow : null;
+    facHtml += `<div style="font-size:10px;margin-top:4px;color:${short == null ? '#9ca3af' : short <= 0 ? '#10b981' : '#f59e0b'};">All targets${knownCosts.length < facList.length ? ' (priced ones)' : ''}: $${totalToTargets.toLocaleString()}${short == null ? '' : short <= 0 ? ` — affordable now (cash $${cashNow.toLocaleString()})` : ` — $${short.toLocaleString()} short of cash $${cashNow.toLocaleString()}; do them top-down as cash allows`}</div>`;
+   }
    h += mkSection('Facility Upgrade Priority', facHtml + `<span style="font-size:9px;color:#6b7280;">Sorted by gap to league target. Cost = the page's own price to go straight to the target level (? = dropdown not readable). Training cap = average of the ${facilities.length} facilities, so each facility level adds ~${(1/facilities.length).toFixed(2)} to it. Upgrades add per-race maintenance too.</span>`);
   }
   }
 
   body(h);
   }
+
+ // ============================================================
+ // RENDER: RACE LOG (RaceAnalysis.asp)
+ // ============================================================
+ // Captures the race on view into the race log (see RACE LOG + SELF-CALIBRATION) and shows how the
+ // tool's predictions compared with what happened. Kept short: capture status, part wear vs
+ // prediction, per-stint fuel/tyres, calibration status, Copy/Import.
+ function renderRaceAnalysis() {
+ const rec = parseRaceAnalysisText(document.body ? document.body.innerText : '');
+ let h = '';
+ if (!rec) {
+ h += mkRec('Couldn\'t read this race analysis (the text parser hasn\'t matched this page layout). Nothing was logged - please send a screenshot so the parser can be fixed.', 'warn');
+ } else {
+ saveRaceRecord(rec);
+ h += mkRec(`✅ Logged S${rec.season} R${rec.race} ${esc(rec.track)}${rec.startPos ? ` — P${rec.startPos} → P${rec.finishPos}` : ''}. ${rec.lapRows.length ? '' : 'Lap table not read (fuel/tyre stints may be incomplete).'}`, 'good');
+ const rows = racePartWearRatios(rec);
+ if (rows) {
+ let t = '<table style="width:100%;border-collapse:collapse;font-size:10px;"><tr style="color:#60a5fa;font-weight:700;"><td>Part</td><td style="text-align:center;">Lvl</td><td style="text-align:center;">Wear</td><td style="text-align:center;">GAPP pred</td><td style="text-align:center;">Obs/pred</td></tr>';
+ rows.forEach((r) => {
+ const c = r.ratio == null ? '#6b7280' : Math.abs(r.ratio - 1) <= 0.1 ? VERDICT.good : VERDICT.warn;
+ t += `<tr><td style="color:#d1d5db;">${r.name}</td><td style="text-align:center;color:#9ca3af;">L${r.lvl}</td><td style="text-align:center;color:#f9fafb;">${r.obs}%</td><td style="text-align:center;color:#9ca3af;">${r.pred.toFixed(1)}%</td><td style="text-align:center;color:${c};">${r.ratio == null ? '—' : r.ratio.toFixed(2) + '×'}</td></tr>`;
+ });
+ t += '</table>';
+ h += mkSection('Part wear vs prediction', t + `<span style="font-size:9px;color:#6b7280;">Prediction = GAPP track wear × level factor^CTR (${(rec.risks && rec.risks.clearDry) || 0}) × driver factor, before any calibration.</span>`);
+ } else {
+ h += mkRec(`No GAPP wear data for ${esc(rec.track)} - part wear logged but not compared.`, 'info');
+ }
+ const st = raceStints(rec);
+ if (st.length) {
+ let t = '<table style="width:100%;border-collapse:collapse;font-size:10px;"><tr style="color:#60a5fa;font-weight:700;"><td>Stint</td><td>Tyre</td><td style="text-align:center;">Fuel</td><td style="text-align:center;">L/lap</td><td style="text-align:center;">Tyre left</td></tr>';
+ st.forEach((s) => {
+ t += `<tr><td style="color:#d1d5db;">L${s.from}–${s.to}</td><td style="color:#d1d5db;">${esc(s.compound || '?')}</td><td style="text-align:center;color:#9ca3af;">${s.fuelIn != null ? s.fuelIn + 'L' : '?'}${s.boostLaps ? ` ⚡${s.boostLaps}` : ''}</td><td style="text-align:center;color:#f9fafb;">${s.fuelUsed != null ? (s.fuelUsed / s.laps).toFixed(2) : '—'}</td><td style="text-align:center;color:#f9fafb;">${s.tyreEnd != null ? s.tyreEnd + '%' : '—'}${s.tyrePerLap != null ? ` <span style="color:#6b7280;">(${s.tyrePerLap.toFixed(1)}%/lap)</span>` : ''}</td></tr>`;
+ });
+ t += '</table>';
+ h += mkSection('Fuel & tyres per stint', t + '<span style="font-size:9px;color:#6b7280;">L/lap includes boost laps (⚡). Fuel left at a pit is a % of the tank, so mid-race stints can be off by a liter or two.</span>');
+ }
+ }
+ const cal = partWearCalibration();
+ const log = getRaceLog();
+ const avgTxt = cal.avg != null ? ` Median observed/predicted so far: ${cal.avg.toFixed(2)}×.` : '';
+ h += mkSection('Calibration',
+ mkRow('Races logged', `${log.length}`) +
+ mkRow('Part-wear correction', cal.active ? `<span style="color:${VERDICT.good};">active (${cal.races} races)</span>` : `<span style="color:${VERDICT.warn};">collecting (${cal.races}/${MIN_WEAR_CAL_RACES} races)</span>`) +
+ `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Once ${MIN_WEAR_CAL_RACES} races with GAPP wear data are logged, the Car Advisor and Race Setup scale each part's GAPP wear by its median observed/predicted ratio.${avgTxt} Fuel and tyres are tracked for comparison only - GAPP's fuel rate already matched your last races.</div>` +
+ `<div style="display:flex;gap:6px;margin-top:8px;"><button id="gpro-racelog-copy" style="flex:1;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;">Copy log (JSON)</button><button id="gpro-racelog-import" style="flex:1;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;">Import log</button></div>`);
+ body(h);
+ wireCopyButton(document.getElementById('gpro-racelog-copy'), () => JSON.stringify(getRaceLog(), null, 1));
+ document.getElementById('gpro-racelog-import')?.addEventListener('click', () => {
+ const raw = prompt('Paste a race log (JSON copied from another browser):');
+ if (!raw) return;
+ try {
+ const recs = JSON.parse(raw);
+ if (!Array.isArray(recs)) throw new Error('expected a list of races');
+ recs.filter((r) => r && r.season && r.race && Array.isArray(r.finishWear)).forEach(saveRaceRecord);
+ renderRaceAnalysis();
+ } catch (e) { alert('Import failed: ' + e.message); }
+ });
+ }
 
  // ============================================================
  // RENDER: TESTING (Testing.asp)
@@ -6342,6 +6599,7 @@ staff: 'Staff Advisor',
    negotiations: 'Sponsor Advisor',
    negotiateSponsor: 'Sponsor Negotiation Advisor',
    driverOffer: 'Driver Offer Advisor',
+   raceAnalysis: 'Race Log',
   };
  createPanel(PAGE_TITLES[page] || 'GPRO Strategy Tool');
  // Show loading progress
@@ -6445,6 +6703,8 @@ training: 'Parsing driver training data...',
    renderNegotiateSponsor();
    } else if (page === 'driverOffer') {
    renderDriverOffer();
+   } else if (page === 'raceAnalysis') {
+   renderRaceAnalysis();
    }
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad') +
@@ -7286,7 +7546,10 @@ training: 'Parsing driver training data...',
  // (already normalized to a 0-1 fraction per attribute via Math.min(1, v/250) below) never
  // carried, so every score divided by ~250x too much and rounded to 0 for every candidate - found
  // live via a screenshot showing "Fit 0" on every row, making the "Top Pick" callout meaningless.
- const maxWeighted = priorityEntries.reduce((s, [, info]) => s + (maxP - info.priority + 1), 0);
+ // An attribute's own `prefer` (D.driverSelection, e.g. Amateur techInsight 'low') overrides the
+ // filter field's direction; prefer:'any' leaves it out of the score entirely.
+ const scored = priorityEntries.filter(([, info]) => info.prefer !== 'any');
+ const maxWeighted = scored.reduce((s, [, info]) => s + (maxP - info.priority + 1), 0);
  // Direction bug fixed 2026-08-12 (same day, found while answering "what all needs to be taken
  // into account"): every attribute was normalized as "higher raw value = better fit" - backwards
  // for aggressiveness/stamina, both documented "keep low" attributes (Rookie/Amateur targets
@@ -7299,12 +7562,13 @@ training: 'Parsing driver training data...',
  // don't drop it from a call site without a good reason.
  const attrFieldDefs = filterFieldsFor(idKey || 'driId');
  let hit = 0;
- priorityEntries.forEach(([key, info]) => {
+ scored.forEach(([key, info]) => {
   const v = stats[key];
   if (typeof v !== 'number') return;
   const fieldDef = attrFieldDefs.find(f => f.key === key);
   const frac = Math.min(1, Math.max(0, v / 250));
-  const normalized = (fieldDef && fieldDef.dir === 'max') ? (1 - frac) : frac;
+  const keepLow = info.prefer ? info.prefer === 'low' : !!(fieldDef && fieldDef.dir === 'max');
+  const normalized = keepLow ? (1 - frac) : frac;
   hit += normalized * (maxP - info.priority + 1);
  });
  let base = maxWeighted > 0 ? (hit / maxWeighted) * 100 : 0;
@@ -7330,7 +7594,11 @@ training: 'Parsing driver training data...',
  // available proxy - a heuristic, not a verified game mechanic.
  const talentPenaltyScale = age > 0 ? Math.max(0.2, Math.min(1, 1 - (age - 22) * 0.045)) : 1;
  const talent = typeof stats.talent === 'number' ? stats.talent : null;
- if (talent != null && talent < 150) base -= (150 - talent) * 0.3 * talentPenaltyScale;
+ // Red-flag threshold = the league's own talent floor (Rookie 150, Amateur 110 since 2026-10-27);
+ // 150 only when the league entry has no numeric talent target.
+ const talentEntry = priorityEntries.find(([k]) => k === 'talent');
+ const talentFloor = (talentEntry && parseMinFromTarget(talentEntry[1].target)) || 150;
+ if (talent != null && talent < talentFloor) base -= (talentFloor - talent) * 0.3 * talentPenaltyScale;
  // Age penalty: drivers too old are a worse long-term bet (pitwall -2/yr). Ideal age ~28.
  if (age > 0) base -= Math.max(0, age - 28) * 2;
  // Weight penalty: heavier drivers wear tyres/car faster (pitwall -0.5/kg over 78 ideal).

@@ -172,14 +172,16 @@ Rookie: {
  // FACILITY TARGETS PER LEAGUE
  // ============================================================
  facilityTargets: {
+ // Rookie: user's own plan (2026-10-27) - Pitstop Training Center + Commercial to L20 (the
+ // Rookie facility cap), every other facility to L5, budget permitting.
  Rookie: {
- 'Pitstop Training Center': 5,
- 'Commercial': 5,
- 'Engineering': 0,
- 'R&D Workshop': 0,
- 'R&D Design': 0,
- 'Lab': 0,
- 'Windtunnel': 0,
+ 'Pitstop Training Center': 20,
+ 'Commercial': 20,
+ 'Engineering': 5,
+ 'R&D Workshop': 5,
+ 'R&D Design': 5,
+ 'Lab': 5,
+ 'Windtunnel': 5,
  },
  Amateur: {
  'Pitstop Training Center': 20,
@@ -779,14 +781,20 @@ Rookie: {
   maxSalary: 2500000,
   maxAge: 37,
   attributes: {
-  concentration: { target: 'as high as affordable', priority: 1, note: 'Consistency + error reduction. No trustworthy numeric floor sourced (only ~20% of max-OA Amateur drivers cleared the old "200+"). Train toward 200 via Yoga once owned.' },
-  talent: { target: '200+', priority: 2, note: 'Raw speed, untrainable; market median ~205, prefer high. Real bug fixed 2026-08-12: the sourced floor used to read 60, far below this same note\'s own ~205 median - fixed to actually match it.' },
-  experience: { target: '90-150', priority: 3, note: 'Grows +1/race; strategy, tyre management, setup precision' },
-  techInsight: { target: '80-150', priority: 4, note: 'Setup precision, margin of acceptance, fuel. Train toward 125 via Technical training' },
-  aggressiveness:{ target: '0-49', priority: 5, note: 'Keep low to reduce wear; 100 via Ninja training if raising intentionally' },
-  stamina: { target: '0-45', priority: 6, note: 'Train toward 100 via Fitness Class + Testing (2x 50 laps = +5 stamina)' },
-  charisma: { target: '0-250', priority: 7, note: 'Sponsor income boost' },
-  motivation: { target: '0-250', priority: 8, note: 'Affects qualifying/training speed; volatile (spikes with results)' },
+  // Amateur targets replaced 2026-10-27 with experienced-manager guidance (relayed by the user):
+  // Con 150+, Tal 110+, Exp 120+, Sta 85+, Agr "some, but zero is fine", TechI/Cha/Mot "as low as
+  // possible". Rationale: driver OA is CAPPED (Amateur 110), so OA points spent on TechI/Charisma/
+  // Motivation are points not spent on the attributes that make race pace. `prefer` (read by
+  // recruitmentScore) overrides the filter field's direction: 'low' = lower scores better, 'any' =
+  // left out of the score. Those carry no numeric floor, so the filter bar leaves them blank.
+  concentration: { target: '150+', priority: 1, note: 'Consistency + error reduction (experienced-manager floor for Amateur).' },
+  talent: { target: '110+', priority: 2, note: 'Raw speed, untrainable - market pick is the only chance to get it.' },
+  experience: { target: '120+', priority: 3, note: 'Grows +1/race; strategy, tyre management, setup precision.' },
+  stamina: { target: '85+', priority: 4, note: 'Energy over a race distance - matters once races get longer and closer.' },
+  aggressiveness:{ target: 'some, but zero is fine', priority: 5, prefer: 'any', note: 'Not scored - zero is fine per the same guidance.' },
+  techInsight: { target: 'as low as possible', priority: 6, prefer: 'low', note: 'OA cap: points here crowd out pace attributes.' },
+  charisma: { target: 'as low as possible', priority: 7, prefer: 'low', note: 'OA cap: points here crowd out pace attributes.' },
+  motivation: { target: 'as low as possible', priority: 8, prefer: 'low', note: 'Guidance says zero; volatile anyway (spikes with results).' },
   },
   budget: 'Balance car upgrades (L5-7) with driver development. Never go into debt.',
  },
@@ -1777,5 +1785,31 @@ driverAttributeLeaguePriority: {
   "Zandvoort": {"Race Analysis":{"total":986,"rookie":132,"amateur":594,"pro":229,"master":30,"elite":1},"Pre-Race update":{"total":41,"rookie":14,"amateur":17,"pro":8,"master":2,"elite":0},"Keep on track":{"rookie":0.0753,"amateur":0.0376,"pro":0.0211,"master":0.0313,"elite":0},"Push a little":{"rookie":0.3288,"amateur":0.18,"pro":0.0549,"master":0,"elite":0},"Push a lot":{"rookie":0.3219,"amateur":0.3584,"pro":0.3797,"master":0.25,"elite":0},"Push to limit":{"rookie":0.274,"amateur":0.4239,"pro":0.5443,"master":0.7188,"elite":1},"DM (sec)":{"rookie":0.525,"amateur":0.244,"pro":0.117,"master":0.105,"elite":0},"OT":{"rookie":21.49,"amateur":27.34,"pro":29.14,"master":19.97,"elite":100},"DF":{"rookie":21.68,"amateur":27.97,"pro":33.62,"master":34.03,"elite":100},"CT (dry)":{"rookie":16.32,"amateur":22.52,"pro":33.13,"master":52.93,"elite":0},"CT (malf)":{"rookie":6.23,"amateur":10.63,"pro":15.43,"master":27.77,"elite":0},"CTd >50":{"rookie":0.0303,"amateur":0.1178,"pro":0.3188,"master":0.6333,"elite":0},"1 stop":{"rookie":0.1591,"amateur":0.2525,"pro":0.1878,"master":0.2333,"elite":1},"2 stops":{"rookie":0.6061,"amateur":0.6077,"pro":0.6987,"master":0.7333,"elite":0},"3 stops":{"rookie":0.1818,"amateur":0.1145,"pro":0.1048,"master":0.0333,"elite":0},"4 stops":{"rookie":0.0227,"amateur":0.0152,"pro":0.0087,"master":0,"elite":0},"5 stops":{"rookie":0,"amateur":0.0067,"pro":0,"master":0,"elite":0},"Driver Mistake (avg)":{"rookie":0.39,"amateur":1.05,"pro":1.24,"master":1.1,"elite":1}},
   "Zolder": {"Race Analysis":{"total":1754,"rookie":249,"amateur":1090,"pro":365,"master":47,"elite":3},"Pre-Race update":{"total":60,"rookie":24,"amateur":30,"pro":6,"master":0,"elite":0},"Keep on track":{"rookie":0.1472,"amateur":0.055,"pro":0.0135,"master":0.0426,"elite":0},"Push a little":{"rookie":0.317,"amateur":0.1901,"pro":0.0946,"master":0,"elite":0},"Push a lot":{"rookie":0.2906,"amateur":0.3559,"pro":0.427,"master":0.4894,"elite":0.3333},"Push to limit":{"rookie":0.2453,"amateur":0.3991,"pro":0.4649,"master":0.4681,"elite":0.6667},"DM (sec)":{"rookie":0.482,"amateur":0.247,"pro":0.099,"master":0.047,"elite":0.14},"OT":{"rookie":21.76,"amateur":26.22,"pro":24.41,"master":21.13,"elite":19.67},"DF":{"rookie":21.18,"amateur":29.22,"pro":33.25,"master":42.85,"elite":53.33},"CT (dry)":{"rookie":17.2,"amateur":27.25,"pro":38.85,"master":40.06,"elite":76.67},"CT (malf)":{"rookie":8.34,"amateur":12.1,"pro":19.58,"master":24.79,"elite":70},"CTd >50":{"rookie":0.0402,"amateur":0.1954,"pro":0.3918,"master":0.4255,"elite":0.6667},"1 stop":{"rookie":0.1084,"amateur":0.1908,"pro":0.1644,"master":0.1702,"elite":0},"2 stops":{"rookie":0.498,"amateur":0.4917,"pro":0.5726,"master":0.5319,"elite":0.3333},"3 stops":{"rookie":0.2731,"amateur":0.2532,"pro":0.2301,"master":0.2766,"elite":0.3333},"4 stops":{"rookie":0.0803,"amateur":0.056,"pro":0.0274,"master":0,"elite":0.3333},"5 stops":{"rookie":0.004,"amateur":0.0037,"pro":0,"master":0.0213,"elite":0},"Driver Mistake (avg)":{"rookie":0.54,"amateur":1.37,"pro":1.48,"master":1.17,"elite":0.67}},
   },
+
+ // ============================================================
+ // RACE LOG SEED (read by getRaceLog - see RACE LOG + SELF-CALIBRATION in the userscript)
+ // ============================================================
+ // Races transcribed from the user's own GPRO race-analysis screenshots, so calibration starts
+ // with real data. A record captured live on RaceAnalysis.asp for the same season/race replaces
+ // its seed. Austin: boost laps were not transcribed (null = unknown, not zero).
+ raceLogSeed: [
+ { season: 113, race: 3, track: 'Austin', league: 'Rookie', laps: 56, source: 'screenshot 2026-10-24',
+ driver: { oa: 89, con: 174, tal: 130, agr: 0, exp: 110, tei: 94, sta: 6, cha: 81, mot: 74, rep: 0, wei: 86 },
+ risks: { clearDry: 0 }, startPos: 3, finishPos: 3,
+ partLevels: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+ startWear: [39, 27, 28, 29, 52, 33, 23, 36, 39, 56, 20],
+ finishWear: [50, 49, 46, 47, 65, 45, 35, 54, 61, 66, 30],
+ startFuel: 88, finishFuel: 11, finishTyres: 33, compounds: ['Medium', 'Medium', 'Medium'], boostLaps: null,
+ pits: [{ lap: 19, reason: 'No more fuel was left', tyreCond: 33, fuelLeftPct: 1, refilledTo: 84 }, { lap: 37, reason: 'No more fuel was left', tyreCond: 35, fuelLeftPct: 2, refilledTo: 94 }] },
+ { season: 113, race: 4, track: 'Bucharest Ring', league: 'Rookie', laps: 80, source: 'screenshot 2026-10-27',
+ driver: { oa: 91, con: 174, tal: 130, agr: 0, exp: 111, tei: 94, sta: 7, cha: 82, mot: 100, rep: 0, wei: 85 },
+ risks: { overtake: 30, defend: 45, clearDry: 0, clearWet: 0, malf: 10 }, startPos: 3, finishPos: 2,
+ partLevels: [1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1],
+ startWear: [50, 0, 46, 47, 65, 45, 35, 54, 0, 66, 30],
+ finishWear: [69, 38, 65, 67, 89, 62, 50, 82, 35, 87, 47],
+ startFuel: 107, finishFuel: 9, finishTyres: 34, compounds: ['Medium', 'Medium'], boostLaps: [2, 38, 78],
+ temp: { min: 30, max: 36 }, wetLaps: 0, raceSetup: { fw: 380, rw: 406, eng: 698, bra: 789, gear: 571, susp: 791, tyres: 'Medium' }, carPHA: { p: 19, h: 16, a: 15 },
+ pits: [{ lap: 41, reason: 'No more fuel was left', tyreCond: 30, fuelLeftPct: 0, refilledTo: 110, pitTime: 30.859 }] },
+ ],
 
 };
