@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.30.1
+// @version 6.30.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -26,6 +26,7 @@
 // @grant GM_setValue
 // @grant GM_registerMenuCommand
 // @grant GM_setClipboard
+// @grant unsafeWindow
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
@@ -6043,15 +6044,19 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return { form, missing, set };
  }
 
- // Posts the form as if its own button was pressed: the button's name/value goes along as a hidden
- // field (form.submit() skips onsubmit validation/confirm dialogs AND the submitter itself).
+ // Submits the way a click does: requestSubmit(button) runs the page's own onsubmit (e.g. Q1's
+ // SubmitForm -> validateForm, which then DISABLES Drive lap, so a real click never sends
+ // `DriveLap`) and builds the same form data a browser would. v6.29-6.30 instead appended a hidden
+ // DriveLap=Drive lap and called form.submit(); GPRO accepted the request but drove no lap
+ // (S113 R6 Q1, 2026-10-31) - the first real autopilot post. The button's own onclick (UpdateCar's
+ // total check, Training's confirm) isn't fired by requestSubmit; page dialogs inside the frame are
+ // swallowed and their text reported (autopilotFrameHook).
  function submitPlannedForm(form, submitName) {
  const btn = form.elements[submitName];
- if (btn && btn.disabled) return `the page's "${btn.value || submitName}" button is disabled`;
- const hidden = form.ownerDocument.createElement('input');
- hidden.type = 'hidden'; hidden.name = submitName; hidden.value = btn ? btn.value : '1';
- form.appendChild(hidden);
- HTMLFormElement.prototype.submit.call(form);
+ if (!btn) return `the page has no "${submitName}" button`;
+ if (btn.disabled) return `the page's "${btn.value || submitName}" button is disabled`;
+ if (typeof form.requestSubmit === 'function') form.requestSubmit(btn);
+ else btn.click();
  return null;
  }
 
@@ -6061,8 +6066,19 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  let job;
  try { job = JSON.parse(window.name.slice(AUTO_FRAME_PREFIX.length)); } catch (e) { return; }
  const report = (r) => { try { window.parent.postMessage(Object.assign({ gproAutopilot: true, id: job.id, step: job.step }, r), location.origin); } catch (e) { logError('autopilot report failed', e); } };
+ // A hidden frame must never pop a dialog at the user: alerts (validation errors) are captured
+ // and reported, confirms answered yes (the user switched this step on).
+ const dialogs = [];
+ try {
+ const pageWin = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+ pageWin.alert = (m) => { dialogs.push(String(m)); };
+ pageWin.confirm = (m) => { dialogs.push(String(m)); return true; };
+ } catch (e) { logError('dialog override failed', e); }
  if (job.stage === 'submitted') {
- report({ ok: true, posted: true, page: location.pathname.split('/').pop(), text: (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').slice(0, 400) });
+ // First message-looking line on the result page (GPRO's notices), for the activity log.
+ const msgEl = Array.from(document.querySelectorAll('.error, .errormsg, .notice, .warning, font[color], .alert, p, td'))
+ .map((e) => e.textContent.replace(/\s+/g, ' ').trim()).find((t) => t.length > 8 && t.length < 220 && /(not |can't|cannot|error|invalid|must|already|only|success|saved|updated|confirmed)/i.test(t));
+ report({ ok: true, posted: true, page: location.pathname.split('/').pop(), pageMsg: msgEl || '' });
  return;
  }
  const plan = PAGE_PLANS[job.step];
@@ -6075,8 +6091,15 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  job.stage = 'submitted';
  window.name = AUTO_FRAME_PREFIX + JSON.stringify(job);
  const err = submitPlannedForm(r.form, plan.submit);
- if (err) { job.stage = 'fill'; window.name = AUTO_FRAME_PREFIX + JSON.stringify(job); report({ ok: false, msg: err }); }
- else report({ ok: true, posting: true, msg: plan.summary, sig: plan.sig });
+ if (err) { job.stage = 'fill'; window.name = AUTO_FRAME_PREFIX + JSON.stringify(job); report({ ok: false, msg: err }); return; }
+ report({ ok: true, posting: true, msg: plan.summary, sig: plan.sig, fields: plan.fields, meta: plan.meta || null });
+ // If the page's own validation stopped the submit, the frame never navigates - say why. The
+ // timer dies with the page once the post is under way (pagehide), so a slow reply isn't a failure.
+ const stuck = setTimeout(() => {
+ job.stage = 'fill'; window.name = AUTO_FRAME_PREFIX + JSON.stringify(job);
+ report({ ok: false, msg: `the page didn't submit${dialogs.length ? ': ' + dialogs.join(' / ').replace(/\s+/g, ' ').slice(0, 200) : ''}` });
+ }, 8000);
+ window.addEventListener('pagehide', () => clearTimeout(stuck));
  }
 
  // ---- top window: run one step in a hidden frame ----
@@ -6092,7 +6115,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const d = e.data;
  if (!d || !d.gproAutopilot || d.id !== id || e.origin !== location.origin) return;
  if (d.posting) { posting = d; return; } // wait for the page the POST returns
- done(d.posted ? Object.assign({}, posting, d) : d);
+ done(d.posted ? Object.assign({}, posting, d, { ok: true }) : d);
  };
  const timer = setTimeout(() => done({ ok: false, msg: posting ? 'posted, but the result page never reported back' : 'timed out waiting for the page' }), PILOT_FRAME_TIMEOUT_MS);
  window.addEventListener('message', onMsg);
@@ -6214,6 +6237,32 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (added) say(`📒 Race log: +${added} race${added !== 1 ? 's' : ''} from your history (${queue.length} still queued)`);
  }
 
+ // ---- did it really happen? (read back from GPRO's own pages) ----
+ // q1: Q2's "Drive lap" is disabled until Q1 has been driven (live 2026-10-30); q2: RaceSetup's
+ // "Confirm settings" is disabled until Q2; car/facilities: their "Undo ..." button only enables
+ // after an update this race; race: the saved fields equal the plan; testing: laps done went up.
+ async function fetchDoc(path) { return new DOMParser().parseFromString(await fetchPageHTML(path), 'text/html'); }
+ function buttonEnabled(doc, name) { const b = doc.querySelector(`[name="${name}"]`); return !!b && !b.disabled; }
+ const STEP_DONE_CHECKS = {
+ q1: async () => buttonEnabled(await fetchDoc('Qualify2.asp'), 'DriveLap'),
+ q2: async () => buttonEnabled(await fetchDoc('RaceSetup.asp'), 'btnConfirmSettings'),
+ car: async () => buttonEnabled(await fetchDoc('UpdateCar.asp'), 'btnUndoUpdateCar'),
+ facilities: async () => buttonEnabled(await fetchDoc('StaffAndFacilities.asp'), 'btnUndoFacilitiesUpdate'),
+ };
+ async function verifyPost(step, r) {
+ if (STEP_DONE_CHECKS[step.key]) return STEP_DONE_CHECKS[step.key]();
+ if (step.key === 'race' && r.fields) {
+ const form = (await fetchDoc('RaceSetup.asp')).forms.formQual;
+ if (!form) return false;
+ return Object.keys(r.fields).every((k) => { const el = form.elements[k]; const v = r.fields[k]; return !el || typeof v === 'object' || String(el.value) === String(v); });
+ }
+ if (step.key === 'testing' && r.meta && r.meta.lapsDone != null) {
+ const t = parseTestingDOM(await fetchDoc('Testing.asp'));
+ return !!(t && t.session && t.session.lapsDone > r.meta.lapsDone);
+ }
+ return true; // staff/driver training: GPRO shows no reliable read-back; the result page message is logged
+ }
+
  // ---- the run ----
  let pilotRunning = false;
  async function runAutoPilot({ dryRun = false, status = () => {}, say = () => {} } = {}) {
@@ -6238,10 +6287,18 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const doneFor = st.done[next.key] || {};
  for (const step of PILOT_STEPS) {
  if (!dryRun && !st.steps[step.key]) continue;
- const prev = doneFor[step.key];
- if (!dryRun && prev && step.key !== 'race') continue;
- if (step.key === 'q2' && !dryRun && !doneFor.q1 && st.steps.q1) { log('Q2 waits for Q1.'); continue; }
- status(step.label.split(' —')[0]);
+ let prev = doneFor[step.key];
+ const name = step.label.split(' —')[0];
+ if (!dryRun && prev && step.key !== 'race') {
+ // A stored "done" is re-checked where GPRO shows it (a v6.30 Q1 was logged done but never driven).
+ if (!prev.skipped && STEP_DONE_CHECKS[step.key] && !(await STEP_DONE_CHECKS[step.key]().catch(() => true))) {
+ log(`↻ ${name}: logged as done but GPRO doesn't show it — trying again`);
+ delete doneFor[step.key]; prev = null;
+ } else continue;
+ }
+ if (!dryRun && step.key === 'q2' && !(await STEP_DONE_CHECKS.q1().catch(() => false))) { log('⏳ Q2 waits until Q1 has been driven.'); continue; }
+ if (!dryRun && step.key === 'race' && !(await STEP_DONE_CHECKS.q2().catch(() => false))) { log('⏳ Race setup waits until Q2 has been driven.'); continue; }
+ status(name);
  await pause(PILOT_FETCH_GAP_MS);
  if (step.key === 'race' && !dryRun && prev && prev.sig) {
  const peek = await runFrameStep(step, true);
@@ -6263,9 +6320,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  }
  if (!r.ok) { log(`⚠ ${step.label.split(' —')[0]}: ${r.msg}`); continue; }
  if (r.skipped) { log(`· ${step.label.split(' —')[0]}: ${r.msg}`); if (!dryRun && step.key !== 'race') { doneFor[step.key] = { at: Date.now(), skipped: true }; } continue; }
- if (dryRun) { log(`👁 ${step.label.split(' —')[0]}: ${r.msg}`); continue; }
+ if (dryRun) { log(`👁 ${name}: ${r.msg}`); continue; }
+ await pause(PILOT_FETCH_GAP_MS);
+ const really = await verifyPost(step, r).catch(() => false);
+ if (!really) { log(`⚠ ${name}: posted, but GPRO doesn't show it saved${r.pageMsg ? ` — page said: "${r.pageMsg}"` : ''}`); continue; }
  doneFor[step.key] = { at: Date.now(), sig: r.sig };
- log(`✅ ${step.label.split(' —')[0]}: ${r.msg}`);
+ log(`✅ ${name}: ${r.msg}${r.pageMsg ? ` (GPRO: "${r.pageMsg}")` : ''}`);
  }
  if (!dryRun) { const st2 = pilotState(); st2.done[next.key] = doneFor; savePilotState(st2); }
  } finally {
@@ -6346,6 +6406,7 @@ button{font:inherit;color:inherit;cursor:pointer}
  const pagePlans = Object.keys(PAGE_PLANS).filter((k) => !PAGE_PLANS[k].skip);
  root.querySelector('.bd').innerHTML = `
 <div class="sec"><div class="h">Switches</div>
+${sw('prefill', 'Pre-fill the form on Q1/Q2/race/car/staff/training pages I open (nothing is submitted)', st.prefill !== false)}
 ${sw('enabled', '<b>Autopilot</b> — runs in the background on any GPRO page', !!st.enabled)}
 ${PILOT_STEPS.map((s) => sw('step:' + s.key, esc(s.label), !!st.steps[s.key])).join('')}
 <div class="note" style="margin-top:4px;">Every action uses the advisor's own recommendation. Spending never goes below $${(PILOT_CASH_RESERVE / 1e6).toFixed(0)}M cash (own safety floor). Testing follows the league timing in gpro-data.js testingPolicy.</div></div>
@@ -6405,6 +6466,7 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  if (t.dataset.sw) {
  const st = pilotState();
  if (t.dataset.sw === 'enabled') st.enabled = !st.enabled;
+ else if (t.dataset.sw === 'prefill') st.prefill = st.prefill === false;
  else { const k = t.dataset.sw.slice(5); st.steps[k] = !st.steps[k]; }
  savePilotState(st);
  refresh();
@@ -6675,7 +6737,7 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
   const ccp = testing.points && testing.points.ccp ? testing.points.ccp.p + testing.points.ccp.h + testing.points.ccp.a : null;
   return `<div style="font-size:10px;color:${PALETTE.text};margin-top:6px;">One car level: all 11 parts at L${nextLvl} = ${partsCost ? '$' + partsCost.toLocaleString() : '?'} (and re-bought as they wear out) vs 39 car points from testing at $1M a session. Testing points banked now: ${ccp != null ? ccp : '?'} (${ccp != null ? (ccp / 39).toFixed(2) : '?'} levels).</div>`;
   })());
-  publishPlan('testing', { form: 'formQual', submit: 'DriveStint', fields: tp.fields || {}, skip: tp.skip, summary: tp.skip ? '' : `${tp.stintLaps} laps on ${tp.tyre}, ${tp.fuel}L`, sig: tp.fields ? planSig(tp.fields) : '' });
+  publishPlan('testing', { form: 'formQual', submit: 'DriveStint', fields: tp.fields || {}, skip: tp.skip, meta: { lapsDone: testing.session ? testing.session.lapsDone : null }, summary: tp.skip ? '' : `${tp.stintLaps} laps on ${tp.tyre}, ${tp.fuel}L`, sig: tp.fields ? planSig(tp.fields) : '' });
 
   body(h);
   }
@@ -7255,6 +7317,14 @@ training: 'Parsing driver training data...',
    renderRaceAnalysis();
    }
  autopilotFrameHook();
+ // Pre-fill (switch "prefill", ON unless turned off): on a form page the user opened, the visible
+ // boxes/dropdowns get the advisor's values - nothing is submitted; the user presses the game's
+ // own button.
+ if (!IN_AUTO_FRAME && window.top === window && pilotState().prefill !== false) {
+ // Not facilities: they share StaffAndFacilities' one form with staff training, so pre-filled
+ // upgrade selects would go along with a "Train staff" click. Not testing: each stint is a decision.
+ Object.keys(PAGE_PLANS).filter((k) => !PAGE_PLANS[k].skip && k !== 'testing' && k !== 'facilities').forEach((k) => fillForm(PAGE_PLANS[k], document));
+ }
  pilotDock.mount();
  setTimeout(() => pilotDock.background(page), 5000);
  } catch (err) {
