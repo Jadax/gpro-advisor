@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.31.1
+// @version 6.32.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -2277,6 +2277,23 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return undefined;
  }
 
+ // GAPP fuel use per km for a driver/car (fuelLoadCalc: track base L/km + driver/car factor).
+ // Shared by the race strategy, the testing plan and the race-log fuel calibration.
+ function gappFuelPerKm(baseLkm, conc, aggr, exp, ti, engLvl, elecLvl) {
+ const ff = D.gapp.fuelFactorCoeffs;
+ return baseLkm + ff.concentration * conc + ff.aggressiveness * aggr + ff.experience * exp + ff.techInsight * ti + ff.engineLevel * engLvl + ff.electronicsLevel * elecLvl;
+ }
+ // GAPP stopCalc tyre life: km per 100% tread for one compound (p: trackWearLevel, temp, supFactor,
+ // typeIdx, suspLvl, aggr, exp, weight, trackWearFactor, wetFactor, ctFactor). Shared by stopsFor
+ // and the race-log tyre calibration so both use the identical formula.
+ function gappTyreLifeKm(p) {
+ const sc = D.gapp.stopCalc;
+ return Math.pow(sc.trackWearLevelExp, p.trackWearLevel) * Math.pow(sc.tempExp, p.temp) * Math.pow(sc.supplierExp, p.supFactor) *
+ Math.pow(sc.tyreTypeExp, p.typeIdx) * Math.pow(sc.suspensionExp, p.suspLvl) * Math.pow(sc.aggressivenessExp, p.aggr) *
+ Math.pow(sc.experienceExp, p.exp) * Math.pow(sc.weightExp, p.weight) * (p.ctFactor || 1) *
+ sc.baseWear * p.trackWearFactor * (p.wetFactor || 1);
+ }
+
  // Whole-race temperature = average of the 8 low/high values over the 4 race-forecast segments
  // (missing values count as 25, as before). Used for the Race setup column and tyre wear - Heino's
  // tyre model also takes the race-average temp ('Setup & Strategy' Y2), not the start segment.
@@ -2327,16 +2344,19 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // ctFactor: compound-specific constant ^ clear-track risk (Heino 'Setup & Strategy' BO31:BO35 / BS31:BS35;
  // GAPP's calcs.py received it but never applied it). Rain uses the WET clear-track risk in Heino,
  // which this tool doesn't read, so it's left at 1 for Rain.
+ // Life is divided by the race-log tyre factor (observed / predicted wear per lap) once active.
+ const tyreCal = tyreWearCalibration();
  function stopsFor(tyreTypeIdx, wetFactor, ctFactor) {
- const productFactors = Math.pow(sc.trackWearLevelExp, trackWearLevel) * Math.pow(sc.tempExp, rTemp) * Math.pow(sc.supplierExp, supFactor) *
- Math.pow(sc.tyreTypeExp, tyreTypeIdx) * Math.pow(sc.suspensionExp, suspLvl) * Math.pow(sc.aggressivenessExp, aggr) *
- Math.pow(sc.experienceExp, exp) * Math.pow(sc.weightExp, weight) * (ctFactor || 1);
- const stops = Math.ceil(trackDistanceTotal / ((productFactors * sc.baseWear * trackWearFactor * wetFactor) * ((100 - wearLimit) / 100))) - 1;
+ const life = gappTyreLifeKm({ trackWearLevel, temp: rTemp, supFactor, typeIdx: tyreTypeIdx, suspLvl, aggr, exp, weight, trackWearFactor, wetFactor, ctFactor })
+ / ((tyreTypeIdx !== sc.rainTyreTypeIndex && tyreCal.active) ? tyreCal.factor : 1);
+ const stops = Math.ceil(trackDistanceTotal / (life * ((100 - wearLimit) / 100))) - 1;
  return Math.max(0, stops);
  }
 
- const ff = gapp.fuelFactorCoeffs;
- const fuelFactor = ff.concentration * conc + ff.aggressiveness * aggr + ff.experience * exp + ff.techInsight * ti + ff.engineLevel * engLvl + ff.electronicsLevel * elecLvl;
+ // Fuel L/km, scaled by the race-log fuel factor (observed / GAPP) once active. Every fuel use in
+ // this strategy (dry, wet, per stint, FLD time cost) goes through it.
+ const fuelCal = fuelRateCalibration();
+ const fuelLkm = (base) => gappFuelPerKm(base, conc, aggr, exp, ti, engLvl, elecLvl) * (fuelCal.active ? fuelCal.factor : 1);
 
  let testingFuelPerLap = null;
  if (testing && testing.stintsDone && testing.stintsDone.length > 0) {
@@ -2346,7 +2366,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const ld = parseInt((last.lapsDone || '0/0').split('/')[0]) || 1;
  if (fs > fl && ld > 0) testingFuelPerLap = (fs - fl) / ld;
  }
- const fuelPerLapDry = testingFuelPerLap || (trackDistanceTotal * (trackFuelDry + fuelFactor) / laps);
+ const fuelPerLapDry = testingFuelPerLap || (trackDistanceTotal * fuelLkm(trackFuelDry) / laps);
 
  const compounds = [
  { name: 'Extra Soft', idx: 0, wetFactor: 1 },
@@ -2392,14 +2412,14 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   let fuelPerStint;
   let mixedFuelInfo = null;
   if (raceProfile && raceProfile.type === 'mixed' && !isRain) {
-  const fpLapDry = testingFuelPerLap || (trackDistanceTotal * (trackFuelDry + fuelFactor) / laps);
-  const fpLapWet = trackFuelWet ? (trackDistanceTotal * (trackFuelWet + fuelFactor) / laps) : fpLapDry * 1.12;
+  const fpLapDry = testingFuelPerLap || (trackDistanceTotal * fuelLkm(trackFuelDry) / laps);
+  const fpLapWet = trackFuelWet ? (trackDistanceTotal * fuelLkm(trackFuelWet) / laps) : fpLapDry * 1.12;
   mixedFuelInfo = calcMixedRaceFuel(raceProfile, laps, fpLapDry, fpLapWet);
   fuelPerStint = Math.ceil(mixedFuelInfo.totalFuel / stints);
   } else {
   fuelPerStint = testingFuelPerLap
   ? Math.ceil(testingFuelPerLap * lapsPerStint)
-  : Math.ceil(trackDistanceTotal * (trackFuelBase + fuelFactor) / stints);
+  : Math.ceil(trackDistanceTotal * fuelLkm(trackFuelBase) / stints);
   }
   if (fuelPerStint > TANK_MAX || fuelPerStint <= 0) return; // infeasible for this stint count
 
@@ -2408,7 +2428,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const oneStepTcd = laps * ((trackCorners * lapLength * gapp.compoundCalcConstant * (50 - rTemp)) + supCompoundFactor);
   tcd = oneStepTcd * c.idx; // Soft=1x, Medium=2x, Hard=3x the one-step time loss vs Extra Soft
   }
-  const fld = gapp.fuelTimeCalcConstant * (trackDistanceTotal * trackDistanceTotal * (trackFuelBase + fuelFactor) / stints);
+  const fld = gapp.fuelTimeCalcConstant * (trackDistanceTotal * trackDistanceTotal * fuelLkm(trackFuelBase) / stints);
   const hasTd = !!(staffTd && staffTd.hasTd);
   const infl = hasTd ? pt.withTd : pt.noTd;
   const staffConc = (staffTd && staffTd.staffConcentration) || 0;
@@ -2435,8 +2455,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // Total fuel: use mixed calculation when available, else standard dry estimate
   let totalFuel;
   if (raceProfile && raceProfile.type === 'mixed' && results.length) {
-  const fpLapDry = testingFuelPerLap || (trackDistanceTotal * (trackFuelDry + fuelFactor) / laps);
-  const fpLapWet = trackFuelWet ? (trackDistanceTotal * (trackFuelWet + fuelFactor) / laps) : fpLapDry * 1.12;
+  const fpLapDry = testingFuelPerLap || (trackDistanceTotal * fuelLkm(trackFuelDry) / laps);
+  const fpLapWet = trackFuelWet ? (trackDistanceTotal * fuelLkm(trackFuelWet) / laps) : fpLapDry * 1.12;
   totalFuel = calcMixedRaceFuel(raceProfile, laps, fpLapDry, fpLapWet).totalFuel;
   } else {
   totalFuel = Math.ceil(fuelPerLapDry * laps * 1.03);
@@ -3123,7 +3143,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  stored = stored.filter((r) => !(r.season === rec.season && r.race === rec.race));
  stored.push(rec);
  GM_setValue(RACE_LOG_KEY, JSON.stringify(stored));
- partWearCalibration.cache = null;
+ partWearCalibration.cache = null; fuelRateCalibration.cache = null; tyreWearCalibration.cache = null;
  }
 
  // Stints from a record: stint k runs [prevPit+1 .. pitLap] (GPRO labels a stop by the lap it pits
@@ -3197,6 +3217,60 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return partWearCalibration.cache;
  }
 
+ const medianOf = (a) => { if (!a.length) return null; const x = a.slice().sort((p, q) => p - q); const m = Math.floor(x.length / 2); return x.length % 2 ? x[m] : (x[m - 1] + x[m]) / 2; };
+ // Fuel: per DRY stint, observed L used / GAPP prediction (the record's own driver + engine/
+ // electronics levels). Boost laps are taken out with the same estimate the plans add for them
+ // (0.12 x the Medium fuel base 2.4 L/km x lap km - S113 Bucharest/Mexico solved 0.86/1.33 L vs
+ // 0.88/1.27 estimated). Mid-race stints end at the pit's "fuel left" % of the 180 L tank.
+ function fuelRateCalibration() {
+ if (fuelRateCalibration.cache) return fuelRateCalibration.cache;
+ const ratios = [], racesUsed = new Set();
+ getRaceLog().forEach((rec) => {
+ const g = lookupGappTrack(rec.track, 'trackData');
+ const d = rec.driver;
+ if (!g || !d || !rec.partLevels || rec.boostLaps == null) return;
+ const t = g.values;
+ const perLap = t[8] * gappFuelPerKm(t[6], d.con, d.agr, d.exp, d.tei, rec.partLevels[1] || 1, rec.partLevels[10] || 1) / (t[12] || 1);
+ const boostPerLap = 0.12 * 2.4 * t[13];
+ raceStints(rec).forEach((st) => {
+ if (st.fuelUsed == null || st.wetLaps || st.laps < 5 || st.boostLaps == null) return;
+ ratios.push((st.fuelUsed - st.boostLaps * boostPerLap) / (st.laps * perLap));
+ racesUsed.add(`${rec.season}-${rec.race}`);
+ });
+ });
+ const factor = medianOf(ratios);
+ fuelRateCalibration.cache = { races: racesUsed.size, stints: ratios.length, factor, active: racesUsed.size >= MIN_WEAR_CAL_RACES && factor != null };
+ return fuelRateCalibration.cache;
+ }
+ // Tyres: per DRY non-Rain stint, observed tread used per lap / GAPP's (lap km / life km). The
+ // record's own track wear rating, race temperature, driver, suspension level and clear-track risk
+ // feed the shared life formula; Rookie/Amateur always run Pipirelli (rules 2.5).
+ function tyreWearCalibration() {
+ if (tyreWearCalibration.cache) return tyreWearCalibration.cache;
+ const ratios = [], racesUsed = new Set();
+ const sc = D.gapp.stopCalc;
+ getRaceLog().forEach((rec) => {
+ const g = lookupGappTrack(rec.track, 'trackData');
+ const d = rec.driver;
+ const pub = D.trackPub && (D.trackPub[rec.track] || D.trackPub[(g || {}).key]);
+ const temp = rec.temp ? (rec.temp.avg != null ? rec.temp.avg : (rec.temp.min + rec.temp.max) / 2) : null;
+ const supplier = rec.supplier || ((rec.league === 'Rookie' || rec.league === 'Amateur') ? 'Pipirelli' : null);
+ const supFactor = supplier ? gappLookupByName(sc.tyreSupplierFactor, supplier) : undefined;
+ if (!g || !d || !pub || temp == null || supFactor === undefined || !rec.partLevels) return;
+ const lvl = gappLookupByName(sc.trackWearLevelMap, pub.tyreWear || 'Medium');
+ raceStints(rec).forEach((st) => {
+ const idx = { 'Extra Soft': 0, 'Soft': 1, 'Medium': 2, 'Hard': 3 }[st.compound];
+ if (idx == null || st.tyrePerLap == null || st.wetLaps || st.laps < 5) return;
+ const life = gappTyreLifeKm({ trackWearLevel: lvl !== undefined ? lvl : 2, temp, supFactor, typeIdx: idx, suspLvl: rec.partLevels[9] || 1, aggr: d.agr, exp: d.exp, weight: d.wei, trackWearFactor: g.values[9], ctFactor: Math.pow(sc.wearFactors[idx], (rec.risks && rec.risks.clearDry) || 0) });
+ ratios.push(st.tyrePerLap / (g.values[13] / life * 100));
+ racesUsed.add(`${rec.season}-${rec.race}`);
+ });
+ });
+ const factor = medianOf(ratios);
+ tyreWearCalibration.cache = { races: racesUsed.size, stints: ratios.length, factor, active: racesUsed.size >= MIN_WEAR_CAL_RACES && factor != null };
+ return tyreWearCalibration.cache;
+ }
+
  // Parses RaceAnalysis.asp from its visible TEXT (document.body.innerText), not DOM selectors: the
  // page's markup was never inspected, but its printed labels are known from screenshots (S113 R4).
  // Text survives cosmetic markup changes, and the same parser would accept a pasted copy of the
@@ -3232,6 +3306,15 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  }
  const setup = t.match(/\bRace\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(Extra Soft|Soft|Medium|Hard|Rain)/i);
  if (setup) rec.raceSetup = { fw: +setup[1], rw: +setup[2], eng: +setup[3], bra: +setup[4], gear: +setup[5], susp: +setup[6], tyres: setup[7] };
+ // Setup tracking: both qualifying setups + lap times/positions next to the race setup.
+ ['Q1', 'Q2'].forEach((q) => {
+ const m = t.match(new RegExp('\\b' + q + '\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(Extra Soft|Soft|Medium|Hard|Rain)', 'i'));
+ if (m) rec[q.toLowerCase() + 'Setup'] = { fw: +m[1], rw: +m[2], eng: +m[3], bra: +m[4], gear: +m[5], susp: +m[6], tyres: m[7] };
+ });
+ const qt = t.match(/Qualification 1\s+Qualification 2\s+([\d:.]+)s\s*\(#(\d+)\)\s+([\d:.]+)s\s*\(#(\d+)\)/i);
+ if (qt) rec.qualifying = { q1Time: qt[1], q1Pos: +qt[2], q2Time: qt[3], q2Pos: +qt[4] };
+ const sup = t.match(/Tyre supplier\s+([A-Z][A-Za-z]+)/);
+ if (sup) rec.supplier = sup[1];
  const pha = t.match(/Power\s+Handling\s+Acceleration\s+(\d+)\s+(\d+)\s+(\d+)/i);
  if (pha) rec.carPHA = { p: +pha[1], h: +pha[2], a: +pha[3] };
  rec.pits = [];
@@ -3270,7 +3353,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const tyre = Object.keys(byComp).map((c) => `${c} ${(byComp[c].wear / byComp[c].laps).toFixed(1)}%/lap`).join(', ');
  const fuel = st.filter((s) => s.fuelUsed != null && s.laps > 0);
  const totF = fuel.reduce((a, s) => a + s.fuelUsed, 0), totL = fuel.reduce((a, s) => a + s.laps, 0);
- return `S${r.season} R${r.race}: ${st.length - 1} stop${st.length - 1 !== 1 ? 's' : ''}${r.startPos ? `, P${r.startPos}→P${r.finishPos}` : ''}${totL ? `, ${(totF / totL).toFixed(2)} L/lap` : ''}${tyre ? `, ${tyre}` : ''}`;
+ const su = r.raceSetup ? `, setup ${r.raceSetup.fw}/${r.raceSetup.rw}/${r.raceSetup.eng}/${r.raceSetup.bra}/${r.raceSetup.gear}/${r.raceSetup.susp}` : '';
+ return `S${r.season} R${r.race}: ${st.length - 1} stop${st.length - 1 !== 1 ? 's' : ''}${r.startPos ? `, P${r.startPos}→P${r.finishPos}` : ''}${totL ? `, ${(totF / totL).toFixed(2)} L/lap` : ''}${tyre ? `, ${tyre}` : ''}${su}`;
  }).join(' · ');
  }
 
@@ -6687,7 +6771,10 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  h += mkSection('Calibration',
  mkRow('Races logged', `${log.length}`) +
  mkRow('Part-wear correction', cal.active ? `<span style="color:${VERDICT.good};">active (${cal.races} races)</span>` : `<span style="color:${VERDICT.warn};">collecting (${cal.races}/${MIN_WEAR_CAL_RACES} races)</span>`) +
- `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Once ${MIN_WEAR_CAL_RACES} races with GAPP wear data are logged, the Car Advisor and Race Setup scale each part's GAPP wear by its median observed/predicted ratio.${avgTxt} Fuel and tyres are tracked for comparison only - GAPP's fuel rate already matched your last races.</div>` +
+ [['Fuel-rate correction', fuelRateCalibration()], ['Tyre-wear correction', tyreWearCalibration()]].map(([label, c]) => mkRow(label, c.active
+ ? `<span style="color:${VERDICT.good};">active ×${c.factor.toFixed(3)} (${c.races} races, ${c.stints} stints)</span>`
+ : `<span style="color:${VERDICT.warn};">collecting (${c.races}/${MIN_WEAR_CAL_RACES} races${c.factor != null ? `, ×${c.factor.toFixed(3)} so far` : ''})</span>`)).join('') +
+ `<div style="font-size:9px;color:#6b7280;margin-top:4px;">Once ${MIN_WEAR_CAL_RACES} races with GAPP wear data are logged, the Car Advisor and Race Setup scale each part's GAPP wear by its median observed/predicted ratio.${avgTxt} The same rule applies to fuel (L/km in every fuel plan) and tyres (tyre life in every stop count): dry stints only, median of your races.</div>` +
  `<div style="display:flex;gap:6px;margin-top:8px;"><button id="gpro-racelog-copy" style="flex:1;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;">Copy log (JSON)</button><button id="gpro-racelog-import" style="flex:1;background:#374151;color:#d1d5db;border:none;padding:6px;border-radius:6px;cursor:pointer;font-size:11px;">Import log</button></div>`);
  body(h);
  wireCopyButton(document.getElementById('gpro-racelog-copy'), () => JSON.stringify(getRaceLog(), null, 1));
@@ -6772,9 +6859,8 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  });
  if (lapBudget < 5) { out.skip = `${binding} would end the next race above ${TEST_WEAR_CEILING}% with any testing`; return out; }
  const stintLaps = Math.min(50, lapBudget, lapsLeft);
- const ff = D.gapp.fuelFactorCoeffs, t = testGapp.values;
- const fuelFactor = ff.concentration * numOrDefault(driver.concentration, 100) + ff.aggressiveness * numOrDefault(driver.aggressiveness, 50) + ff.experience * numOrDefault(driver.experience, 50) + ff.techInsight * numOrDefault(driver.techInsight, 50) + ff.engineLevel * (parseInt(car.lvlEngine) || 1) + ff.electronicsLevel * (parseInt(car.lvlElectronics) || 1);
- const perLapFuel = t[8] * (t[6] + fuelFactor) / (t[12] || 1);
+ const t = testGapp.values;
+ const perLapFuel = t[8] * gappFuelPerKm(t[6], numOrDefault(driver.concentration, 100), numOrDefault(driver.aggressiveness, 50), numOrDefault(driver.experience, 50), numOrDefault(driver.techInsight, 50), parseInt(car.lvlEngine) || 1, parseInt(car.lvlElectronics) || 1) / (t[12] || 1);
  const laps = Math.min(stintLaps, Math.floor((TANK_MAX - 1) / (perLapFuel * 1.05)));
  const temp = testing.temp != null ? testing.temp : 20;
  const pub = D.trackPub && D.trackPub[testing.trackName];
