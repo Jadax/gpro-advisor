@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.30.2
+// @version 6.31.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -6263,14 +6263,10 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return true; // staff/driver training: GPRO shows no reliable read-back; the result page message is logged
  }
 
- // ---- the run ----
- let pilotRunning = false;
- async function runAutoPilot({ dryRun = false, status = () => {}, say = () => {} } = {}) {
- if (pilotRunning || IN_AUTO_FRAME) return;
- pilotRunning = true;
- const log = (m) => { say(m); if (!dryRun) pilotLog(m); };
- try {
- if (!dryRun) { const st0 = pilotState(); st0.lastRun = Date.now(); savePilotState(st0); }
+ // Fresh data before any run: next race + deadlines, driver/track/suppliers/staff/testing pages,
+ // standings, and a trickle of race history. Returns the next race, or null (logged) when there's
+ // nothing a run may do (next race unreadable, or qualifying closed).
+ async function pilotRefresh(log, status) {
  status('Refreshing data');
  const homeHtml = await fetchPageHTML('gpro.asp');
  const next = parseNextRace(homeHtml);
@@ -6281,8 +6277,123 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  await captureStandings(homeDoc).catch((e) => logError('standings capture', e.message));
  status('Race log');
  await harvestRaceHistory(log, PILOT_HARVEST_PER_RUN).catch((e) => log(`⚠ Race log: ${e.message}`));
- if (!next) { log('⚠ Could not read the next race off gpro.asp — nothing submitted.'); return; }
- if (next.qualiClose && Date.now() > next.qualiClose - 10 * 60000) { log(`⏳ Qualifying for S${next.season} R${next.race} is closed — waiting for the next race.`); return; }
+ if (!next) { log('⚠ Could not read the next race off gpro.asp — nothing submitted.'); return null; }
+ if (next.qualiClose && Date.now() > next.qualiClose - 10 * 60000) { log(`⏳ Qualifying for S${next.season} R${next.race} is closed — waiting for the next race.`); return null; }
+ return next;
+ }
+
+ // ---- "Run now": drive THIS tab through the pages and press the game's own buttons ----
+ // The user's own flow (2026-10-31): open the page, fill it, press Drive lap / Confirm settings /
+ // Update car / Train ..., then the next page. Hidden-frame posts weren't proven to register (the
+ // first one drove no lap), so the interactive run does exactly that in the visible tab: each page
+ // load continues the run (state in GM `gpro_tabrun`), fills from the page's own plan, clicks the
+ // page's real button (dialogs answered/captured), and on the page the post returns verifies the
+ // result from GPRO before moving on. Background passes still use hidden frames (they can't take
+ // over a tab the user is browsing), with the same verification.
+ const TABRUN_KEY = 'gpro_tabrun';
+ const TABRUN_MAX_MS = 10 * 60000;
+ function tabRunState() { try { return JSON.parse(GM_getValue(TABRUN_KEY, 'null')); } catch (e) { return null; } }
+ function saveTabRun(r) { GM_setValue(TABRUN_KEY, r ? JSON.stringify(r) : 'null'); }
+ function tabRunGo(url) { location.href = `/${getLang()}/${url}`; }
+ async function startTabRun(status) {
+ const next = await pilotRefresh(pilotLog, status);
+ if (!next) return false;
+ const st = pilotState();
+ const queue = PILOT_STEPS.filter((x) => st.steps[x.key]).map((x) => x.key);
+ if (!queue.length) { pilotLog('Nothing switched on — turn on the steps you want first.'); return false; }
+ pilotLog(`▶ Run started for S${next.season} R${next.race}: ${queue.length} step${queue.length !== 1 ? 's' : ''}`);
+ saveTabRun({ key: next.key, queue, idx: 0, stage: 'open', started: Date.now(), repeats: 0 });
+ tabRunGo(PILOT_STEPS.find((x) => x.key === queue[0]).url);
+ return true;
+ }
+ function tabRunAdvance(r) {
+ Object.assign(r, { idx: r.idx + 1, stage: 'open', repeats: 0, fields: null, meta: null, sig: null, summary: null });
+ if (r.idx >= r.queue.length) {
+ saveTabRun(null);
+ pilotLog('🏁 Run finished');
+ tabRunGo('gpro.asp');
+ return;
+ }
+ saveTabRun(r);
+ tabRunGo(PILOT_STEPS.find((x) => x.key === r.queue[r.idx]).url);
+ }
+ async function tabRunHook() {
+ if (IN_AUTO_FRAME || window.top !== window) return;
+ const r = tabRunState();
+ if (!r) return;
+ if (Date.now() - r.started > TABRUN_MAX_MS) { saveTabRun(null); pilotLog('⚠ Run stopped: it ran past 10 minutes'); return; }
+ const key = r.queue[r.idx];
+ const step = PILOT_STEPS.find((x) => x.key === key);
+ if (!step) { saveTabRun(null); return; }
+ const name = step.label.split(' —')[0];
+ const st = pilotState();
+ st.done[r.key] = st.done[r.key] || {};
+ const doneFor = st.done[r.key];
+ if (r.stage === 'submitted') {
+ // This is the page GPRO returned after the click.
+ await pause(PILOT_FETCH_GAP_MS);
+ const ok = await verifyPost(step, { fields: r.fields, meta: r.meta }).catch(() => false);
+ if (ok) {
+ doneFor[key] = { at: Date.now(), sig: r.sig }; savePilotState(st);
+ pilotLog(`✅ ${name}: ${r.summary}`);
+ if (step.repeat && r.repeats + 1 < step.repeat) { r.repeats++; r.stage = 'open'; saveTabRun(r); tabRunGo(step.url); return; }
+ } else {
+ const msgEl = Array.from(document.querySelectorAll('.error, .errormsg, .notice, .warning, font[color], .alert, p, td'))
+ .map((e) => e.textContent.replace(/\s+/g, ' ').trim()).find((t) => t.length > 8 && t.length < 220 && /(not |can't|cannot|error|invalid|must|already|only|first)/i.test(t));
+ pilotLog(`⚠ ${name}: pressed the button but GPRO doesn't show it saved${msgEl ? ` — page says: "${msgEl}"` : ''}`);
+ }
+ return tabRunAdvance(r);
+ }
+ if (location.pathname.split('/').pop().toLowerCase() !== step.url.toLowerCase()) { tabRunGo(step.url); return; }
+ // On the step's page, freshly rendered.
+ const prev = doneFor[key];
+ if (prev && key !== 'race' && !step.repeat) {
+ const really = prev.skipped || !STEP_DONE_CHECKS[key] || await STEP_DONE_CHECKS[key]().catch(() => true);
+ if (really) return tabRunAdvance(r);
+ pilotLog(`↻ ${name}: logged as done but GPRO doesn't show it — doing it now`);
+ }
+ if (key === 'q2' && !(await STEP_DONE_CHECKS.q1().catch(() => false))) { pilotLog('⏳ Q2 waits until Q1 has been driven.'); return tabRunAdvance(r); }
+ if (key === 'race' && !(await STEP_DONE_CHECKS.q2().catch(() => false))) { pilotLog('⏳ Race setup waits until Q2 has been driven.'); return tabRunAdvance(r); }
+ const plan = PAGE_PLANS[key];
+ if (!plan) { pilotLog(`⚠ ${name}: the advisor computed no plan on this page`); return tabRunAdvance(r); }
+ if (plan.skip) {
+ pilotLog(`· ${name}: ${plan.skip}`);
+ if (key !== 'race') { doneFor[key] = { at: Date.now(), skipped: true }; savePilotState(st); }
+ return tabRunAdvance(r);
+ }
+ if (key === 'race' && prev && prev.sig === plan.sig) { pilotLog(`· ${name}: already confirmed with this plan`); return tabRunAdvance(r); }
+ const f = fillForm(plan, document);
+ if (f.error || f.missing.length) { pilotLog(`⚠ ${name}: ${f.error || `couldn't set ${f.missing.join(', ')}`}`); return tabRunAdvance(r); }
+ const btn = f.form.elements[plan.submit];
+ if (!btn || btn.disabled) { pilotLog(`⚠ ${name}: the page's "${(btn && btn.value) || plan.submit}" button is ${btn ? 'disabled' : 'missing'}`); return tabRunAdvance(r); }
+ Object.assign(r, { stage: 'submitted', fields: plan.fields, meta: plan.meta || null, sig: plan.sig, summary: plan.summary });
+ saveTabRun(r);
+ const dialogs = [];
+ try {
+ const pageWin = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+ pageWin.alert = (m) => { dialogs.push(String(m)); };
+ pageWin.confirm = (m) => { dialogs.push(String(m)); return true; };
+ } catch (e) { logError('dialog override failed', e); }
+ await pause(600); // let the user see the filled form before the click
+ btn.click();
+ const stuck = setTimeout(() => {
+ r.stage = 'open';
+ pilotLog(`⚠ ${name}: the page didn't submit${dialogs.length ? ': ' + dialogs.join(' / ').replace(/\s+/g, ' ').slice(0, 200) : ''}`);
+ tabRunAdvance(r);
+ }, 10000);
+ window.addEventListener('pagehide', () => clearTimeout(stuck));
+ }
+
+ // ---- the run ----
+ let pilotRunning = false;
+ async function runAutoPilot({ dryRun = false, status = () => {}, say = () => {} } = {}) {
+ if (pilotRunning || IN_AUTO_FRAME) return;
+ pilotRunning = true;
+ const log = (m) => { say(m); if (!dryRun) pilotLog(m); };
+ try {
+ if (!dryRun) { const st0 = pilotState(); st0.lastRun = Date.now(); savePilotState(st0); }
+ const next = await pilotRefresh(log, status);
+ if (!next) return;
  const st = pilotState();
  const doneFor = st.done[next.key] || {};
  for (const step of PILOT_STEPS) {
@@ -6412,7 +6523,8 @@ ${PILOT_STEPS.map((s) => sw('step:' + s.key, esc(s.label), !!st.steps[s.key])).j
 <div class="note" style="margin-top:4px;">Every action uses the advisor's own recommendation. Spending never goes below $${(PILOT_CASH_RESERVE / 1e6).toFixed(0)}M cash (own safety floor). Testing follows the league timing in gpro-data.js testingPolicy.</div></div>
 <div class="sec"><div class="h">${doneKey ? `Next race S${esc(doneKey.replace('-', ' R'))}${next.track ? ' · ' + esc(next.track) : ''}` : 'Next race (run once to read it)'}</div>${PILOT_STEPS.map(ck).join('')}
 <div class="note" style="margin-top:4px;">✓ = done for this race (or nothing needed). Pill: green = every switched-on step done, amber = some still to do, red = last action failed.</div></div>
-<div class="sec"><div class="btns" style="margin-top:0;"><button class="btn pri" data-a="run">Run now</button><button class="btn" data-a="preview">Preview</button></div>
+<div class="sec">${tabRunState() ? `<div class="btns" style="margin-top:0;"><button class="btn" data-a="stop">■ Stop the run in progress</button></div>` : ''}<div class="btns"${tabRunState() ? '' : ' style="margin-top:0;"'}><button class="btn pri" data-a="run">Run now</button><button class="btn" data-a="preview">Preview</button></div>
+<div class="note" style="margin-top:4px;">Run now drives this tab page by page and presses the game's own buttons (Drive lap, Confirm settings, …). Preview only fills hidden copies.</div>
 ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill this page's form</button></div>` : ''}
 <div class="btns"><button class="btn" data-a="export">Export data (${getRaceLog().length} races)</button></div></div>
 <div class="sec"><div class="h">Activity</div>${st.log.slice(-14).reverse().map((l) => `<div class="lg"><em>${esc(ago(l.t))}</em> · ${esc(l.msg)}</div>`).join('') || '<div class="lg">Nothing yet.</div>'}</div>`;
@@ -6448,6 +6560,12 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  }
  async function run(dryRun) {
  const btns = root.querySelectorAll('[data-a="run"],[data-a="preview"]');
+ if (!dryRun) {
+ btns.forEach((b) => { b.disabled = true; });
+ try { if (!(await startTabRun(status))) { toast('Nothing to run — see Activity'); btns.forEach((b) => { b.disabled = false; }); render(); } }
+ catch (e) { toast('⚠ ' + e.message, true); btns.forEach((b) => { b.disabled = false; }); }
+ return;
+ }
  btns.forEach((b) => { b.disabled = true; });
  const lines = [];
  try {
@@ -6476,6 +6594,7 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  if (t.dataset.a === 'run') return run(false);
  if (t.dataset.a === 'preview') return run(true);
  if (t.dataset.a === 'export') return exportPilotData();
+ if (t.dataset.a === 'stop') { saveTabRun(null); pilotLog('■ Run stopped by you'); return render(); }
  if (t.dataset.a === 'fill') {
  const msgs = Object.keys(PAGE_PLANS).filter((k) => !PAGE_PLANS[k].skip).map((k) => {
  const r = fillForm(PAGE_PLANS[k], document);
@@ -7199,7 +7318,7 @@ const canAffordSessions = Math.floor(data.contract.salary / 750000);
   const page = detectPage();
  // A form POST inside an autopilot frame can land on a page the router doesn't know - it still
  // has to report back.
- if (!page) { autopilotFrameHook(); return; }
+ if (!page) { autopilotFrameHook(); tabRunHook().catch((e) => { logError('tab run', e); saveTabRun(null); }); return; }
  const PAGE_TITLES = {
  home: 'GPRO Dashboard',
  qualify1: 'Q1 Advisor',
@@ -7326,7 +7445,8 @@ training: 'Parsing driver training data...',
  Object.keys(PAGE_PLANS).filter((k) => !PAGE_PLANS[k].skip && k !== 'testing' && k !== 'facilities').forEach((k) => fillForm(PAGE_PLANS[k], document));
  }
  pilotDock.mount();
- setTimeout(() => pilotDock.background(page), 5000);
+ tabRunHook().catch((e) => { logError('tab run', e); saveTabRun(null); });
+ if (!tabRunState()) setTimeout(() => pilotDock.background(page), 5000);
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad') +
  `<div style="margin-top:8px;display:flex;gap:6px;">` +
