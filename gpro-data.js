@@ -1799,19 +1799,23 @@ driverAttributeLeaguePriority: {
   },
 
  // ============================================================
- // TESTING POLICY (read by calcTestingPlan) - OWN HEURISTIC, not a GPRO formula. Reasoning:
- // rules 4.2-4.4 (CCPs from testing carry over each season minus a cut, decay if you stop, and
- // get harder to gain the more you have; a session costs $1M + part wear) and experienced
- // managers via the user 2026-10-27 ("not a major factor in Rookie or even Amateur", 3-4 car
- // levels of CCP banked by Elite; 39 CCP = one car level). Rookie parts reset each season but
- // CCPs don't; and per the user (2026-10-31, experienced managers) a car built from L4-5 parts
- // runs as L8-9 on testing CCPs, because a car level of CCP is far cheaper than a level of parts
- // (all 11 parts one level up = D.partCosts TOTAL, e.g. $18.6M for L2, $28.5M for L4, re-bought as
- // they wear out; a test session is $1M). So every league tests every race the wear/cash gates
- // allow; fromRace is there to hold a league back if wanted.
+ // TESTING POLICY (read by calcTestingPlan) - OWN HEURISTIC built on sourced facts:
+ // - GPRO rules 4.2-4.4: $1M/session + part wear; test points convert to CCPs over ~3 races
+ //   (wiki "Testing"), decay if you stop, get harder to gain the more you have.
+ // - Rules 7.2: a Rookie manager who isn't promoted loses EVERYTHING at season end (money, parts,
+ //   facilities, CCPs) except the driver; 7.1: top 3 per group promote; 7.3.2: cash above $50M
+ //   after the reset is taxed 25%.
+ // - GPRO Newbie Guide: ignore testing in Rookie (cash is tight there, testing adds wear) unless
+ //   promotion is certain with ~4 races left. GAPP has no testing model (conversion is hidden).
+ // - Experienced managers via the user (2026-10-27/31): L4-5 parts run as L8-9 cars on testing
+ //   CCPs - a car level of CCP is far cheaper than a level of parts (D.partCosts TOTAL $18.6M for
+ //   L2 ... re-bought as parts wear out); "not a major factor in Rookie or even Amateur".
+ // So: Rookie tests only inside the promotion places and only with money above the $50M tax line
+ // (money below it carries into Amateur untaxed; money above it is cut 25% or, if promotion fails,
+ // reset anyway). From Amateur on: every race, as the CCP bank compounds and decays if you stop.
  // ============================================================
  testingPolicy: {
- Rookie: { fromRace: 1, note: 'Rookie: test every race the wear/cash gates allow - CCPs carry into Amateur while Rookie parts reset, and spare Rookie cash is taxed at season end.' },
+ Rookie: { fromRace: 1, promotionOnly: true, carryLine: 50000000, nextLeague: 'Amateur', note: 'Rookie: tests only inside the top 3 and only with cash above $50M - a non-promoted Rookie loses its CCPs at season end, and money above $50M is taxed 25% on promotion.' },
  Amateur: { fromRace: 1, note: 'Amateur: test every race - CCPs decay if you stop, and the bank compounds toward Pro.' },
  Pro: { fromRace: 1, note: 'Pro: test every race to keep growing the CCP bank.' },
  Master: { fromRace: 1, note: 'Master: test every race to keep growing the CCP bank.' },

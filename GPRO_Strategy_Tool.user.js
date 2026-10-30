@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.30.0
+// @version 6.30.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -29,7 +29,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.8.0
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.8.1
 // @run-at document-idle
 // ==/UserScript==
 
@@ -6128,6 +6128,43 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return { key: `${m[1]}-${m[2]}`, season: +m[1], race: +m[2], track: track ? track.trim() : null, raceStart: when('#countdown'), qualiClose: when('\\.qualiclose') };
  }
 
+ // ---- standings (promotion-aware money + testing policy) ----
+ // Race points 10-8-6-5-4-3-2-1 for P1-P8: reproduces every top-5 total in Rookie-40 S113 after 5
+ // races (e.g. 1,4,4,1,3 = 36; 7,1,3,2,4 = 31; 5,2,1,4,8 = 28). Rules 7.1: top 3 of every non-Elite
+ // group are promoted.
+ const RACE_POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
+ const PROMOTION_SPOTS = 3;
+ function parseStandings(doc, ownIdm) {
+ const rows = [];
+ Array.from(doc.querySelectorAll('tr')).forEach((tr) => {
+ if (tr.querySelector('tr')) return;
+ const cells = Array.from(tr.children).map((c) => c.textContent.replace(/\s+/g, ' ').trim());
+ const posIdx = cells.findIndex((c) => /^\d+\.$/.test(c));
+ if (posIdx < 0) return;
+ const link = tr.querySelector('a[href*="ManagerProfile.asp?IDM="]');
+ const idm = link ? (link.getAttribute('href').match(/IDM=(\d+)/) || [])[1] : null;
+ const nameIdx = cells.findIndex((c, i) => i > posIdx && /[A-Za-z]/.test(c));
+ rows.push({ pos: parseInt(cells[posIdx]), name: nameIdx >= 0 ? cells[nameIdx] : '', idm, points: parseInt(cells[cells.length - 1]) || 0,
+ racesDone: cells.slice(nameIdx + 1, -1).filter((c) => c && c !== '-').length, own: !!(ownIdm && idm === String(ownIdm)) });
+ });
+ rows.sort((a, b) => a.pos - b.pos);
+ return rows;
+ }
+ async function captureStandings(homeDoc) {
+ const achieve = homeDoc.querySelector('a[href*="ManagerProfile.asp?IDM="][href*="tab=achievements"]');
+ const ownIdm = achieve ? (achieve.getAttribute('href').match(/IDM=(\d+)/) || [])[1] : null;
+ const grpLink = homeDoc.querySelector('a[href*="Standings.asp?Group="]');
+ if (!grpLink || !ownIdm) return null;
+ const rows = parseStandings(new DOMParser().parseFromString(await fetchPageHTML(grpLink.getAttribute('href')), 'text/html'), ownIdm);
+ const me = rows.find((r) => r.own);
+ if (!me) return null;
+ const at = (pos) => (rows.find((r) => r.pos === pos) || {}).points;
+ const standing = { group: decodeURIComponent((grpLink.getAttribute('href').match(/Group=([^&]+)/) || [])[1] || '').replace(/\+/g, ' '), pos: me.pos, points: me.points, racesDone: me.racesDone,
+ leader: at(1), lastPromoted: at(PROMOTION_SPOTS), firstOut: at(PROMOTION_SPOTS + 1), at: Date.now() };
+ GM_setValue('gpro_standing', JSON.stringify(standing));
+ return standing;
+ }
+
  // ---- race history harvest (RaceAnalysis.asp?SR=season,race) ----
  // innerText needs a rendered page; fetched pages are serialized with tabs between cells and
  // newlines between rows instead, which parseRaceAnalysisText reads the same way (checked against
@@ -6189,7 +6226,10 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const homeHtml = await fetchPageHTML('gpro.asp');
  const next = parseNextRace(homeHtml);
  if (next) GM_setValue('gpro_next_race', JSON.stringify(next));
- await backgroundCaptureAuxPages(new DOMParser().parseFromString(homeHtml, 'text/html')).catch((e) => logError('aux capture', e.message));
+ const homeDoc = new DOMParser().parseFromString(homeHtml, 'text/html');
+ await backgroundCaptureAuxPages(homeDoc).catch((e) => logError('aux capture', e.message));
+ await pause(PILOT_FETCH_GAP_MS);
+ await captureStandings(homeDoc).catch((e) => logError('standings capture', e.message));
  status('Race log');
  await harvestRaceHistory(log, PILOT_HARVEST_PER_RUN).catch((e) => log(`⚠ Race log: ${e.message}`));
  if (!next) { log('⚠ Could not read the next race off gpro.asp — nothing submitted.'); return; }
@@ -6245,6 +6285,14 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  document.body.appendChild(a); a.click(); a.remove();
  }
 
+ function nextRaceInfo() { try { return JSON.parse(GM_getValue('gpro_next_race', 'null')); } catch (e) { return null; } }
+ function pilotProgress(st) {
+ const next = nextRaceInfo();
+ const doneFor = (next && st.done[next.key]) || {};
+ const on = PILOT_STEPS.filter((s) => st.steps[s.key]);
+ return { key: next && next.key, total: on.length, done: on.filter((s) => doneFor[s.key]).length };
+ }
+
  // ---- dock (bottom-left pill; Alt+A) ----
  const pilotDock = (() => {
  let root = null, toastTimer = null;
@@ -6252,7 +6300,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
 .r{--bg:${PALETTE.bg};--bg2:${PALETTE.bgCard};--fg:${PALETTE.text};--mut:${PALETTE.textDim};--line:${PALETTE.border};--acc:${VERDICT.good};--warn:${VERDICT.warn};--bad:${VERDICT.bad};font:12px/1.45 system-ui,sans-serif;color:var(--fg)}
 button{font:inherit;color:inherit;cursor:pointer}
 .pill{position:fixed;left:14px;bottom:14px;z-index:2147483646;height:34px;padding:0 12px 0 10px;border-radius:17px;border:1px solid var(--line);background:var(--bg);font-weight:700;display:flex;align-items:center;gap:7px;box-shadow:0 6px 20px rgba(0,0,0,.35)}
-.pill i{width:8px;height:8px;border-radius:50%;background:var(--mut)}.pill.on i{background:var(--acc)}.pill.busy i{background:var(--warn);animation:p 1s infinite}.pill.err i{background:var(--bad)}
+.pill i{width:8px;height:8px;border-radius:50%;background:var(--mut)}.pill.on i{background:var(--acc)}.pill.pend i{background:var(--warn)}.pill.busy i{background:var(--warn);animation:p 1s infinite}.pill.err i{background:var(--bad)}
 .pill span{font-weight:500;color:var(--mut);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @keyframes p{50%{opacity:.25}}
 .pan{position:fixed;left:14px;bottom:56px;z-index:2147483647;width:min(370px,calc(100vw - 28px));max-height:min(600px,calc(100vh - 80px));background:var(--bg);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 40px rgba(0,0,0,.45);display:none;flex-direction:column;overflow:hidden}
@@ -6291,8 +6339,9 @@ button{font:inherit;color:inherit;cursor:pointer}
  function render() {
  const st = pilotState();
  const sw = (key, label, on) => `<div class="row"><span>${label}</span><button class="sw ${on ? 'on' : ''}" data-sw="${key}"></button></div>`;
- const doneKey = Object.keys(st.done).sort().pop();
- const doneFor = doneKey ? st.done[doneKey] : {};
+ const next = nextRaceInfo();
+ const doneKey = next ? next.key : null;
+ const doneFor = (doneKey && st.done[doneKey]) || {};
  const ck = (step) => { const d = doneFor[step.key]; return `<div class="ck"><b class="${d ? 'ok' : 'no'}">${d ? '✓' : '•'}</b><span>${esc(step.label.split(' —')[0])}${d ? ` — ${d.skipped ? 'nothing to do' : ago(d.at)}` : ''}</span></div>`; };
  const pagePlans = Object.keys(PAGE_PLANS).filter((k) => !PAGE_PLANS[k].skip);
  root.querySelector('.bd').innerHTML = `
@@ -6300,22 +6349,33 @@ button{font:inherit;color:inherit;cursor:pointer}
 ${sw('enabled', '<b>Autopilot</b> — runs in the background on any GPRO page', !!st.enabled)}
 ${PILOT_STEPS.map((s) => sw('step:' + s.key, esc(s.label), !!st.steps[s.key])).join('')}
 <div class="note" style="margin-top:4px;">Every action uses the advisor's own recommendation. Spending never goes below $${(PILOT_CASH_RESERVE / 1e6).toFixed(0)}M cash (own safety floor). Testing follows the league timing in gpro-data.js testingPolicy.</div></div>
-<div class="sec"><div class="h">${doneKey ? `Race S${esc(doneKey.replace('-', ' R'))}` : 'This race'}</div>${PILOT_STEPS.map(ck).join('')}</div>
+<div class="sec"><div class="h">${doneKey ? `Next race S${esc(doneKey.replace('-', ' R'))}${next.track ? ' · ' + esc(next.track) : ''}` : 'Next race (run once to read it)'}</div>${PILOT_STEPS.map(ck).join('')}
+<div class="note" style="margin-top:4px;">✓ = done for this race (or nothing needed). Pill: green = every switched-on step done, amber = some still to do, red = last action failed.</div></div>
 <div class="sec"><div class="btns" style="margin-top:0;"><button class="btn pri" data-a="run">Run now</button><button class="btn" data-a="preview">Preview</button></div>
 ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill this page's form</button></div>` : ''}
 <div class="btns"><button class="btn" data-a="export">Export data (${getRaceLog().length} races)</button></div></div>
 <div class="sec"><div class="h">Activity</div>${st.log.slice(-14).reverse().map((l) => `<div class="lg"><em>${esc(ago(l.t))}</em> · ${esc(l.msg)}</div>`).join('') || '<div class="lg">Nothing yet.</div>'}</div>`;
  }
+ // Pill = the next race's progress: grey off, amber steps still to do, green every switched-on
+ // step done (or had nothing to do) for that race, red when the last entry is a warning.
  function refresh() {
  if (!root) return;
- root.querySelector('.pill').classList.toggle('on', !!pilotState().enabled);
+ const st = pilotState();
+ const pill = root.querySelector('.pill');
+ const p = pilotProgress(st);
+ pill.classList.toggle('on', !!st.enabled && p.total > 0 && p.done === p.total);
+ pill.classList.toggle('pend', !!st.enabled && p.done < p.total);
+ const last = st.log[st.log.length - 1];
+ pill.classList.toggle('err', !!(last && last.msg.indexOf('⚠') === 0 && Date.now() - last.t < 6 * 3600e3));
+ pill.querySelector('span').textContent = st.enabled && p.key ? `R${p.key.split('-')[1]} ${p.done}/${p.total}` : (st.enabled ? '' : 'off');
  if (root.querySelector('.pan').classList.contains('open')) render();
  }
  function status(msg) {
  if (!root) return;
  const pill = root.querySelector('.pill');
  pill.classList.toggle('busy', !!msg);
- pill.querySelector('span').textContent = msg ? msg + '…' : '';
+ if (msg) pill.querySelector('span').textContent = msg + '…';
+ else refresh();
  }
  function toast(msg, isErr) {
  if (!root) return;
@@ -6470,6 +6530,17 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  if (lapsLeft < 5 || stintsLeft < 1) { out.skip = 'this session is used up (100 laps / 10 stints)'; return out; }
  const cash = (getCachedCarData() || {}).cash || 0;
  if (sess.lapsDone === 0 && cash - TEST_SESSION_COST < PILOT_CASH_RESERVE) { out.skip = 'a session costs $1M and cash would drop below the reserve'; return out; }
+ // Promotion-aware (policy.promotionOnly, Rookie): everything a Rookie manager owns - CCPs included
+ // - resets at season end unless promoted (rules 7.2), so testing only pays inside the top 3, and
+ // only from money above the 25% tax line (rules 7.3.2: cash over $50M after the reset is taxed);
+ // money below it carries into Amateur untaxed and is worth keeping.
+ if (policy.promotionOnly) {
+ let standing = null;
+ try { standing = JSON.parse(GM_getValue('gpro_standing', 'null')); } catch (e) { standing = null; }
+ if (!standing) { out.skip = `${league}: standings not read yet (the autopilot reads them each run)`; return out; }
+ if (standing.pos > PROMOTION_SPOTS) { out.skip = `${league}: you're P${standing.pos} - only the top ${PROMOTION_SPOTS} are promoted, and a non-promoted Rookie loses its testing points at season end`; return out; }
+ if (sess.lapsDone === 0 && cash - TEST_SESSION_COST < policy.carryLine) { out.skip = `${league}: cash $${(cash / 1e6).toFixed(1)}M - testing only spends money above $${(policy.carryLine / 1e6).toFixed(0)}M (below it, cash carries into ${policy.nextLeague} untaxed)`; return out; }
+ }
  const car = mergeWithCachedCarData(getDataDomOnly('/UpdateCar'));
  const driver = getDataDomOnly('/DriProfile');
  const nextTrack = getDataDomOnly('/TrackProfile');
