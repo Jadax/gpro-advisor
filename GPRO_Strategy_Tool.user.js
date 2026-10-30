@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.29.0
+// @version 6.30.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -29,7 +29,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.7.2
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.8.0
 // @run-at document-idle
 // ==/UserScript==
 
@@ -1225,9 +1225,24 @@ if (h.includes('TrainingSession.asp')) return 'training';
  function parseTestingDOM(root) {
  root = root || document;
  try {
- const h2 = root.querySelector('h2');
- const trackM = h2 && h2.textContent.match(/(?:Next race|Testing at|Track):?\s*(.+)/i);
+ // Live heading 2026-10-30: "Testing: Kyalami (South Africa)" - the old pattern only knew
+ // "Testing at"/"Track:", so the advisor never learned the testing track.
+ const heads = Array.from(root.querySelectorAll('h1,h2,h3')).map((e) => e.textContent.replace(/\s+/g, ' ').trim());
+ const trackH = heads.find((t) => /^(?:Next race|Testing(?: at)?|Track)\s*:?\s*\S/i.test(t) && !/standings|track information|past testing/i.test(t));
+ const trackM = trackH && trackH.match(/^(?:Next race|Testing(?: at)?|Track)\s*:?\s*(.+?)(?:\s*\([^)]*\))?$/i);
  const trackName = trackM ? trackM[1].trim() : null;
+ const allText = (root.body || root).textContent.replace(/\s+/g, ' ');
+ const lapsM = allText.match(/laps done:\s*(\d+)\s*\/\s*(\d+),\s*stints done:\s*(\d+)\s*\/\s*(\d+)/i);
+ const session = lapsM ? { lapsDone: +lapsM[1], lapsMax: +lapsM[2], stintsDone: +lapsM[3], stintsMax: +lapsM[4] } : null;
+ const tempM = allText.match(/Current weather[\s\S]{0,80}?Temp:\s*(-?\d+)/i);
+ const temp = tempM ? +tempM[1] : null;
+ // "Current points distribution" rows: Test / R&D / Engineering / Car character points, P H A.
+ const points = {};
+ [['test', /Test points/i], ['rd', /R&D points/i], ['eng', /Engineering points/i], ['ccp', /Car character points(?! history)/i]].forEach(([k, re]) => {
+ const row = Array.from(root.querySelectorAll('tr')).find((tr) => !tr.querySelector('tr') && re.test(tr.textContent) && !/history/i.test(tr.textContent));
+ const v = row ? (row.textContent.match(/-?\d+/g) || []).slice(-3).map(Number) : null;
+ if (v && v.length === 3) points[k] = { p: v[0], h: v[1], a: v[2] };
+ });
 
  // Each completed stint is typically a table row with "Laps done" (e.g. "12/15"), a fuel-set
  // amount, and fuel remaining - look for rows containing a laps-done-style fraction plus two
@@ -1247,7 +1262,7 @@ if (h.includes('TrainingSession.asp')) return 'training';
  });
 
  if (!trackName && !stintsDone.length) return null;
- return { trackName, stintsDone };
+ return { trackName, stintsDone, session, points, temp };
  } catch (e) { return null; }
  }
 
@@ -4208,9 +4223,11 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   }
   }
 
-  // Autopilot / "Fill this page's form": what this page would submit. Q1's compound also fixes the
-  // race's dry compound (rules 2.4), so a wet Q1 is left to the user; Q2's compound is the race
-  // START tyre (the Q2 box is "Qualify 2 / Race start"), so it follows this session's wet state.
+  // Autopilot / "Fill this page's form": what this page would submit. Wet sessions run on Rain
+  // with the wet setup. GPRO allows ONE dry compound per race (Q1 tyre help text) - the first dry
+  // session locks it - so a dry session always fits the race strategy's best dry compound (Q2
+  // picks it when a wet Q1 left it open, else the compound Q1 already locked). Q2's tyre is also
+  // the race START tyre (the Q2 box is "Qualify 2 / Race start").
   {
   const sv = setup && setup.Q1;
   const fields = sv ? { FWing: sv['Front Wing'], RWing: sv['Rear Wing'], Engine: sv['Engine'], Brakes: sv['Brakes'], Gear: sv['Gearbox'], Suspension: sv['Suspension'] } : {};
@@ -4218,17 +4235,17 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   let skip = !sv ? 'no setup could be computed (track/driver data missing)' : planRiskIdx == null ? 'no risk recommendation (driver data missing)' : null;
   if (!isQ2) {
   fields.TypeLap = 'Qualify';
-  if (thisSessionWet) skip = skip || 'Q1 is wet — Q1 also fixes the race\'s dry compound, so this one is yours to drive';
-  else if (TYRE_CODES[sessionTyreRec]) fields.Tyres = TYRE_CODES[sessionTyreRec];
-  else skip = skip || 'no dry compound recommendation';
+  if (TYRE_CODES[sessionTyreRec]) fields.Tyres = TYRE_CODES[sessionTyreRec];
+  else skip = skip || 'no tyre recommendation';
   } else {
-  fields.Tyres = thisSessionWet ? TYRE_CODES.Rain : '@dry';
+  const raceDryCode = tyre && tyre.bestDry ? TYRE_CODES[tyre.bestDry.name] : null;
+  fields.Tyres = thisSessionWet ? TYRE_CODES.Rain : { dry: raceDryCode || 0 };
   if (planQ2Fuel != null && planQ2Fuel >= 10 && planQ2Fuel <= TANK_MAX) fields.Fuel = planQ2Fuel;
   else skip = skip || 'no start-fuel recommendation';
   }
   const riskTxt = planRiskIdx != null ? QUAL_RISK_OPTIONS[planRiskIdx] : '?';
   publishPlan(isQ2 ? 'q2' : 'q1', { form: 'formQual', submit: 'DriveLap', fields, skip, sig: planSig(fields),
-  summary: `${sessionLabel} ${sv ? `FW${sv['Front Wing']} RW${sv['Rear Wing']} E${sv['Engine']} B${sv['Brakes']} G${sv['Gearbox']} S${sv['Suspension']}` : ''}, ${isQ2 ? (thisSessionWet ? 'Rain' : 'Q1 compound') : sessionTyreRec}, "${riskTxt}"${isQ2 ? `, start fuel ${planQ2Fuel}L` : ''}` });
+  summary: `${sessionLabel} ${sv ? `FW${sv['Front Wing']} RW${sv['Rear Wing']} E${sv['Engine']} B${sv['Brakes']} G${sv['Gearbox']} S${sv['Suspension']}` : ''}, ${isQ2 ? (thisSessionWet ? 'Rain' : (tyre && tyre.bestDry ? tyre.bestDry.name : 'locked dry compound')) : sessionTyreRec}, "${riskTxt}"${isQ2 ? `, start fuel ${planQ2Fuel}L` : ''}` });
   }
 
   body(h);
@@ -4943,6 +4960,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   if (driverRiskRec) Object.assign(fields, { RiskOver: driverRiskRec.overtakeRisk, RiskDefend: driverRiskRec.defendRisk, DriverRisk: driverRiskRec.dryRisk, RiskWet: driverRiskRec.wetRisk, DriverRiskProb: driverRiskRec.malfunctionRisk, StartRisk: driverRiskRec.startRisk, AskPits: 1, LapsStopProb: driverRiskRec.problemPitLaps });
   const boosts = (boostLapsList || []).slice().sort((a, b) => a - b);
   for (let i = 1; i <= 3; i++) fields['BoostLap' + i] = boosts[i - 1] || 0;
+  const raceDryCode = tyre && tyre.bestDry ? TYRE_CODES[tyre.bestDry.name] : null;
+  if (raceDryCode) Object.assign(fields, { StartTyres: { ifEnabled: startIsWet ? TYRE_CODES.Rain : raceDryCode }, DryTyres: { ifEnabled: raceDryCode }, RainTyres: { ifEnabled: TYRE_CODES.Rain } });
   const skip = !rv ? 'no race setup could be computed' : !fills ? 'no fuel plan (track/driver data missing)' : !driverRiskRec ? 'no risk recommendation' : null;
   publishPlan('race', { form: 'formQual', submit: 'btnConfirmSettings', fields, skip, sig: planSig(fields),
   summary: rv ? `setup FW${rv['Front Wing']} RW${rv['Rear Wing']} E${rv['Engine']} B${rv['Brakes']} G${rv['Gearbox']} S${rv['Suspension']}, stops ${fills ? fills.map((f) => `${f.fill}L@L${f.lap}`).join(' ') || 'none' : '?'}, boost ${boosts.join('/') || '—'}, risks ${driverRiskRec ? `${driverRiskRec.overtakeRisk}/${driverRiskRec.defendRisk}/${driverRiskRec.dryRisk}/${driverRiskRec.wetRisk}/${driverRiskRec.malfunctionRisk}` : '?'}` : '' });
@@ -5967,7 +5986,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  { key: 'staffTrain', label: 'Staff training', url: 'StaffAndFacilities.asp' },
  { key: 'facilities', label: 'Facility upgrades (league targets, cash permitting)', url: 'StaffAndFacilities.asp' },
  { key: 'driverTrain', label: 'Driver training', url: 'TrainingSession.asp' },
- { key: 'q1', label: 'Q1 lap (dry sessions only)', url: 'Qualify.asp' },
+ { key: 'testing', label: 'Testing for car points (league timing, wear + cash gated)', url: 'Testing.asp', repeat: 10 },
+ { key: 'q1', label: 'Q1 lap', url: 'Qualify.asp' },
  { key: 'q2', label: 'Q2 lap + start fuel', url: 'Qualify2.asp' },
  { key: 'race', label: 'Race setup & strategy', url: 'RaceSetup.asp' },
  ];
@@ -5986,8 +6006,14 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (!form) return { error: `form "${plan.form}" not on the page` };
  const missing = [], set = [];
  Object.keys(plan.fields).forEach((name) => {
- const want = plan.fields[name];
+ let want = plan.fields[name];
  const el = form.elements[name];
+ // {ifEnabled: v}: set only when GPRO leaves the field editable (RaceSetup's tyre selects are
+ // locked by Q1/Q2 in a normal weekend) - a locked field is fine, not "missing".
+ if (want && typeof want === 'object' && 'ifEnabled' in want) {
+ if (!el || el.disabled) return;
+ want = want.ifEnabled;
+ }
  if (!el) { missing.push(name); return; }
  if (el.length != null && el.tagName !== 'SELECT') { // radio group
  const r = Array.from(el).find((x) => x.value === String(want));
@@ -5997,7 +6023,9 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (el.tagName === 'SELECT') {
  const opts = Array.from(el.options);
  let opt = null;
- if (want === '@dry') opt = opts.find((o) => o.value && o.value !== '0' && o.value !== '6');
+ // {dry: code}: that compound if the page still offers it, else the one dry compound an earlier
+ // dry session already locked in (GPRO allows one dry compound per race).
+ if (want && typeof want === 'object' && 'dry' in want) opt = opts.find((o) => o.value === String(want.dry)) || opts.find((o) => o.value && o.value !== '0' && o.value !== '6');
  // Option texts use non-breaking spaces (facility selects, 2026-10-30), and "level 2" must not
  // match "level 20" - so compare whitespace-normalized text with a non-digit after the prefix.
  else if (want && typeof want === 'object' && want.text) opt = opts.find((o) => { const t = o.textContent.replace(/\s+/g, ' ').trim(); return t.indexOf(want.text) === 0 && !/\d/.test(t.charAt(want.text.length)); });
@@ -6160,6 +6188,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  status('Refreshing data');
  const homeHtml = await fetchPageHTML('gpro.asp');
  const next = parseNextRace(homeHtml);
+ if (next) GM_setValue('gpro_next_race', JSON.stringify(next));
  await backgroundCaptureAuxPages(new DOMParser().parseFromString(homeHtml, 'text/html')).catch((e) => logError('aux capture', e.message));
  status('Race log');
  await harvestRaceHistory(log, PILOT_HARVEST_PER_RUN).catch((e) => log(`⚠ Race log: ${e.message}`));
@@ -6179,7 +6208,19 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (peek.ok && !peek.skipped && peek.sig === prev.sig) continue; // unchanged plan: not re-posted
  await pause(PILOT_FETCH_GAP_MS);
  }
- const r = await runFrameStep(step, dryRun);
+ let r = await runFrameStep(step, dryRun);
+ // Testing drives one stint per post; keep going while the plan still says drive (wear, laps
+ // and cash are re-checked by the frame's fresh render before every stint).
+ if (step.repeat && !dryRun && r.ok && !r.skipped) {
+ const stints = [r.msg];
+ for (let k = 1; k < step.repeat; k++) {
+ await pause(PILOT_FETCH_GAP_MS);
+ const more = await runFrameStep(step, false);
+ if (!more.ok || more.skipped) break;
+ stints.push(more.msg);
+ }
+ r = Object.assign({}, r, { msg: `${stints.length} stint${stints.length !== 1 ? 's' : ''} (${stints.join('; ')})` });
+ }
  if (!r.ok) { log(`⚠ ${step.label.split(' —')[0]}: ${r.msg}`); continue; }
  if (r.skipped) { log(`· ${step.label.split(' —')[0]}: ${r.msg}`); if (!dryRun && step.key !== 'race') { doneFor[step.key] = { at: Date.now(), skipped: true }; } continue; }
  if (dryRun) { log(`👁 ${step.label.split(' —')[0]}: ${r.msg}`); continue; }
@@ -6258,7 +6299,7 @@ button{font:inherit;color:inherit;cursor:pointer}
 <div class="sec"><div class="h">Switches</div>
 ${sw('enabled', '<b>Autopilot</b> — runs in the background on any GPRO page', !!st.enabled)}
 ${PILOT_STEPS.map((s) => sw('step:' + s.key, esc(s.label), !!st.steps[s.key])).join('')}
-<div class="note" style="margin-top:4px;">Every action uses the advisor's own recommendation. Spending never goes below $${(PILOT_CASH_RESERVE / 1e6).toFixed(0)}M cash (own safety floor). Testing stays manual.</div></div>
+<div class="note" style="margin-top:4px;">Every action uses the advisor's own recommendation. Spending never goes below $${(PILOT_CASH_RESERVE / 1e6).toFixed(0)}M cash (own safety floor). Testing follows the league timing in gpro-data.js testingPolicy.</div></div>
 <div class="sec"><div class="h">${doneKey ? `Race S${esc(doneKey.replace('-', ' R'))}` : 'This race'}</div>${PILOT_STEPS.map(ck).join('')}</div>
 <div class="sec"><div class="btns" style="margin-top:0;"><button class="btn pri" data-a="run">Run now</button><button class="btn" data-a="preview">Preview</button></div>
 ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill this page's form</button></div>` : ''}
@@ -6327,6 +6368,7 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  const st = pilotState();
  if (!st.enabled || IN_AUTO_FRAME) return;
  if (['qualify1', 'qualify2', 'raceSetup', 'updateCar', 'staff', 'training', 'testing'].indexOf(page) !== -1) return;
+ // (testing is a form page too - never auto-run while the user is on it)
  if (Date.now() - (st.lastRun || 0) < PILOT_RUN_EVERY_MIN * 60000) return;
  runAutoPilot({ status, say: (m) => { if (m.indexOf('✅') === 0 || m.indexOf('⚠') === 0) toast(m, m.indexOf('⚠') === 0); } })
  .then(refresh).catch((e) => toast('⚠ ' + e.message, true));
@@ -6400,6 +6442,72 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  // that drives the race stand). If the DOM parser caught completed test stints, each stint's
  // measured fuel/lap is compared against the expected dry figure so the user can see what their
  // own testing data is actually saying.
+ // Testing engine. GPRO hides the test-points -> car character point conversion, so this is a
+ // rules-based gate, not an optimiser (own heuristic, disclosed in the panel):
+ // - league timing from D.testingPolicy (Rookie: only the closing races, to bank CCPs for
+ //   Amateur - rules: CCPs carry over minus a cut while Rookie parts reset, and they decay if you
+ //   stop; experienced managers: "not a major factor in Rookie or even Amateur", 3-4 levels banked
+ //   by Elite) - so from Amateur on it tests every race;
+ // - cash: a session costs $1M (rules 4.2) and must leave PILOT_CASH_RESERVE;
+ // - wear: no part may be over 90% (rules 4.2) and test wear + next race's predicted wear must stay
+ //   <= TEST_WEAR_CEILING on every part - otherwise testing just buys an extra replacement;
+ // - laps: up to the session's 100, stints of <= 50 (rules 4.3), Hard tyres so the stint completes,
+ //   the testing track's own setup and GAPP fuel for the stint + 5% (never over the tank).
+ const TEST_WEAR_CEILING = 95;
+ const TEST_SESSION_COST = 1000000;
+ function calcTestingPlan(testing, league) {
+ const out = { skip: null, why: '' };
+ const policy = (D.testingPolicy && league && D.testingPolicy[league]) || null;
+ let next = null;
+ try { next = JSON.parse(GM_getValue('gpro_next_race', 'null')); } catch (e) { next = null; }
+ const raceNo = next && next.race;
+ if (!policy) { out.skip = `no testing policy for ${league || 'unknown'} league`; return out; }
+ out.why = policy.note;
+ if (raceNo != null && raceNo < policy.fromRace) { out.skip = `${league}: testing starts from race ${policy.fromRace} (next race is ${raceNo})`; return out; }
+ const sess = testing.session;
+ if (!sess) { out.skip = 'couldn\'t read laps left in this session'; return out; }
+ const lapsLeft = sess.lapsMax - sess.lapsDone, stintsLeft = sess.stintsMax - sess.stintsDone;
+ if (lapsLeft < 5 || stintsLeft < 1) { out.skip = 'this session is used up (100 laps / 10 stints)'; return out; }
+ const cash = (getCachedCarData() || {}).cash || 0;
+ if (sess.lapsDone === 0 && cash - TEST_SESSION_COST < PILOT_CASH_RESERVE) { out.skip = 'a session costs $1M and cash would drop below the reserve'; return out; }
+ const car = mergeWithCachedCarData(getDataDomOnly('/UpdateCar'));
+ const driver = getDataDomOnly('/DriProfile');
+ const nextTrack = getDataDomOnly('/TrackProfile');
+ const testGapp = lookupGappTrack(testing.trackName, 'trackData');
+ const testWearT = lookupGappTrack(testing.trackName, 'wearData');
+ if (!car || !driver || !testGapp || !testWearT) { out.skip = `missing ${!testGapp || !testWearT ? 'GAPP data for ' + (testing.trackName || 'the testing track') : 'car/driver data'}`; return out; }
+ const worst = PART_NAMES.map((n, i) => ({ n, w: parseInt(car[PART_WEAR_KEYS[i]]) || 0 })).sort((a, b) => b.w - a.w)[0];
+ if (worst.w > 90) { out.skip = `${worst.n} is at ${worst.w}% - GPRO won't test above 90%`; return out; }
+ // Laps the wear budget allows: per part, (ceiling - now - next race) / test wear per lap.
+ const raceWear = calcPartsWear(car, driver, 0, nextTrack && nextTrack.trackName) || [];
+ const df = calcDriverWearFactor(driver);
+ const lf = D.gapp.levelFactors;
+ const testLapsTrack = testGapp.values[12] || 60;
+ let lapBudget = lapsLeft, binding = null;
+ PART_NAMES.forEach((n, i) => {
+ const perLap = gappPartRaceWear(testWearT, lf, i, parseInt(car[PART_LVL_KEYS[i]]) || 1, 0, df) / testLapsTrack;
+ const room = TEST_WEAR_CEILING - (parseInt(car[PART_WEAR_KEYS[i]]) || 0) - ((raceWear[i] && raceWear[i].raceWear) || 0);
+ const lapsOk = perLap > 0 ? Math.floor(room / perLap) : lapsLeft;
+ if (lapsOk < lapBudget) { lapBudget = lapsOk; binding = n; }
+ });
+ if (lapBudget < 5) { out.skip = `${binding} would end the next race above ${TEST_WEAR_CEILING}% with any testing`; return out; }
+ const stintLaps = Math.min(50, lapBudget, lapsLeft);
+ const ff = D.gapp.fuelFactorCoeffs, t = testGapp.values;
+ const fuelFactor = ff.concentration * numOrDefault(driver.concentration, 100) + ff.aggressiveness * numOrDefault(driver.aggressiveness, 50) + ff.experience * numOrDefault(driver.experience, 50) + ff.techInsight * numOrDefault(driver.techInsight, 50) + ff.engineLevel * (parseInt(car.lvlEngine) || 1) + ff.electronicsLevel * (parseInt(car.lvlElectronics) || 1);
+ const perLapFuel = t[8] * (t[6] + fuelFactor) / (t[12] || 1);
+ const laps = Math.min(stintLaps, Math.floor((TANK_MAX - 1) / (perLapFuel * 1.05)));
+ const temp = testing.temp != null ? testing.temp : 20;
+ const pub = D.trackPub && D.trackPub[testing.trackName];
+ const su = calcCarSetupSmart(temp, temp, temp, false, false, false, (pub && pub.power) || MONTREAL_POWER, testing.trackName, driver, car);
+ if (!su || !su.Q1) { out.skip = 'no setup for the testing track'; return out; }
+ const v = su.Q1;
+ out.stintLaps = laps; out.fuel = Math.min(TANK_MAX, Math.ceil(perLapFuel * laps * 1.05) + 1); out.tyre = 'Hard';
+ out.plannedLaps = Math.min(lapBudget, lapsLeft);
+ out.fields = { FWing: v['Front Wing'], RWing: v['Rear Wing'], Engine: v['Engine'], Brakes: v['Brakes'], Gear: v['Gearbox'], Suspension: v['Suspension'], Tyres: TYRE_CODES.Hard, Fuel: out.fuel, slStintLength: laps, slResearchPriority: 0 };
+ out.why = `${policy.note} Wear budget allows ${lapBudget} laps${binding ? ` (${binding} is the limit)` : ''}; research priority left at "No special priority" (GPRO doesn't document what each focus does).`;
+ return out;
+ }
+
  function renderTesting(league) {
   const gapp = (typeof GPRO_DATA !== 'undefined') ? GPRO_DATA.gapp : null;
   const testing = parseTestingDOM(document);
@@ -6472,6 +6580,31 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
   h += mkSection('Measured test stints', stintsHtml + `<span style="font-size:9px;color:${PALETTE.textDim};">Parsed from this page. Dry-baseline comparison; wet sessions run ~12% heavier.</span>`);
   }
   }
+
+  // Testing points history - GPRO doesn't publish how test laps become car character points
+  // (rules 4.4: it depends on TD/staff/facilities and gets harder the more you have), so every
+  // distinct reading is kept for a later fit and exported with the rest of the data.
+  if (testing.points && testing.points.test) {
+  let hist = [];
+  try { hist = JSON.parse(GM_getValue('gpro_test_points_log', '[]')) || []; } catch (e) { hist = []; }
+  const snap = JSON.stringify(testing.points) + (testing.session ? testing.session.lapsDone : '');
+  if (!hist.length || hist[hist.length - 1].snap !== snap) { hist.push({ at: Date.now(), snap, points: testing.points, session: testing.session }); GM_setValue('gpro_test_points_log', JSON.stringify(hist.slice(-300))); }
+  }
+  const tp = calcTestingPlan(testing, league);
+  h += mkSection('Testing plan', mkRec(tp.skip ? `<strong>Don't test now:</strong> ${esc(tp.skip)}` : `<strong>Drive ${tp.stintLaps} laps</strong> on ${esc(tp.tyre)} with ${tp.fuel}L (${tp.plannedLaps} laps planned this session)`, tp.skip ? 'info' : 'good')
+  + `<div style="font-size:9px;color:${PALETTE.textDim};margin-top:4px;">${esc(tp.why)}</div>`
+  + (() => {
+  // Parts route vs testing route to one more car level (39 CCP = one level, experienced-manager
+  // rule; part prices from D.partCosts). The CCP-per-session rate isn't published - it's measured
+  // from gpro_test_points_log as sessions and races accumulate.
+  const carNow = mergeWithCachedCarData(getDataDomOnly('/UpdateCar')) || {};
+  const lv = PART_LVL_KEYS.map((k) => parseInt(carNow[k]) || 1);
+  const nextLvl = Math.min(9, Math.floor(lv.reduce((a, b) => a + b, 0) / lv.length) + 1);
+  const partsCost = D.partCosts && D.partCosts.TOTAL ? D.partCosts.TOTAL[nextLvl - 1] : null;
+  const ccp = testing.points && testing.points.ccp ? testing.points.ccp.p + testing.points.ccp.h + testing.points.ccp.a : null;
+  return `<div style="font-size:10px;color:${PALETTE.text};margin-top:6px;">One car level: all 11 parts at L${nextLvl} = ${partsCost ? '$' + partsCost.toLocaleString() : '?'} (and re-bought as they wear out) vs 39 car points from testing at $1M a session. Testing points banked now: ${ccp != null ? ccp : '?'} (${ccp != null ? (ccp / 39).toFixed(2) : '?'} levels).</div>`;
+  })());
+  publishPlan('testing', { form: 'formQual', submit: 'DriveStint', fields: tp.fields || {}, skip: tp.skip, summary: tp.skip ? '' : `${tp.stintLaps} laps on ${tp.tyre}, ${tp.fuel}L`, sig: tp.fields ? planSig(tp.fields) : '' });
 
   body(h);
   }

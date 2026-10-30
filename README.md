@@ -100,12 +100,13 @@ Every switch starts **off**. Turn on the master switch plus the steps you want, 
 | Staff training | Trains the first skill below GPRO's cap (Concentration → Stress Handling → Efficiency) |
 | Facility upgrades | Raises facilities to your league targets, in order, while cash stays above the reserve |
 | Driver training | Books the advisor's top training recommendation |
-| Q1 | Drives the Q1 lap with the advisor's setup, race dry compound and risk (dry Q1 only — a wet Q1 is left to you) |
+| Testing | Drives test stints for car character points every race the cash and wear checks allow (a car level of testing points costs far less than a level of parts) |
+| Q1 | Drives the Q1 lap with the advisor's setup, tyre (Rain if wet, the race's dry compound if dry) and risk |
 | Q2 | Drives Q2 with the setup, risk and start fuel |
 | Race setup | Confirms setup, fuel per stop, boost laps and all risks; re-confirms if the forecast changes the plan |
 
 - One run per race; nothing after qualifying closes; qualifies early to collect the early-qualifying bonus.
-- Never spends below **$5M** cash. Testing is never automated.
+- Never spends below **$5M** cash. Testing never pushes a part past 95% by the end of the next race.
 - Each race analysis is logged automatically (this season's races; older seasons are locked by GPRO unless unlocked with supporter credits). **Export data** downloads everything it has learned.
 - **Fill this page's form** (in the pill) fills the page you're on without submitting — the manual way to use the same plan.
 
