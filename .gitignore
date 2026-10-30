@@ -5,6 +5,9 @@
 .DS_Store
 Thumbs.db
 
+# Exported advisor data (race log, captured pages) - personal account data, kept out of the repo
+data/
+
 # Browser automation logs
 .playwright-mcp/
 

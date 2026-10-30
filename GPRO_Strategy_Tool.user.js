@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.28.2
+// @version 6.29.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1468,11 +1468,12 @@ if (h.includes('TrainingSession.asp')) return 'training';
  // their stale-fallback cache without requiring a manual visit. Driver ID and track ID are read from
  // links already present on gpro.asp itself (`DriverProfile.asp?ID=N`, `TrackDetails.asp?id=N`) -
  // both are always on the home page, so no extra request is needed to discover them.
- async function backgroundCaptureAuxPages() {
+ async function backgroundCaptureAuxPages(homeDoc) {
+ const root = homeDoc || document;
  const results = { driver: false, track: false, suppliers: false, staff: false, weather: false, testing: false, td: false, neg: false };
- const driverLink = document.querySelector('a[href*="DriverProfile.asp?ID="]');
- const trackLink = document.querySelector('a[href*="TrackDetails.asp?id="]');
- const tdLink = document.querySelector('a[href*="TDProfile.asp"]');
+ const driverLink = root.querySelector('a[href*="DriverProfile.asp?ID="]');
+ const trackLink = root.querySelector('a[href*="TrackDetails.asp?id="]');
+ const tdLink = root.querySelector('a[href*="TDProfile.asp"]');
  const driverId = driverLink && (driverLink.getAttribute('href').match(/ID=(\d+)/) || [])[1];
  const trackId = trackLink && (trackLink.getAttribute('href').match(/id=(\d+)/) || [])[1];
  const tdId = tdLink && (tdLink.getAttribute('href').match(/ID=(\d+)/i) || [])[1];
@@ -3094,6 +3095,13 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  }
 
  function saveRaceRecord(rec) {
+ // Lap rows are folded into per-stint compound/wet-lap counts before storing (hundreds of history
+ // races x ~70 rows would bloat GM storage); raceStints reads either form.
+ if (rec.lapRows) {
+ const st = raceStints(rec);
+ rec = Object.assign({}, rec, { stintInfo: st.map((x) => ({ compound: x.compound, wetLaps: x.wetLaps })) });
+ delete rec.lapRows;
+ }
  let stored = [];
  try { stored = JSON.parse(GM_getValue(RACE_LOG_KEY, '[]')) || []; } catch (e) { stored = []; }
  stored = stored.filter((r) => !(r.season === rec.season && r.race === rec.race));
@@ -3118,12 +3126,13 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const tyreEnd = k < pits.length ? pits[k].tyreCond : rec.finishTyres;
  const inStint = (l) => l >= from && l <= to;
  const lapRows = (rec.lapRows || []).filter((r) => inStint(r.lap));
- const compound = (rec.compounds && rec.compounds[k]) || (lapRows.length ? lapRows[lapRows.length - 1].tyres : null);
+ const info = rec.stintInfo && rec.stintInfo[k];
+ const compound = (rec.compounds && rec.compounds[k]) || (info && info.compound) || (lapRows.length ? lapRows[lapRows.length - 1].tyres : null);
  stints.push({
  from, to, laps: to - from + 1, compound, fuelIn, fuelOut, tyreEnd,
  fuelUsed: (fuelIn != null && fuelOut != null) ? fuelIn - fuelOut : null,
  boostLaps: rec.boostLaps ? rec.boostLaps.filter(inStint).length : null,
- wetLaps: lapRows.length ? lapRows.filter((r) => /rain/i.test(r.weather || '')).length : null,
+ wetLaps: lapRows.length ? lapRows.filter((r) => /rain/i.test(r.weather || '')).length : (info ? info.wetLaps : null),
  tyrePerLap: tyreEnd != null ? (100 - tyreEnd) / (to - from + 1) : null,
  });
  }
@@ -3157,6 +3166,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const perPart = PART_NAMES.map(() => []);
  let races = 0;
  getRaceLog().forEach((rec) => {
+ // Dry races only: the prediction uses the dry clear-track risk, and wet laps wear differently.
+ if (rec.wetLaps) return;
  const rows = racePartWearRatios(rec);
  if (!rows) return;
  races++;
@@ -3988,6 +3999,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const sessionTemp = isQ2 ? q2Temp : q1Temp;
  const sessionWet = isQ2 ? q2WetQ : q1WetQ;
  const sessionLabel = isQ2 ? 'Q2' : 'Q1';
+ let planRiskIdx = null, planQ2Fuel = null; // collected for the autopilot plan published below
  const trackPower = parseInt(track && (track.trackPower || track.power)) || MONTREAL_POWER;
  const qualTrackName = (practice||{}).trackName || (track||{}).trackName || '';
  const setup = calcCarSetupSmart(sessionTemp, sessionTemp, sessionTemp, sessionWet, false, false, trackPower, qualTrackName, driver, car);
@@ -4096,6 +4108,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     : 0;
     const q2Stint1BoostL = Math.round(q2BoostInStint1 * q2PerBoostLap);
     const adjustedFuelPerStint = q2FirstStint + q2Stint1BoostL;
+    planQ2Fuel = adjustedFuelPerStint;
     const boostNote = q2BoostInStint1 > 0 ? `<br><span style="font-size:9px;color:#f59e0b;">Includes ~${q2Stint1BoostL}L for the ⚡${q2BoostInStint1} boost lap${q2BoostInStint1 !== 1 ? 's' : ''} in stint 1 (boost laps ${q2BoostLapsList.join(', ')}, ~${q2BoostFuel}L total over the race)</span>` : '';
    // Show the full shared plan (stops + per-stint fuel) so Q2 matches Race Setup exactly, not just
    // the first-stint number in isolation.
@@ -4187,10 +4200,35 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const distanceKm = gappTrackForRisk ? gappTrackForRisk.values[8] : 300;
   const riskRec = calcDriverStrategyRecommendation(driver, ctr, track, sessionWet, analyze ? analyze.maxRain : 0, distanceKm);
   if (riskRec) {
-  const riskSelect = document.querySelector('select[name="setRisk"], select[name="q1Risk"], select[name="q2Risk"]');
+  planRiskIdx = qualRiskIdx(riskRec);
+  // Live page's select is `Risk` (read 2026-10-30); the API-spec names never matched the DOM.
+  const riskSelect = document.querySelector('select[name="Risk"]');
   const currentVal = riskSelect ? riskSelect.options[riskSelect.selectedIndex].text : null;
   h += mkSection('Qualifying Risk', `<div data-risk-preview>${mkQualRiskInner(riskRec, sessionLabel, sessionWet, currentVal)}</div>`, 'gpro-sec-risk-preview');
   }
+  }
+
+  // Autopilot / "Fill this page's form": what this page would submit. Q1's compound also fixes the
+  // race's dry compound (rules 2.4), so a wet Q1 is left to the user; Q2's compound is the race
+  // START tyre (the Q2 box is "Qualify 2 / Race start"), so it follows this session's wet state.
+  {
+  const sv = setup && setup.Q1;
+  const fields = sv ? { FWing: sv['Front Wing'], RWing: sv['Rear Wing'], Engine: sv['Engine'], Brakes: sv['Brakes'], Gear: sv['Gearbox'], Suspension: sv['Suspension'] } : {};
+  if (planRiskIdx != null) fields.Risk = planRiskIdx;
+  let skip = !sv ? 'no setup could be computed (track/driver data missing)' : planRiskIdx == null ? 'no risk recommendation (driver data missing)' : null;
+  if (!isQ2) {
+  fields.TypeLap = 'Qualify';
+  if (thisSessionWet) skip = skip || 'Q1 is wet — Q1 also fixes the race\'s dry compound, so this one is yours to drive';
+  else if (TYRE_CODES[sessionTyreRec]) fields.Tyres = TYRE_CODES[sessionTyreRec];
+  else skip = skip || 'no dry compound recommendation';
+  } else {
+  fields.Tyres = thisSessionWet ? TYRE_CODES.Rain : '@dry';
+  if (planQ2Fuel != null && planQ2Fuel >= 10 && planQ2Fuel <= TANK_MAX) fields.Fuel = planQ2Fuel;
+  else skip = skip || 'no start-fuel recommendation';
+  }
+  const riskTxt = planRiskIdx != null ? QUAL_RISK_OPTIONS[planRiskIdx] : '?';
+  publishPlan(isQ2 ? 'q2' : 'q1', { form: 'formQual', submit: 'DriveLap', fields, skip, sig: planSig(fields),
+  summary: `${sessionLabel} ${sv ? `FW${sv['Front Wing']} RW${sv['Rear Wing']} E${sv['Engine']} B${sv['Brakes']} G${sv['Gearbox']} S${sv['Suspension']}` : ''}, ${isQ2 ? (thisSessionWet ? 'Rain' : 'Q1 compound') : sessionTyreRec}, "${riskTxt}"${isQ2 ? `, start fuel ${planQ2Fuel}L` : ''}` });
   }
 
   body(h);
@@ -4244,7 +4282,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const distKm = gappTrack ? gappTrack.values[8] : 300;
   const newRiskRec = calcDriverStrategyRecommendation(driver, ctr, track, curSessionWet, analyze ? analyze.maxRain : 0, distKm);
   if (newRiskRec) {
-  const sel = document.querySelector('select[name="setRisk"], select[name="q1Risk"], select[name="q2Risk"]');
+  const sel = document.querySelector('select[name="Risk"]');
   riskEl.innerHTML = mkQualRiskInner(newRiskRec, sessionLabel, curSessionWet, sel ? sel.options[sel.selectedIndex].text : null);
   }
   }
@@ -4728,19 +4766,13 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  }
  const setupTrackPower = trackPower || MONTREAL_POWER;
  const raceTrackName = (practice && practice.trackName) || (track && track.trackName) || '';
- let setup = calcCarSetupSmart(q1Temp, q2Temp, raceTemp, q1Wet, q2Wet, raceWet, setupTrackPower, raceTrackName, driver, car);
- // Shared column spec for mkSetupTableInner - used by both the initial render below and
- // updateRaceSetupInPlace's post-weather-change table rebuild further down.
- const raceSetupColumns = (curQ1Wet, curQ2Wet, curRaceWet) => [
- { key: 'Q1', label: `Q1 (${q1Temp.toFixed(0)}°C) <select id="gpro-q1-weather" style="font-size:9px;background:#1f2937;color:#f9fafb;border:1px solid #374151;border-radius:3px;"><option value="0"${!curQ1Wet ? ' selected' : ''}>☀️ Dry</option><option value="1"${curQ1Wet ? ' selected' : ''}>🌧️ Wet</option></select>` },
- { key: 'Q2', label: `Q2 (${q2Temp.toFixed(0)}°C) <select id="gpro-q2-weather" style="font-size:9px;background:#1f2937;color:#f9fafb;border:1px solid #374151;border-radius:3px;"><option value="0"${!curQ2Wet ? ' selected' : ''}>☀️ Dry</option><option value="1"${curQ2Wet ? ' selected' : ''}>🌧️ Wet</option></select>` },
- { key: 'Race', label: `Race (${raceTemp.toFixed(0)}°C ${curRaceWet ? '🌧️' : '☀️'})`, highlight: true },
- ];
  // Car Setup Race column = the DOMINANT race condition (most laps), because the single submitted
  // setup is fixed for the whole weekend and should optimise the majority of the race. A brief wet
  // OPENING stint (e.g. Monza's ~14 wet laps vs ~39 dry) is handled by just starting on rain tyres,
  // not by wet-optimising the setup. Starts wet separately later for the tyre/fuel plan, which is a
- // different decision (compound choice) from the setup numbers.
+ // different decision (compound choice) from the setup numbers. (v6.28.2: the Race VALUES were
+ // still computed from raceWet - only the column's icon followed dominantWet - so a wet-start,
+ // dry-dominated race showed wet numbers under a sun icon.)
  let dominantWet = raceWet;
  if (analyze && analyze.raceProfile && analyze.raceProfile.phases && analyze.raceProfile.phases.length) {
  const ph = analyze.raceProfile.phases;
@@ -4748,6 +4780,14 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const dryLaps = ph.filter(p => p.condition === 'dry').reduce((a, p) => a + p.laps, 0);
  dominantWet = wetLaps > dryLaps;
  }
+ let setup = calcCarSetupSmart(q1Temp, q2Temp, raceTemp, q1Wet, q2Wet, dominantWet, setupTrackPower, raceTrackName, driver, car);
+ // Shared column spec for mkSetupTableInner - used by both the initial render below and
+ // updateRaceSetupInPlace's post-weather-change table rebuild further down.
+ const raceSetupColumns = (curQ1Wet, curQ2Wet, curRaceWet) => [
+ { key: 'Q1', label: `Q1 (${q1Temp.toFixed(0)}°C) <select id="gpro-q1-weather" style="font-size:9px;background:#1f2937;color:#f9fafb;border:1px solid #374151;border-radius:3px;"><option value="0"${!curQ1Wet ? ' selected' : ''}>☀️ Dry</option><option value="1"${curQ1Wet ? ' selected' : ''}>🌧️ Wet</option></select>` },
+ { key: 'Q2', label: `Q2 (${q2Temp.toFixed(0)}°C) <select id="gpro-q2-weather" style="font-size:9px;background:#1f2937;color:#f9fafb;border:1px solid #374151;border-radius:3px;"><option value="0"${!curQ2Wet ? ' selected' : ''}>☀️ Dry</option><option value="1"${curQ2Wet ? ' selected' : ''}>🌧️ Wet</option></select>` },
+ { key: 'Race', label: `Race (${raceTemp.toFixed(0)}°C ${curRaceWet ? '🌧️' : '☀️'})`, highlight: true },
+ ];
  const startIsWet = raceWet; // race STARTS wet (ground truth for the opening compound)
  // When the race starts wet but is dominated by dry (or vice versa), note the difference rather
  // than silently showing a setup that doesn't match the opening compound.
@@ -4892,6 +4932,22 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   }
   }
 
+  // Autopilot / "Fill this page's form". Start tyre/fuel come from Q1/Q2 (the page locks them);
+  // wait-to-pit fields and team-mate passing have no advisor logic, so they stay as GPRO has them.
+  {
+  const rv = setup && setup.Race;
+  const fields = {};
+  if (rv) Object.assign(fields, { FWing: rv['Front Wing'], RWing: rv['Rear Wing'], Engine: rv['Engine'], Brakes: rv['Brakes'], Gear: rv['Gearbox'], Suspension: rv['Suspension'] });
+  const fills = (fuel && fuel.stopFills) || null;
+  if (fills) for (let i = 1; i <= 5; i++) fields['FuelStop' + i] = fills[i - 1] ? fills[i - 1].fill : 0;
+  if (driverRiskRec) Object.assign(fields, { RiskOver: driverRiskRec.overtakeRisk, RiskDefend: driverRiskRec.defendRisk, DriverRisk: driverRiskRec.dryRisk, RiskWet: driverRiskRec.wetRisk, DriverRiskProb: driverRiskRec.malfunctionRisk, StartRisk: driverRiskRec.startRisk, AskPits: 1, LapsStopProb: driverRiskRec.problemPitLaps });
+  const boosts = (boostLapsList || []).slice().sort((a, b) => a - b);
+  for (let i = 1; i <= 3; i++) fields['BoostLap' + i] = boosts[i - 1] || 0;
+  const skip = !rv ? 'no race setup could be computed' : !fills ? 'no fuel plan (track/driver data missing)' : !driverRiskRec ? 'no risk recommendation' : null;
+  publishPlan('race', { form: 'formQual', submit: 'btnConfirmSettings', fields, skip, sig: planSig(fields),
+  summary: rv ? `setup FW${rv['Front Wing']} RW${rv['Rear Wing']} E${rv['Engine']} B${rv['Brakes']} G${rv['Gearbox']} S${rv['Suspension']}, stops ${fills ? fills.map((f) => `${f.fill}L@L${f.lap}`).join(' ') || 'none' : '?'}, boost ${boosts.join('/') || '—'}, risks ${driverRiskRec ? `${driverRiskRec.overtakeRisk}/${driverRiskRec.defendRisk}/${driverRiskRec.dryRisk}/${driverRiskRec.wetRisk}/${driverRiskRec.malfunctionRisk}` : '?'}` : '' });
+  }
+
   body(h);
  wireDecisionBoard();
 
@@ -4916,7 +4972,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
    // Re-scrape DOM widget for live rain state (don't rely solely on forecast for race wet)
    const liveDomTemps = scrapeSessionTempsFromDOM();
    const newRaceWet = (liveDomTemps && liveDomTemps.q2Rain !== null) ? liveDomTemps.q2Rain : rSegs[0] >= 40;
-  const newSetup = calcCarSetupSmart(q1Temp, q2Temp, raceTemp, newQ1Wet, newQ2Wet, newRaceWet, setupTrackPower, raceTrackName, driver, car);
+  const newSetup = calcCarSetupSmart(q1Temp, q2Temp, raceTemp, newQ1Wet, newQ2Wet, dominantWet, setupTrackPower, raceTrackName, driver, car);
   if (newSetup) {
   setup = newSetup; // keep the Copy buttons in sync with what's actually shown after a weather change
   const setupTable = document.querySelector('[data-setup-table]');
@@ -5180,6 +5236,26 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   recsHtml += `<div style="font-size:9px;color:#6b7280;">Car P/H/A ${phaSum.join('/')} = ${tot} → effective car level ≈ ${(tot / 39).toFixed(1)} (all-L1 car = 13/13/13; each +39 CCP from testing ≈ one extra level - community rule of thumb).</div>`;
   }
   h += mkSection('Recommendations', recsHtml);
+  // Autopilot / "Fill this page's form": only the failing-part actions above (same rule as the
+  // advisor). Options are picked by their text - their values are relative steps.
+  {
+  const fields = {};
+  let cost = 0;
+  const unfixable = [];
+  analysis.recs.forEach((r) => {
+  const idx = PART_NAMES.indexOf(r.part.name);
+  if (idx < 0) return;
+  if (r.verdict === 'REPLACE' || r.verdict === 'UPGRADE') { fields[BUY_SELECTS[idx]] = { text: `Replace with level ${r.newLvl}` }; cost += r.cost || 0; }
+  else if (r.verdict === 'DOWNGRADE') fields[BUY_SELECTS[idx]] = { text: `Downgrade to level ${r.newLvl}` };
+  else unfixable.push(r.part.name);
+  });
+  const cashNow = (car && car.cash) || 0;
+  const skip = !analysis.recs.length ? 'no part will break this race'
+  : !Object.keys(fields).length ? `${unfixable.join(', ')} will break but no affordable option — yours to decide`
+  : cost && cashNow - cost < PILOT_CASH_RESERVE ? `needs $${cost.toLocaleString()}, which would leave less than the $${(PILOT_CASH_RESERVE / 1e6).toFixed(0)}M reserve` : null;
+  publishPlan('car', { form: 'UpdateCar', submit: 'btnUpdateCar', fields, skip, sig: planSig(fields),
+  summary: Object.keys(fields).map((k) => `${PART_NAMES[BUY_SELECTS.indexOf(k)]}: ${fields[k].text}`).join(', ') + (cost ? ` ($${cost.toLocaleString()})` : '') + (unfixable.length ? ` — ${unfixable.join(', ')} still at risk` : '') });
+  }
   // Summary of parts not needing action
   const okParts = analysis.parts.filter(p => !analysis.recs.find(r => r.part.name === p.name) && !(analysis.infoOnly || []).find(i => i.name === p.name));
   if (okParts.length > 0) {
@@ -5824,8 +5900,439 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   }
   }
 
+  // Autopilot / "Fill this page's form": staff training (first trainable skill below GPRO's cap,
+  // in the advisor's priority order) and facility upgrades (league targets in their listed order -
+  // Rookie: Pitstop + Commercial first - while cash stays above the reserve). Two separate posts:
+  // the page's one form has a button for each.
+  {
+  const cashNow = (getCachedCarData() || {}).cash || 0;
+  const TRAIN_VALUES = { concentration: 'concentration', stressHandling: 'stresshandling', efficiency: 'efficiency' };
+  const pick = maxTraining > 0 ? orderedStaffSkills.find((sk) => TRAIN_VALUES[sk.key] && (parseInt(staff[sk.key]) || 0) < maxTraining) : null;
+  const trainCost = pick && pick.cost ? pick.cost : 0;
+  publishPlan('staffTrain', { form: 'Form1', submit: 'btnTrainStaff', fields: pick ? { TrainType: TRAIN_VALUES[pick.key] } : {},
+  skip: maxTraining === 0 ? 'training locked (max training level 0)' : !pick ? `every trainable skill is at the cap (${maxTraining})` : cashNow - trainCost < PILOT_CASH_RESERVE ? 'cash below the reserve' : null,
+  summary: pick ? `${pick.label} ${parseInt(staff[pick.key]) || 0} → ${(parseInt(staff[pick.key]) || 0) + 1} ($${trainCost.toLocaleString()})` : '' });
+  const SELECTS = { windtunnel: 'slWindtunnel', pitstopTrainingCenter: 'slPitStop', rdWorkshop: 'slRDWorkshop', rdDesign: 'slRDDesignCenter', engineering: 'slEngineering', lab: 'slLab', commercial: 'slCommercial' };
+  const facFields = {}, facDone = [];
+  let spend = 0;
+  if (leagueFacilityTargets) {
+  Object.keys(leagueFacilityTargets).forEach((label) => {
+  const f = facilities.find((x) => x.label === label);
+  if (!f) return;
+  const target = leagueFacilityTargets[label] || 0, now = parseInt(staff[f.key]) || 0;
+  const price = staff.upgradeCosts && staff.upgradeCosts[f.key] && staff.upgradeCosts[f.key][target];
+  if (target <= now || price == null || cashNow - spend - price < PILOT_CASH_RESERVE) return;
+  facFields[SELECTS[f.key]] = { text: `Upgrade to level ${target}` };
+  spend += price; facDone.push(`${label} L${now}→L${target}`);
+  });
+  }
+  publishPlan('facilities', { form: 'Form1', submit: 'btnUpdateFacilities', fields: facFields,
+  skip: !leagueFacilityTargets ? 'no facility targets for this league' : !facDone.length ? 'facilities at target (or not affordable above the reserve)' : null,
+  summary: `${facDone.join(', ')} ($${spend.toLocaleString()})` });
+  }
+
   body(h);
   }
+
+ // ============================================================
+ // AUTOPILOT (v6.29.0) - modelled on the user's PM Copilot / FTP Advisor autopilots
+ // ============================================================
+ // Each advisor render publishes the values it recommends for its page's own form
+ // (publishPlan). The autopilot opens that page in a hidden iframe whose window.name carries the
+ // job ('gpro-autopilot:{json}', which survives the form POST); the script instance inside the
+ // frame renders as usual, fills the form from its plan and - unless previewing - posts it, then
+ // reports back to the top window with postMessage. Every step is OFF until switched on, Preview
+ // fills without posting, and each step runs once per race (race setup re-posts only when its
+ // plan changes). Form field names were read off the live pages 2026-10-30 (Q1 risk select is
+ // `Risk`; every form carries a hidden `manPostToken`, which stays as the page set it).
+ // GPRO's Terms of Service (checked 2026-10-30) ban unreasonable server load and harvesting data
+ // for commercial use, nothing about filling your own forms - so page fetches stay sequential
+ // with pauses (PILOT_FETCH_GAP_MS) and the history harvest trickles PILOT_HARVEST_PER_RUN pages.
+ const AUTO_FRAME_PREFIX = 'gpro-autopilot:';
+ const IN_AUTO_FRAME = typeof window.name === 'string' && window.name.indexOf(AUTO_FRAME_PREFIX) === 0;
+ const PILOT_KEY = 'gpro_autopilot';
+ const PILOT_RUN_EVERY_MIN = 20;
+ const PILOT_FETCH_GAP_MS = 1500;
+ const PILOT_HARVEST_PER_RUN = 12;
+ const PILOT_FRAME_TIMEOUT_MS = 60000;
+ // Own safety floor (not a game rule): the autopilot never spends below this, so a race's
+ // salaries/maintenance (~$1M/race for this Rookie team, S113 R5 finance) can always be paid.
+ const PILOT_CASH_RESERVE = 5000000;
+ const TYRE_CODES = { 'Extra Soft': 1, 'Soft': 2, 'Medium': 3, 'Hard': 4, 'Rain': 6 };
+ const BUY_SELECTS = ['BuyChassis', 'BuyEngine', 'BuyFWing', 'BuyRWing', 'BuyUnderbody', 'BuySidepods', 'BuyCooling', 'BuyGear', 'BuyBrakes', 'BuySusp', 'BuyElectronics'];
+ // Run order matters: parts before Q1 (the setup depends on part levels), Q1 before Q2 (Q1 fixes
+ // the race's dry compound, Q2 the start fuel), race setup last.
+ const PILOT_STEPS = [
+ { key: 'car', label: 'Car parts — only when a part would break', url: 'UpdateCar.asp' },
+ { key: 'staffTrain', label: 'Staff training', url: 'StaffAndFacilities.asp' },
+ { key: 'facilities', label: 'Facility upgrades (league targets, cash permitting)', url: 'StaffAndFacilities.asp' },
+ { key: 'driverTrain', label: 'Driver training', url: 'TrainingSession.asp' },
+ { key: 'q1', label: 'Q1 lap (dry sessions only)', url: 'Qualify.asp' },
+ { key: 'q2', label: 'Q2 lap + start fuel', url: 'Qualify2.asp' },
+ { key: 'race', label: 'Race setup & strategy', url: 'RaceSetup.asp' },
+ ];
+
+ // ---- plans published by the advisor renders ----
+ const PAGE_PLANS = {};
+ function publishPlan(step, plan) { PAGE_PLANS[step] = Object.assign({ step }, plan); }
+ function planSig(fields) { return JSON.stringify(Object.keys(fields).sort().map((k) => [k, fields[k]])); }
+
+ // Sets the page form's fields by name. A value may be {text:'Replace with level 2'} (option chosen
+ // by its text - UpdateCar/facility option VALUES are relative steps, not levels) or '@dry' (the
+ // one dry compound Q2 offers after Q1). Fields we set are re-enabled: Q1's Risk select stays
+ // disabled until the Qualify radio's onclick runs, and a disabled field is never posted.
+ function fillForm(plan, doc) {
+ const form = doc.forms[plan.form] || doc.querySelector(`form[name="${plan.form}"]`);
+ if (!form) return { error: `form "${plan.form}" not on the page` };
+ const missing = [], set = [];
+ Object.keys(plan.fields).forEach((name) => {
+ const want = plan.fields[name];
+ const el = form.elements[name];
+ if (!el) { missing.push(name); return; }
+ if (el.length != null && el.tagName !== 'SELECT') { // radio group
+ const r = Array.from(el).find((x) => x.value === String(want));
+ if (!r) { missing.push(name); return; }
+ r.checked = true; set.push(name); return;
+ }
+ if (el.tagName === 'SELECT') {
+ const opts = Array.from(el.options);
+ let opt = null;
+ if (want === '@dry') opt = opts.find((o) => o.value && o.value !== '0' && o.value !== '6');
+ // Option texts use non-breaking spaces (facility selects, 2026-10-30), and "level 2" must not
+ // match "level 20" - so compare whitespace-normalized text with a non-digit after the prefix.
+ else if (want && typeof want === 'object' && want.text) opt = opts.find((o) => { const t = o.textContent.replace(/\s+/g, ' ').trim(); return t.indexOf(want.text) === 0 && !/\d/.test(t.charAt(want.text.length)); });
+ else opt = opts.find((o) => o.value === String(want));
+ if (!opt) { missing.push(name); return; }
+ el.disabled = false; el.value = opt.value;
+ } else if (el.type === 'checkbox') {
+ el.checked = !!want;
+ } else {
+ el.disabled = false; el.value = String(want);
+ }
+ el.dispatchEvent(new Event('change', { bubbles: true }));
+ set.push(name);
+ });
+ return { form, missing, set };
+ }
+
+ // Posts the form as if its own button was pressed: the button's name/value goes along as a hidden
+ // field (form.submit() skips onsubmit validation/confirm dialogs AND the submitter itself).
+ function submitPlannedForm(form, submitName) {
+ const btn = form.elements[submitName];
+ if (btn && btn.disabled) return `the page's "${btn.value || submitName}" button is disabled`;
+ const hidden = form.ownerDocument.createElement('input');
+ hidden.type = 'hidden'; hidden.name = submitName; hidden.value = btn ? btn.value : '1';
+ form.appendChild(hidden);
+ HTMLFormElement.prototype.submit.call(form);
+ return null;
+ }
+
+ // ---- inside the hidden frame ----
+ function autopilotFrameHook() {
+ if (!IN_AUTO_FRAME) return;
+ let job;
+ try { job = JSON.parse(window.name.slice(AUTO_FRAME_PREFIX.length)); } catch (e) { return; }
+ const report = (r) => { try { window.parent.postMessage(Object.assign({ gproAutopilot: true, id: job.id, step: job.step }, r), location.origin); } catch (e) { logError('autopilot report failed', e); } };
+ if (job.stage === 'submitted') {
+ report({ ok: true, posted: true, page: location.pathname.split('/').pop(), text: (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').slice(0, 400) });
+ return;
+ }
+ const plan = PAGE_PLANS[job.step];
+ if (!plan) return report({ ok: false, msg: 'the advisor computed no plan on this page' });
+ if (plan.skip) return report({ ok: true, skipped: true, msg: plan.skip });
+ const r = fillForm(plan, document);
+ if (r.error) return report({ ok: false, msg: r.error });
+ if (r.missing.length) return report({ ok: false, msg: `couldn't set ${r.missing.join(', ')}` });
+ if (job.dryRun) return report({ ok: true, preview: true, msg: plan.summary, sig: plan.sig });
+ job.stage = 'submitted';
+ window.name = AUTO_FRAME_PREFIX + JSON.stringify(job);
+ const err = submitPlannedForm(r.form, plan.submit);
+ if (err) { job.stage = 'fill'; window.name = AUTO_FRAME_PREFIX + JSON.stringify(job); report({ ok: false, msg: err }); }
+ else report({ ok: true, posting: true, msg: plan.summary, sig: plan.sig });
+ }
+
+ // ---- top window: run one step in a hidden frame ----
+ function runFrameStep(step, dryRun) {
+ return new Promise((resolve) => {
+ const id = `${Date.now()}-${step.key}`;
+ const frame = document.createElement('iframe');
+ frame.name = AUTO_FRAME_PREFIX + JSON.stringify({ id, step: step.key, dryRun: !!dryRun, stage: 'fill' });
+ frame.setAttribute('style', 'position:fixed;left:-4000px;top:0;width:1200px;height:900px;visibility:hidden;');
+ let posting = null;
+ const done = (r) => { clearTimeout(timer); window.removeEventListener('message', onMsg); frame.remove(); resolve(r); };
+ const onMsg = (e) => {
+ const d = e.data;
+ if (!d || !d.gproAutopilot || d.id !== id || e.origin !== location.origin) return;
+ if (d.posting) { posting = d; return; } // wait for the page the POST returns
+ done(d.posted ? Object.assign({}, posting, d) : d);
+ };
+ const timer = setTimeout(() => done({ ok: false, msg: posting ? 'posted, but the result page never reported back' : 'timed out waiting for the page' }), PILOT_FRAME_TIMEOUT_MS);
+ window.addEventListener('message', onMsg);
+ frame.src = `/${getLang()}/${step.url}`;
+ document.body.appendChild(frame);
+ });
+ }
+
+ // ---- state ----
+ function pilotState() {
+ let st = {};
+ try { st = JSON.parse(GM_getValue(PILOT_KEY, '{}')) || {}; } catch (e) { st = {}; }
+ st.steps = st.steps || {}; st.done = st.done || {}; st.log = st.log || []; st.harvest = st.harvest || {};
+ return st;
+ }
+ function savePilotState(st) {
+ st.log = st.log.slice(-40);
+ GM_setValue(PILOT_KEY, JSON.stringify(st));
+ }
+ function pilotLog(msg) { const st = pilotState(); st.log.push({ t: Date.now(), msg }); savePilotState(st); }
+
+ // Next race + its deadlines, from gpro.asp: "Next race: Season 113, Race 6: Oesterreichring GP"
+ // and the page's own countdown script ("until: new Date(2026, 11-1, 3, 20, 0, 0), timezone: +60"
+ // = race start; the `.qualiclose` countdown = qualifying close, 90 min earlier per the rules).
+ function parseNextRace(html) {
+ const m = html.match(/Next race:\s*(?:<\/strong>)?\s*Season\s*(\d+),\s*Race\s*(\d+)/i);
+ if (!m) return null;
+ const when = (sel) => {
+ const r = html.match(new RegExp(sel + "'\\)\\.countdown\\(\\{\\s*until:\\s*new Date\\((\\d+),\\s*(\\d+)\\s*-\\s*1,\\s*(\\d+),\\s*(\\d+),\\s*(\\d+),\\s*(\\d+)\\),\\s*timezone:\\s*([+-]?\\d+)"));
+ return r ? Date.UTC(+r[1], +r[2] - 1, +r[3], +r[4], +r[5], +r[6]) - (+r[7]) * 60000 : null;
+ };
+ const track = (html.match(/Next race:[\s\S]{0,200}?TrackDetails\.asp\?id=\d+"[^>]*>(?:<img[^>]*>)?\s*([^<]+)</i) || [])[1];
+ return { key: `${m[1]}-${m[2]}`, season: +m[1], race: +m[2], track: track ? track.trim() : null, raceStart: when('#countdown'), qualiClose: when('\\.qualiclose') };
+ }
+
+ // ---- race history harvest (RaceAnalysis.asp?SR=season,race) ----
+ // innerText needs a rendered page; fetched pages are serialized with tabs between cells and
+ // newlines between rows instead, which parseRaceAnalysisText reads the same way (checked against
+ // the live S113 R4 page 2026-10-30: every field matched the screenshot seed).
+ function docToText(doc) {
+ const clone = doc.body.cloneNode(true);
+ clone.querySelectorAll('script,style,noscript,select').forEach((n) => n.remove());
+ clone.querySelectorAll('br,p,div,h1,h2,h3,li').forEach((c) => c.appendChild(doc.createTextNode(c.closest('td,th') ? ' ' : '\n')));
+ clone.querySelectorAll('td,th').forEach((c) => c.appendChild(doc.createTextNode('\t')));
+ clone.querySelectorAll('tr,table').forEach((c) => c.appendChild(doc.createTextNode('\n')));
+ return clone.textContent.replace(/ /g, ' ').replace(/[ \r]+/g, ' ').replace(/ ?\t ?/g, '\t').replace(/ ?\n ?/g, '\n').replace(/\n{2,}/g, '\n');
+ }
+ const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+ // Races run while the manager wasn't a GPRO supporter are locked ("unlock ... for 0.4 supporter
+ // credits", seen 2026-10-30 on every S112 race) - those parse to null and are remembered in
+ // `harvest.locked` so they're never fetched again.
+ async function harvestRaceHistory(say, maxPages) {
+ const st = pilotState();
+ const locked = new Set(st.harvest.locked || []);
+ const logged = new Set(getRaceLog().map((r) => `${r.season},${r.race}`));
+ let queue = st.harvest.queue || [];
+ if (!queue.length || Date.now() - (st.harvest.listedAt || 0) > 12 * 3600e3) {
+ // The season dropdown (S) lists every season this manager raced; each season's race dropdown
+ // (SR) lists its races. Re-listed every 12 h so new races join the queue.
+ const first = new DOMParser().parseFromString(await fetchPageHTML('RaceAnalysis.asp'), 'text/html');
+ // Only the two newest seasons: older ones were all locked for this account (see above), and
+ // listing 26 seasons every 12 h would be pointless load.
+ const seasons = Array.from(first.querySelectorAll('select[name="S"] option')).map((o) => o.value).filter(Boolean).slice(0, 2);
+ queue = [];
+ for (const s of seasons) {
+ await pause(PILOT_FETCH_GAP_MS);
+ const d = new DOMParser().parseFromString(await fetchPageHTML(`RaceAnalysis.asp?S=${s}`), 'text/html');
+ Array.from(d.querySelectorAll('select[name="SR"] option')).forEach((o) => { if (o.value && !logged.has(o.value) && !locked.has(o.value)) queue.push(o.value); });
+ }
+ st.harvest.listedAt = Date.now();
+ }
+ let added = 0, tried = 0;
+ while (queue.length && tried < maxPages) {
+ const sr = queue.shift(); tried++;
+ await pause(PILOT_FETCH_GAP_MS);
+ try {
+ const rec = parseRaceAnalysisText(docToText(new DOMParser().parseFromString(await fetchPageHTML(`RaceAnalysis.asp?S=${sr.split(',')[0]}&SR=${sr}`), 'text/html')));
+ if (rec) { saveRaceRecord(rec); added++; } else locked.add(sr);
+ } catch (e) { logError('race history fetch failed', sr, e.message); }
+ }
+ const st2 = pilotState(); st2.harvest = { queue, listedAt: st.harvest.listedAt, locked: Array.from(locked) }; savePilotState(st2);
+ if (added) say(`📒 Race log: +${added} race${added !== 1 ? 's' : ''} from your history (${queue.length} still queued)`);
+ }
+
+ // ---- the run ----
+ let pilotRunning = false;
+ async function runAutoPilot({ dryRun = false, status = () => {}, say = () => {} } = {}) {
+ if (pilotRunning || IN_AUTO_FRAME) return;
+ pilotRunning = true;
+ const log = (m) => { say(m); if (!dryRun) pilotLog(m); };
+ try {
+ if (!dryRun) { const st0 = pilotState(); st0.lastRun = Date.now(); savePilotState(st0); }
+ status('Refreshing data');
+ const homeHtml = await fetchPageHTML('gpro.asp');
+ const next = parseNextRace(homeHtml);
+ await backgroundCaptureAuxPages(new DOMParser().parseFromString(homeHtml, 'text/html')).catch((e) => logError('aux capture', e.message));
+ status('Race log');
+ await harvestRaceHistory(log, PILOT_HARVEST_PER_RUN).catch((e) => log(`⚠ Race log: ${e.message}`));
+ if (!next) { log('⚠ Could not read the next race off gpro.asp — nothing submitted.'); return; }
+ if (next.qualiClose && Date.now() > next.qualiClose - 10 * 60000) { log(`⏳ Qualifying for S${next.season} R${next.race} is closed — waiting for the next race.`); return; }
+ const st = pilotState();
+ const doneFor = st.done[next.key] || {};
+ for (const step of PILOT_STEPS) {
+ if (!dryRun && !st.steps[step.key]) continue;
+ const prev = doneFor[step.key];
+ if (!dryRun && prev && step.key !== 'race') continue;
+ if (step.key === 'q2' && !dryRun && !doneFor.q1 && st.steps.q1) { log('Q2 waits for Q1.'); continue; }
+ status(step.label.split(' —')[0]);
+ await pause(PILOT_FETCH_GAP_MS);
+ if (step.key === 'race' && !dryRun && prev && prev.sig) {
+ const peek = await runFrameStep(step, true);
+ if (peek.ok && !peek.skipped && peek.sig === prev.sig) continue; // unchanged plan: not re-posted
+ await pause(PILOT_FETCH_GAP_MS);
+ }
+ const r = await runFrameStep(step, dryRun);
+ if (!r.ok) { log(`⚠ ${step.label.split(' —')[0]}: ${r.msg}`); continue; }
+ if (r.skipped) { log(`· ${step.label.split(' —')[0]}: ${r.msg}`); if (!dryRun && step.key !== 'race') { doneFor[step.key] = { at: Date.now(), skipped: true }; } continue; }
+ if (dryRun) { log(`👁 ${step.label.split(' —')[0]}: ${r.msg}`); continue; }
+ doneFor[step.key] = { at: Date.now(), sig: r.sig };
+ log(`✅ ${step.label.split(' —')[0]}: ${r.msg}`);
+ }
+ if (!dryRun) { const st2 = pilotState(); st2.done[next.key] = doneFor; savePilotState(st2); }
+ } finally {
+ pilotRunning = false;
+ status(null);
+ }
+ }
+
+ // Downloads everything the tool has learned (race log, autopilot state, captured pages) as one
+ // JSON - save it into this repo's data/ folder (gitignored) so a later session can re-fit models.
+ function exportPilotData() {
+ const pages = {};
+ ['/Practice', '/TrackProfile', '/DriProfile', '/TyreSuppliers', '/UpdateCar', '/Testing', '/StaffAndFacilities', '/TDProfile', '/NegOverview', '/Menu'].forEach((ep) => { const s = getStaleData(ep); if (s) pages[ep] = s; });
+ const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), version: typeof GM_info !== 'undefined' && GM_info.script ? GM_info.script.version : '', raceLog: getRaceLog(), autopilot: pilotState(), pages, car: getCachedCarData() }, null, 1)], { type: 'application/json' });
+ const a = document.createElement('a');
+ a.href = URL.createObjectURL(blob); a.download = `gpro-data-${new Date().toISOString().slice(0, 10)}.json`;
+ document.body.appendChild(a); a.click(); a.remove();
+ }
+
+ // ---- dock (bottom-left pill; Alt+A) ----
+ const pilotDock = (() => {
+ let root = null, toastTimer = null;
+ const CSS = `:host{all:initial}*{box-sizing:border-box;margin:0}
+.r{--bg:${PALETTE.bg};--bg2:${PALETTE.bgCard};--fg:${PALETTE.text};--mut:${PALETTE.textDim};--line:${PALETTE.border};--acc:${VERDICT.good};--warn:${VERDICT.warn};--bad:${VERDICT.bad};font:12px/1.45 system-ui,sans-serif;color:var(--fg)}
+button{font:inherit;color:inherit;cursor:pointer}
+.pill{position:fixed;left:14px;bottom:14px;z-index:2147483646;height:34px;padding:0 12px 0 10px;border-radius:17px;border:1px solid var(--line);background:var(--bg);font-weight:700;display:flex;align-items:center;gap:7px;box-shadow:0 6px 20px rgba(0,0,0,.35)}
+.pill i{width:8px;height:8px;border-radius:50%;background:var(--mut)}.pill.on i{background:var(--acc)}.pill.busy i{background:var(--warn);animation:p 1s infinite}.pill.err i{background:var(--bad)}
+.pill span{font-weight:500;color:var(--mut);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@keyframes p{50%{opacity:.25}}
+.pan{position:fixed;left:14px;bottom:56px;z-index:2147483647;width:min(370px,calc(100vw - 28px));max-height:min(600px,calc(100vh - 80px));background:var(--bg);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 40px rgba(0,0,0,.45);display:none;flex-direction:column;overflow:hidden}
+.pan.open{display:flex}.hd{display:flex;align-items:center;gap:8px;padding:11px 12px 9px 14px;border-bottom:1px solid var(--line)}.hd b{font-size:13px;flex:1}
+.x{border:0;background:none;color:var(--mut);font-size:14px}.bd{overflow:auto}
+.sec{padding:9px 14px;border-bottom:1px solid var(--line)}.sec:last-child{border:0}
+.h{font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--mut);margin-bottom:6px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 0}
+.sw{position:relative;width:30px;height:17px;border-radius:9px;border:0;background:var(--line);flex:none}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#fff;transition:transform .12s}
+.sw.on{background:var(--acc)}.sw.on::after{transform:translateX(13px)}
+.btns{display:flex;gap:6px;margin-top:6px}.btn{flex:1;border:1px solid var(--line);background:var(--bg2);border-radius:8px;padding:7px 8px;font-weight:600}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#fff}.btn:disabled{opacity:.5;cursor:default}
+.ck{display:flex;gap:7px;padding:2px 0}.ck b{width:14px;text-align:center}.ok{color:var(--acc)}.no{color:var(--mut)}
+.lg{font-size:11px;color:var(--mut);padding:2px 0;border-top:1px dashed var(--line)}.lg:first-child{border:0}.lg em{font-style:normal;color:var(--fg)}
+.note{font-size:10.5px;color:var(--mut)}
+.toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:#15191d;color:#fff;padding:8px 13px;border-radius:9px;font-size:11.5px;z-index:2147483647;display:none;max-width:80vw}.toast.on{display:block}`;
+ const ago = (t) => { if (!t) return 'never'; const m = Math.round((Date.now() - t) / 6e4); return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
+ function mount() {
+ if (root || IN_AUTO_FRAME || window.top !== window) return;
+ const host = document.createElement('div');
+ host.id = 'gpro-pilot-host';
+ document.body.appendChild(host);
+ root = host.attachShadow({ mode: 'open' });
+ root.innerHTML = `<style>${CSS}</style><div class="r"><button class="pill" title="GPRO Autopilot (Alt+A)"><i></i>GPRO<span></span></button><div class="pan"><div class="hd"><b>Autopilot</b><button class="x" data-a="close">✕</button></div><div class="bd"></div></div><div class="toast"></div></div>`;
+ root.addEventListener('click', onClick);
+ document.addEventListener('keydown', (e) => { if (e.altKey && (e.key === 'a' || e.key === 'A')) { e.preventDefault(); toggle(); } });
+ refresh();
+ }
+ function toggle(open) {
+ const pan = root.querySelector('.pan');
+ const want = open == null ? !pan.classList.contains('open') : open;
+ pan.classList.toggle('open', want);
+ if (want) render();
+ }
+ function render() {
+ const st = pilotState();
+ const sw = (key, label, on) => `<div class="row"><span>${label}</span><button class="sw ${on ? 'on' : ''}" data-sw="${key}"></button></div>`;
+ const doneKey = Object.keys(st.done).sort().pop();
+ const doneFor = doneKey ? st.done[doneKey] : {};
+ const ck = (step) => { const d = doneFor[step.key]; return `<div class="ck"><b class="${d ? 'ok' : 'no'}">${d ? '✓' : '•'}</b><span>${esc(step.label.split(' —')[0])}${d ? ` — ${d.skipped ? 'nothing to do' : ago(d.at)}` : ''}</span></div>`; };
+ const pagePlans = Object.keys(PAGE_PLANS).filter((k) => !PAGE_PLANS[k].skip);
+ root.querySelector('.bd').innerHTML = `
+<div class="sec"><div class="h">Switches</div>
+${sw('enabled', '<b>Autopilot</b> — runs in the background on any GPRO page', !!st.enabled)}
+${PILOT_STEPS.map((s) => sw('step:' + s.key, esc(s.label), !!st.steps[s.key])).join('')}
+<div class="note" style="margin-top:4px;">Every action uses the advisor's own recommendation. Spending never goes below $${(PILOT_CASH_RESERVE / 1e6).toFixed(0)}M cash (own safety floor). Testing stays manual.</div></div>
+<div class="sec"><div class="h">${doneKey ? `Race S${esc(doneKey.replace('-', ' R'))}` : 'This race'}</div>${PILOT_STEPS.map(ck).join('')}</div>
+<div class="sec"><div class="btns" style="margin-top:0;"><button class="btn pri" data-a="run">Run now</button><button class="btn" data-a="preview">Preview</button></div>
+${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill this page's form</button></div>` : ''}
+<div class="btns"><button class="btn" data-a="export">Export data (${getRaceLog().length} races)</button></div></div>
+<div class="sec"><div class="h">Activity</div>${st.log.slice(-14).reverse().map((l) => `<div class="lg"><em>${esc(ago(l.t))}</em> · ${esc(l.msg)}</div>`).join('') || '<div class="lg">Nothing yet.</div>'}</div>`;
+ }
+ function refresh() {
+ if (!root) return;
+ root.querySelector('.pill').classList.toggle('on', !!pilotState().enabled);
+ if (root.querySelector('.pan').classList.contains('open')) render();
+ }
+ function status(msg) {
+ if (!root) return;
+ const pill = root.querySelector('.pill');
+ pill.classList.toggle('busy', !!msg);
+ pill.querySelector('span').textContent = msg ? msg + '…' : '';
+ }
+ function toast(msg, isErr) {
+ if (!root) return;
+ const t = root.querySelector('.toast');
+ t.textContent = msg; t.classList.add('on');
+ root.querySelector('.pill').classList.toggle('err', !!isErr);
+ clearTimeout(toastTimer);
+ toastTimer = setTimeout(() => t.classList.remove('on'), 6000);
+ }
+ async function run(dryRun) {
+ const btns = root.querySelectorAll('[data-a="run"],[data-a="preview"]');
+ btns.forEach((b) => { b.disabled = true; });
+ const lines = [];
+ try {
+ await runAutoPilot({ dryRun, status, say: (m) => lines.push(m) });
+ if (dryRun) { const st = pilotState(); lines.forEach((m) => st.log.push({ t: Date.now(), msg: m })); savePilotState(st); }
+ const bad = lines.filter((l) => l.indexOf('⚠') === 0);
+ toast(bad.length ? bad.join(' · ') : dryRun ? 'Preview done — nothing was submitted' : (lines.filter((l) => l.indexOf('✅') === 0).length ? 'Done — see Activity' : 'Nothing to do'), !!bad.length);
+ } catch (e) { toast('⚠ ' + e.message, true); }
+ btns.forEach((b) => { b.disabled = false; });
+ render();
+ }
+ function onClick(e) {
+ const t = e.target.closest('button');
+ if (!t) return;
+ if (t.classList.contains('pill')) return toggle();
+ if (t.dataset.sw) {
+ const st = pilotState();
+ if (t.dataset.sw === 'enabled') st.enabled = !st.enabled;
+ else { const k = t.dataset.sw.slice(5); st.steps[k] = !st.steps[k]; }
+ savePilotState(st);
+ refresh();
+ return;
+ }
+ if (t.dataset.a === 'close') return toggle(false);
+ if (t.dataset.a === 'run') return run(false);
+ if (t.dataset.a === 'preview') return run(true);
+ if (t.dataset.a === 'export') return exportPilotData();
+ if (t.dataset.a === 'fill') {
+ const msgs = Object.keys(PAGE_PLANS).filter((k) => !PAGE_PLANS[k].skip).map((k) => {
+ const r = fillForm(PAGE_PLANS[k], document);
+ return r.error ? `⚠ ${r.error}` : r.missing.length ? `⚠ couldn't set ${r.missing.join(', ')}` : `Filled ${r.set.length} fields — check them, then press the game's own button`;
+ });
+ toast(msgs.join(' · '), msgs.some((m) => m.indexOf('⚠') === 0));
+ }
+ }
+ // Background pass: on any top-level GPRO page except the ones whose forms it fills (so it never
+ // overwrites what the user is editing), at most every PILOT_RUN_EVERY_MIN minutes.
+ function background(page) {
+ const st = pilotState();
+ if (!st.enabled || IN_AUTO_FRAME) return;
+ if (['qualify1', 'qualify2', 'raceSetup', 'updateCar', 'staff', 'training', 'testing'].indexOf(page) !== -1) return;
+ if (Date.now() - (st.lastRun || 0) < PILOT_RUN_EVERY_MIN * 60000) return;
+ runAutoPilot({ status, say: (m) => { if (m.indexOf('✅') === 0 || m.indexOf('⚠') === 0) toast(m, m.indexOf('⚠') === 0); } })
+ .then(refresh).catch((e) => toast('⚠ ' + e.message, true));
+ }
+ return { mount, refresh, background };
+ })();
 
  // ============================================================
  // RENDER: RACE LOG (RaceAnalysis.asp)
@@ -6041,6 +6548,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return a.val - b.val;
  });
  const weakest = sorted.slice(0, 3);
+ let planSession = null;
  let recHtml = '<div style="font-size:10px;color:#d1d5db;">';
  recHtml += `<div style="color:#f59e0b;font-weight:600;margin-bottom:4px;">${leagueAttrPriority ? `Priority skills for ${league} league` : 'Weakest skills (biggest training impact)'}:</div>`;
  weakest.forEach((s, i) => {
@@ -6054,6 +6562,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  bestCost = sess.cost;
  }
  });
+ if (i === 0) planSession = bestSession;
  const tradeoffSess = bestSession && sessionEffects[bestSession.id];
  const tradeoff = tradeoffSess && tradeoffSess.down.length ? ` (trade-off: ↓ ${tradeoffSess.down.map(a => skillLabels[a] || a).join(', ')})` : '';
  const rec = bestSession ? ` → ${bestSession.label} ($${bestSession.cost.toLocaleString()})${tradeoff}` : ' → no session with a confirmed effect on this skill';
@@ -6061,6 +6570,11 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  });
  recHtml += '</div>';
   h += mkSection(leagueAttrPriority ? `Training Recommendation (${league})` : 'Training Recommendation', recHtml);
+  // Autopilot / "Fill this page's form": the top recommendation's session.
+  const cashNow = (getCachedCarData() || {}).cash || 0;
+  publishPlan('driverTrain', { form: 'formTraining', submit: 'TrainDriver', fields: planSession ? { SessionType: planSession.id } : {},
+  skip: !planSession ? 'no session with a confirmed effect on the top-priority skill' : cashNow - planSession.cost < PILOT_CASH_RESERVE ? 'cash below the reserve' : null,
+  summary: planSession ? `${planSession.label} for ${weakest[0].label} ($${planSession.cost.toLocaleString()})` : '' });
   }
 
   // Track-Specific Training Advice (using scraped season CTR/PHA data). Prefers currentSeasonCTR
@@ -6417,7 +6931,9 @@ const canAffordSessions = Math.floor(data.contract.salary / 750000);
   // ============================================================
   async function init() {
   const page = detectPage();
- if (!page) return;
+ // A form POST inside an autopilot frame can land on a page the router doesn't know - it still
+ // has to report back.
+ if (!page) { autopilotFrameHook(); return; }
  const PAGE_TITLES = {
  home: 'GPRO Dashboard',
  qualify1: 'Q1 Advisor',
@@ -6534,6 +7050,9 @@ training: 'Parsing driver training data...',
    } else if (page === 'raceAnalysis') {
    renderRaceAnalysis();
    }
+ autopilotFrameHook();
+ pilotDock.mount();
+ setTimeout(() => pilotDock.background(page), 5000);
  } catch (err) {
  body(mkRec(`<strong>Error:</strong> ${err.message}`, 'bad') +
  `<div style="margin-top:8px;display:flex;gap:6px;">` +

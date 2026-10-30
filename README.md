@@ -90,6 +90,27 @@ Right-click the Tampermonkey icon or use the Tampermonkey menu:
 
 ---
 
+## Autopilot (GPRO pill, bottom-left, or Alt+A)
+
+Every switch starts **off**. Turn on the master switch plus the steps you want, press **Preview** first (it fills each page's form in a hidden frame and reports what it would do — nothing is submitted), then **Run now** or let it run in the background (at most every 20 minutes, never while you're on one of the pages it fills).
+
+| Step | What it does |
+|---|---|
+| Car parts | Replaces/upgrades/downgrades **only** a part the advisor says will break this race |
+| Staff training | Trains the first skill below GPRO's cap (Concentration → Stress Handling → Efficiency) |
+| Facility upgrades | Raises facilities to your league targets, in order, while cash stays above the reserve |
+| Driver training | Books the advisor's top training recommendation |
+| Q1 | Drives the Q1 lap with the advisor's setup, race dry compound and risk (dry Q1 only — a wet Q1 is left to you) |
+| Q2 | Drives Q2 with the setup, risk and start fuel |
+| Race setup | Confirms setup, fuel per stop, boost laps and all risks; re-confirms if the forecast changes the plan |
+
+- One run per race; nothing after qualifying closes; qualifies early to collect the early-qualifying bonus.
+- Never spends below **$5M** cash. Testing is never automated.
+- Each race analysis is logged automatically (this season's races; older seasons are locked by GPRO unless unlocked with supporter credits). **Export data** downloads everything it has learned.
+- **Fill this page's form** (in the pill) fills the page you're on without submitting — the manual way to use the same plan.
+
+---
+
 ## How It Works
 
 ### Data Resolution
