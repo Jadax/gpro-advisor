@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.28.1
+// @version 6.28.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -29,7 +29,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.7.1
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.7.2
 // @run-at document-idle
 // ==/UserScript==
 
@@ -82,13 +82,12 @@
  // ============================================================
  // STORAGE
  // ============================================================
- function getToken() { return GM_getValue('gpro_token', ''); }
  function getLang() {
  const m = location.pathname.match(/\/(\w{2})\//);
  return m ? m[1] : 'gb';
  }
- // Use the page's own host for API calls (www.gpro.net vs gpro.net matters -
- // the backend only reliably answers/CORS-allows the host you're actually on).
+ // Use the page's own host for background page fetches (www.gpro.net vs gpro.net matters -
+ // the site only reliably answers/CORS-allows the host you're actually on).
  function getApiHost() {
  return location.hostname && location.hostname.endsWith('gpro.net') ? location.hostname : 'gpro.net';
  }
@@ -135,46 +134,11 @@
  }
 
  // ============================================================
- // API CLIENT WITH CACHING
+ // PAGE-DATA CACHE
  // ============================================================
- // Bumped from 5 to 20 minutes - GPRO's API token is capped at ~100 requests per race, and the old
- // 5-minute TTL meant every page revisit past that window re-fetched all 6-7 endpoints again, easily
- // burning through the budget over a normal race-weekend browsing session. 20 minutes still catches
- // real mid-session changes (weather updates, car wear from a race) without re-fetching on every click.
- const CACHE_TTL = 20 * 60 * 1000;
-
- // Hard per-race request budget, enforced below the game's real ~100 cap. Once hit, apiGet stops
- // making live requests entirely and falls straight to cache/stale data - "no more API calls unless
- // absolutely necessary" per explicit instruction. Not auto-reset (no reliable "new race started"
- // signal without spending a request to check) - reset manually via the Tampermonkey menu each race
- // weekend, or "Clear Cache" resets it too since a blown budget usually means a fresh start is due.
- // Lowered from 85 - DOM-first resolution (getDataSmart) now covers most of what used to force a
- // real API call every page load, so the remaining real usage per race should be small; keeping the
- // budget itself tight too is a second independent safety net in case DOM/stale coverage has a gap.
- const API_CALL_BUDGET = 40;
- function getApiCallCount() { return parseInt(GM_getValue('gpro_api_call_count', '0')) || 0; }
- function incApiCallCount() { GM_setValue('gpro_api_call_count', String(getApiCallCount() + 1)); }
- function resetApiCallCount() { GM_setValue('gpro_api_call_count', '0'); }
-
- function getCachedData(key) {
- try {
- const raw = GM_getValue('cache_' + key, null);
- if (!raw) return null;
- const cached = JSON.parse(raw);
- if (Date.now() - cached.time > CACHE_TTL) return null;
- return cached.data;
- } catch (e) { return null; }
- }
-
- function setCachedData(key, data) {
- try {
- GM_setValue('cache_' + key, JSON.stringify({ time: Date.now(), data }));
- } catch (e) { /* storage full, ignore */ }
- }
-
- // Long-lived fallback cache: no TTL, survives token expiry. Written on every
- // successful fetch, read only when a live request fails, so the panel keeps
- // showing (visibly stale) data instead of going blank when the token dies.
+ // Long-lived page-data cache (no TTL): every successful DOM parse / background page fetch writes
+ // here, so a page that can't parse something itself still has the last captured copy. The API
+ // client that also used it was removed in v6.28.2 (user: "we're not using api tokens anymore").
  function getStaleData(endpoint) {
  try {
  const raw = GM_getValue('stale_api_' + endpoint, null);
@@ -189,120 +153,11 @@
  } catch (e) { /* storage full, ignore */ }
  }
 
- // Resolves with stale data (marked __stale/__staleTime) if available, otherwise rejects with the original error.
- function fallbackOrReject(endpoint, err, resolve, reject) {
- const stale = getStaleData(endpoint);
- if (stale) {
- resolve(Object.assign({}, stale.data, { __stale: true, __staleTime: stale.time, __staleReason: err.message }));
- return;
- }
- reject(err);
- }
-
- function apiGet(endpoint, retries = 2) {
- return new Promise((resolve, reject) => {
- const token = getToken();
-  if (!token) return fallbackOrReject(endpoint, new Error('No API token set — using cached data only. Visit the relevant pages to refresh.'), resolve, reject);
-
- // Check cache first
- const cacheKey = 'api_' + endpoint;
- const cached = getCachedData(cacheKey);
- if (cached) {
- resolve(cached);
- return;
- }
-
- // Hard budget cap - don't even attempt the request once we're at the limit, just degrade to
- // stale/cache like any other failure mode. Only counts real attempts (cache hits above never
- // reach here), so this tracks actual API spend, not total apiGet() calls. Also respects GPRO's
- // OWN authoritative `apiRequestsRemaining` (from /Office, see onload below) when we have it -
- // that's real, ours is just an estimate that can't account for calls this script didn't make
- // (other tabs).
- const realRemaining = GM_getValue('gpro_api_requests_remaining', null);
- if (getApiCallCount() >= API_CALL_BUDGET || (realRemaining !== null && parseInt(realRemaining) <= 3)) {
- return fallbackOrReject(endpoint, new Error(`API call budget reached (${API_CALL_BUDGET}/race, GPRO reports ${realRemaining ?? '?'} left) - reset via Tampermonkey menu once a new race has started`), resolve, reject);
- }
- incApiCallCount();
-
- const lang = getLang();
- const url = `https://${getApiHost()}/${lang}/backend/api/v2${endpoint}`;
- GM_xmlhttpRequest({
- method: 'GET',
- url: url,
- // Real bug fixed 2026-07-29: no timeout was set and no ontimeout handler existed, so a request
- // that never came back left the awaiting caller (init()) hanging forever - the panel sat on
- // "Loading..." with no error, no fallback to stale cache, and no retry button.
- timeout: NET_TIMEOUT_MS,
- headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' },
- ontimeout() { fallbackOrReject(endpoint, new Error(`Request timed out after ${NET_TIMEOUT_MS / 1000}s - using cached data if available.`), resolve, reject); },
- onload(r) {
- // Check HTTP status first
- if (r.status === 502 || r.status === 503 || r.status === 429) {
- if (retries > 0) {
- logDebug(`${r.status} on ${endpoint}, retrying (${retries} left)...`);
- setTimeout(() => apiGet(endpoint, retries - 1).then(resolve).catch(reject), 1500);
- return;
- }
- return fallbackOrReject(endpoint, new Error(`Server error (${r.status}) on ${endpoint} - try again in a moment`), resolve, reject);
- }
- if (r.status === 401 || r.status === 403) {
- return fallbackOrReject(endpoint, new Error('Token expired — using cached data.'), resolve, reject);
- }
- try {
- const d = JSON.parse(r.responseText);
- if (d.loggedOut) return fallbackOrReject(endpoint, new Error('Token expired — using cached data.'), resolve, reject);
- // /Office's response carries GPRO's OWN authoritative remaining-request count
- // (`apiRequestsRemaining` - confirmed in gpro-public-api.yml) - capture it whenever we get
- // it so the real number can be shown instead of just our own estimate.
- if (endpoint === '/Office' && d.apiRequestsRemaining !== undefined) {
- GM_setValue('gpro_api_requests_remaining', String(d.apiRequestsRemaining));
- }
- // Cache successful response (both short-lived and long-lived fallback)
- setCachedData(cacheKey, d);
- setStaleData(endpoint, d);
- resolve(d);
- } catch (e) { fallbackOrReject(endpoint, new Error('Invalid API response'), resolve, reject); }
- },
- onerror() {
- if (retries > 0) {
- logDebug(`Network error on ${endpoint}, retrying (${retries} left)...`);
- setTimeout(() => apiGet(endpoint, retries - 1).then(resolve).catch(reject), 1500);
- return;
- }
- fallbackOrReject(endpoint, new Error('Network error - are you logged in?'), resolve, reject);
- }
- });
- });
- }
-
- // DOM-first data resolver: "no API calls unless we don't have a backup plan" (explicit constraint,
- // 2026-07-19 - the API token is capped at ~100 calls/race and automatic per-page-load fetching blew
- // straight through that). Tries a live parse of the CURRENT page (zero network cost) first, then any
- // previously-captured stale/background data (also zero network cost, regardless of age - a slightly
- // old driver profile beats spending a real request), and only calls the real API as a genuine last
- // resort. Use this instead of calling apiGet() directly wherever a DOM or stale substitute exists.
- async function getDataSmart(endpoint, domParseFn) {
- if (domParseFn) {
- let domData = null;
- try { domData = domParseFn(); } catch (e) { /* ignore, fall through */ }
- if (domData) return domData;
- }
- const stale = getStaleData(endpoint);
- if (stale) {
- return Object.assign({}, stale.data, { __stale: true, __staleTime: stale.time });
- }
- return apiGet(endpoint).catch(() => null);
- }
-
- // Strict DOM-only resolution - live DOM parse, then the DOM-fed stale cache (written by
- // runPassiveCapture/backgroundCaptureAuxPages when the user visits/passively background-fetches
- // the dedicated page), but NEVER falls through to a real API call. Used for the categories the
- // user asked to keep off the API budget entirely: Practice/Weather, Track Profile, Driver
- // Profile, Tyre Suppliers, Staff/Facilities, Car Data, Testing.
- // Returns null (same contract as getDataSmart, not a truthy sentinel object) when nothing's
- // available yet, so every existing `if (track)`/`track || {}` falsy-check throughout the file
- // keeps working unchanged - the difference from getDataSmart is purely "never call the API",
- // not a different return shape callers need to special-case.
+ // The one data resolver: live DOM parse of the current page (persisted to the cache), else the
+ // last captured copy (written by runPassiveCapture/backgroundCaptureAuxPages, marked __stale),
+ // else null - so every `if (track)`/`track || {}` check keeps working. There is no API tier
+ // (removed v6.28.2); a missing value means "visit that page once" (or let the background
+ // capture fetch it).
  function getDataDomOnly(endpoint, domParseFn) {
  if (domParseFn) {
  let domData = null;
@@ -331,20 +186,18 @@
  // `/TechDProfile` (previous guess, silently 404'd - never triggered in practice since Amateur can't
  // sign a TD at all, so `tdId` was always empty and this branch never ran).
  // ============================================================
- async function buildStaffTdInfo(office, staff) {
- if (!office && !staff) return null;
+ function buildStaffTdInfo(staff) {
+ if (!staff) return null;
  const staffConcentration = parseInt(staff && staff.concentration) || 0;
  const staffStress = parseInt(staff && staff.stressHandling) || 0;
- const tdId = office && office.tdId;
  let tdExperience = 0, tdPitCoordination = 0, hasTd = false;
- if (tdId) {
- // DOM-first: try stale cache from background capture, then API as last resort
- const td = await getDataSmart('/TDProfile').catch(() => null);
+ // TD profile cached from the home page's TDProfile.asp link (backgroundCaptureAuxPages) - no
+ // TD link there means no TD signed, so nothing gets cached. TDs only exist from Pro up.
+ const td = getDataDomOnly('/TDProfile');
  if (td) {
-  tdExperience = parseInt(td.experience) || 0;
-  tdPitCoordination = parseInt(td.pitCoord) || 0;
-  hasTd = true;
- }
+ tdExperience = parseInt(td.experience) || 0;
+ tdPitCoordination = parseInt(td.pitCoord) || 0;
+ hasTd = true;
  }
  return { staffConcentration, staffStress, tdExperience, tdPitCoordination, hasTd };
  }
@@ -815,9 +668,8 @@ if (h.includes('TrainingSession.asp')) return 'training';
  // ============================================================
  // PASSIVE PAGE CAPTURE - DriverProfile.asp / TrackDetails.asp / Suppliers.asp aren't advisor pages
  // (no panel shown there), but visiting them is a free chance to grab real page data and stash it
- // in the long-lived stale cache, so it's available as fallback on the advisor pages later if the
- // API token has expired. This directly answers "if the token isn't working, go to the pages and
- // scrape/cache/capture" - capture happens silently whenever the user happens to browse there.
+ // in the long-lived page-data cache, so the advisor pages have it later. Capture happens silently
+ // whenever the user happens to browse there (and backgroundCaptureAuxPages fetches them too).
  // ============================================================
  function parseDriverProfileDOM(root) {
  root = root || document;
@@ -1517,12 +1369,11 @@ if (h.includes('TrainingSession.asp')) return 'training';
  // everywhere else (Q1/Q2/RaceSetup setup+strategy calcs) assuming it's always the
  // account's OWN driver. Without this check, visiting a scouted driver's profile would
  // silently overwrite the account's own cached driver data with someone else's attributes,
- // corrupting every calculation that depends on driver stats until the next real /DriProfile
- // API refresh. Only cache here when there's no ?ID= param (own profile via normal
- // navigation) or it matches the last-known own driver ID from /Office.
+ // corrupting every calculation that depends on driver stats until the next own-profile
+ // capture. Only cache here when there's no ?ID= param (own profile via normal navigation) or
+ // it matches the own driver ID read off gpro.asp's driver link (backgroundCaptureAuxPages).
  const urlId = new URLSearchParams(location.search).get('ID') || new URLSearchParams(location.search).get('id');
- const ownOffice = getStaleData('/Office');
- const ownDriId = ownOffice && ownOffice.data && ownOffice.data.driId;
+ const ownDriId = GM_getValue('gpro_own_driver_id', '');
  if (!urlId || (ownDriId && String(urlId) === String(ownDriId))) {
  setStaleData('/DriProfile', d);
  }
@@ -1628,6 +1479,9 @@ if (h.includes('TrainingSession.asp')) return 'training';
 
  const jobs = [];
  if (driverId) {
+ // gpro.asp's driver link is always the account's OWN driver - remembered so a DriverProfile.asp
+ // visit can tell the own profile from a scouted one (runPassiveCapture).
+ GM_setValue('gpro_own_driver_id', driverId);
  jobs.push(fetchPageHTML(`DriverProfile.asp?ID=${driverId}`).then((html) => {
  const doc = new DOMParser().parseFromString(html, 'text/html');
  const d = parseDriverProfileDOM(doc);
@@ -3359,8 +3213,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  while ((m = pitRe.exec(t))) rec.pits.push({ lap: +m[2], reason: m[3].replace(/\s+/g, ' ').trim(), tyreCond: +m[4], fuelLeftPct: +m[5], refilledTo: +m[6], pitTime: parseFloat(m[7]) });
  // Lap table rows: "12 [B] 1:23.269 3 Medium Cloudy 33° 60% -". B marks a boost lap.
  rec.lapRows = [];
- const lapRe = /^\s*(\d{1,3})\s*(B)?\s+(\d+:\d{2}\.\d{3}|-)\s+(\d{1,2})\s+(Extra Soft|Soft|Medium|Hard|Rain)\s+([A-Za-z][A-Za-z ]*?)\s+(-?\d+)\s*°\s+(\d+)\s*%/gim;
- while ((m = lapRe.exec(t))) rec.lapRows.push({ lap: +m[1], boost: !!m[2], pos: +m[4], tyres: m[5], weather: m[6].trim(), temp: +m[7], hum: +m[8] });
+ const lapRe = /^\s*(\d{1,3})\s*(B)?\s+(\d+:\d{2}\.\d{3}|-)\s+(\d{1,2})\s+(Extra Soft|Soft|Medium|Hard|Rain)\s+([A-Za-z][A-Za-z ]*?)\s+(-?\d+)\s*°\s+(\d+)\s*%[ \t]*([^\n]*)/gim;
+ while ((m = lapRe.exec(t))) rec.lapRows.push({ lap: +m[1], boost: !!m[2], pos: +m[4], tyres: m[5], weather: m[6].trim(), temp: +m[7], hum: +m[8], event: (m[9] || '').trim() });
+ rec.driverMistakes = rec.lapRows.filter((r) => /mistake/i.test(r.event)).map((r) => r.lap);
+ // Overtaking table: "Overtaking attempts initiated: <blocked> <successful>" / "...made upon you: ..."
+ const ot = t.match(/Overtaking attempts initiated:?\s*(\d+)\s+(\d+)[\s\S]*?made upon you:?\s*(\d+)\s+(\d+)/i);
+ if (ot) rec.overtakes = { attempts: +ot[1] + +ot[2], blocked: +ot[1], success: +ot[2], onYou: +ot[3] + +ot[4], onYouBlocked: +ot[3], onYouSuccess: +ot[4] };
  const raced = rec.lapRows.filter((r) => r.lap > 0);
  rec.laps = raced.length ? Math.max(...raced.map((r) => r.lap)) : null;
  rec.boostLaps = raced.length ? raced.filter((r) => r.boost).map((r) => r.lap) : null;
@@ -4228,13 +4086,17 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     // made this rec drift from the Race plan by a liter or two.
     const q2BoostFuel = (q2BoostPick && q2BoostPick.extraFuel) || 0;
     const q2BoostLapsList = (q2BoostPick && q2BoostPick.laps) || [];
-    const q2PerBoostLap = (q2BoostFuel > 0 && q2BoostLapsList.length) ? Math.ceil(q2BoostFuel / q2BoostLapsList.length) : 0;
+ // Per-boost-lap fuel is NOT rounded up (v6.28.2, S113 R5 Mexico City): ceil(4L/3 laps) = 2L each
+ // put ~0.7L per boost lap of extra fuel in each fill (real: 1.33 L/boost lap, solved from the two
+ // stints) and helped push the pit a lap past the plan. Only the stint total is rounded.
+    const q2PerBoostLap = (q2BoostFuel > 0 && q2BoostLapsList.length) ? q2BoostFuel / q2BoostLapsList.length : 0;
     const q2FirstStopLap = (q2Plan && q2Plan.stopLaps && q2Plan.stopLaps.length) ? q2Plan.stopLaps[0] : null;
     const q2BoostInStint1 = (q2PerBoostLap && q2BoostLapsList.length)
     ? q2BoostLapsList.filter(l => l <= (q2FirstStopLap ? q2FirstStopLap : (chosenRace.lapsPerStint || raceLaps))).length
     : 0;
-    const adjustedFuelPerStint = q2FirstStint + q2BoostInStint1 * q2PerBoostLap;
-    const boostNote = q2BoostInStint1 > 0 ? `<br><span style="font-size:9px;color:#f59e0b;">Includes ~${q2BoostInStint1 * q2PerBoostLap}L for the ⚡${q2BoostInStint1} boost lap${q2BoostInStint1 !== 1 ? 's' : ''} in stint 1 (boost laps ${q2BoostLapsList.join(', ')}, ~${q2BoostFuel}L total over the race)</span>` : '';
+    const q2Stint1BoostL = Math.round(q2BoostInStint1 * q2PerBoostLap);
+    const adjustedFuelPerStint = q2FirstStint + q2Stint1BoostL;
+    const boostNote = q2BoostInStint1 > 0 ? `<br><span style="font-size:9px;color:#f59e0b;">Includes ~${q2Stint1BoostL}L for the ⚡${q2BoostInStint1} boost lap${q2BoostInStint1 !== 1 ? 's' : ''} in stint 1 (boost laps ${q2BoostLapsList.join(', ')}, ~${q2BoostFuel}L total over the race)</span>` : '';
    // Show the full shared plan (stops + per-stint fuel) so Q2 matches Race Setup exactly, not just
    // the first-stint number in isolation.
    let q2PlanHtml = '';
@@ -4573,7 +4435,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // v6.27.3: boost sets are now accounted for in the fills - each boosted lap burns extra fuel, so
  // the fill shown for a stint that contains boost laps must cover it. The boost-fuel estimate
  // itself is a rough heuristic (per-track coefficient undisclosed - see calcBoostLapSuggestion).
- const perBoostLap = (boostLapsList && boostLapsList.length && boostExtraFuel > 0) ? Math.ceil(boostExtraFuel / boostLapsList.length) : 0;
+ const perBoostLap = (boostLapsList && boostLapsList.length && boostExtraFuel > 0) ? boostExtraFuel / boostLapsList.length : 0;
  // v6.27.3 weather contingency (S113 R1 Portimao lesson: forecast said rain to the flag, the race
  // actually dried from L43 and the plan gave no branch to switch back). If any wet-phase forecast
  // window averages <=55% rain probability, surface what to fit instead if it turns out dry.
@@ -4620,7 +4482,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     // Start stint (stint 0) — carries its own share of boost fuel too, allocated physically like
     // the stop rows below (the Q2 rec the user types in already includes this portion, v6.27.4).
     const boostInStart = boostLapsList.filter(l => l >= stintStartOf(0) && l <= stintEndOf(0)).length;
-    const startFillRaw = startFuelVal + boostInStart * perBoostLap;
+    const startFillRaw = startFuelVal + Math.round(boostInStart * perBoostLap);
     const startFill = Math.min(TANK_MAX, startFillRaw);
     const startCapped = startFillRaw > TANK_MAX;
     let planTotal = startFill;
@@ -4633,7 +4495,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const stStart = stintStartOf(i);
  const stEnd = stintEndOf(i);
  const boostInStint = boostLapsList.filter(l => l >= stStart && l <= stEnd).length;
- const fillRaw = stintFuelOf(i) + boostInStint * perBoostLap;
+ const fillRaw = stintFuelOf(i) + Math.round(boostInStint * perBoostLap);
  const fill = Math.min(TANK_MAX, fillRaw);
  const fillCapped = fillRaw > TANK_MAX;
  planTotal += fill;
@@ -4947,9 +4809,9 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     // recomputed (the old recompute used a different lap boundary than the table, v6.27.7).
     const firstStopLap = (fuel.stopLaps && fuel.stopLaps.length) ? fuel.stopLaps[0] : (fuel.laps || 0);
     const boostInStartChk = boostLapsList.filter(l => l <= firstStopLap).length;
-    const perBoostChk = (boostLapsList.length && boostExtraFuel > 0) ? Math.ceil(boostExtraFuel / boostLapsList.length) : 0;
-    const startRecChk = fuel.startFill != null ? fuel.startFill : Math.min(TANK_MAX, fuel.stint1Fuel + boostInStartChk * perBoostChk);
-    checks.push({ ok: true, text: `Start fuel: set ${startRecChk}L in Q2${boostInStartChk ? ` (incl ~${boostInStartChk * perBoostChk}L ⚡boost)` : ''}` });
+    const boostLChk = (boostLapsList.length && boostExtraFuel > 0) ? Math.round(boostInStartChk * boostExtraFuel / boostLapsList.length) : 0;
+    const startRecChk = fuel.startFill != null ? fuel.startFill : Math.min(TANK_MAX, fuel.stint1Fuel + boostLChk);
+    checks.push({ ok: true, text: `Start fuel: set ${startRecChk}L in Q2${boostInStartChk ? ` (incl ~${boostLChk}L ⚡boost)` : ''}` });
     }
     else if (fuel) checks.push({ ok: false, text: `Enter start fuel in Q2: ~${fuel.fuelPerStint}L per stint` });
     if (chosenTyreResult) {
@@ -5509,15 +5371,15 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // ============================================================
  // TOKEN MODAL
  // ============================================================
-  function showTokenModal() {
-  const old = document.getElementById('gpro-token-modal');
+  function showSettingsModal() {
+  const old = document.getElementById('gpro-settings-modal');
   if (old) old.remove();
   const d = document.createElement('div');
-  d.id = 'gpro-token-modal';
+  d.id = 'gpro-settings-modal';
   d.setAttribute('style', 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:999999;display:flex;justify-content:center;align-items:center;font-family:system-ui,-apple-system,sans-serif;');
    d.innerHTML = `<div style="background:#111827;border-radius:12px;padding:24px;width:440px;max-width:92%;box-shadow:0 8px 32px rgba(0,0,0,0.6);color:#e5e7eb;">
   <h2 style="color:#60a5fa;margin:0 0 8px;font-size:18px;font-weight:700;">GPRO Strategy Tool</h2>
-  <p style="color:#9ca3af;font-size:12px;margin:4px 0 12px;">All recommendations are computed from live DOM data — no API token required. CTR (clear track risk) is auto-detected from the Race page when set.</p>
+  <p style="color:#9ca3af;font-size:12px;margin:4px 0 12px;">All recommendations are computed from data read off GPRO's own pages. CTR (clear track risk) is auto-detected from the Race page when set.</p>
   <label style="display:block;color:#9ca3af;font-size:12px;margin:10px 0 4px;">Driver offer aggressiveness:</label>
   <select id="gpro-bid-strategy" style="width:100%;background:#1f2937;color:#e5e7eb;border:1px solid #374151;border-radius:6px;padding:8px;font-size:13px;">
   <option value="value">Value — lowball ~50% of his ask (risks losing the driver)</option>
@@ -5525,13 +5387,13 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   <option value="aggressive">Aggressive — ~200% of his ask (must-win)</option>
   </select>
   <div style="display:flex;gap:8px;margin-top:14px;">
-  <button id="gpro-token-ok" style="background:#2563eb;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">OK</button>
+  <button id="gpro-settings-ok" style="background:#2563eb;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">OK</button>
   </div>
   </div>`;
   document.body.appendChild(d);
   try { document.getElementById('gpro-bid-strategy').value = GM_getValue('gpro_bid_strategy', 'balanced'); } catch (e) {}
   document.getElementById('gpro-bid-strategy').onchange = () => { try { GM_setValue('gpro_bid_strategy', document.getElementById('gpro-bid-strategy').value); } catch (e) {} };
-  document.getElementById('gpro-token-ok').onclick = () => d.remove();
+  document.getElementById('gpro-settings-ok').onclick = () => d.remove();
   }
 
  // ============================================================
@@ -5555,7 +5417,6 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  practice: { ep: '/Practice', label: 'Practice / Weather', icon: '🌤️', visit: 'Qualify.asp, Qualify2.asp, or RaceSetup.asp', volatility: 'session' },
  track: { ep: '/TrackProfile', label: 'Track Profile', icon: '🏁', visit: 'TrackDetails.asp', volatility: 'event' },
  driver: { ep: '/DriProfile', label: 'Driver Profile', icon: '👤', visit: 'DriverProfile.asp', volatility: 'event' },
- office: { ep: '/Office', label: 'Office / Tyre Supplier', icon: '🏢', volatility: 'event' },
  car: { ep: '/UpdateCar', label: 'Car Data (Wear/Levels)', icon: '🏎️', visit: 'Qualify.asp, Qualify2.asp, or UpdateCar.asp', volatility: 'event' },
  testing: { ep: '/Testing', label: 'Testing / Fuel Data', icon: '🧪', visit: 'Testing.asp', volatility: 'session' },
  suppliers: { ep: '/TyreSuppliers', label: 'Tyre Suppliers', icon: '🛞', visit: 'Suppliers.asp', volatility: 'event' },
@@ -5573,8 +5434,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  updateCachedCash(parseHomeMoneyDOM());
 
  try {
- // DOM-only for every endpoint here except Office (see getDataDomOnly - no DOM source exists
- // anywhere on the site for Office's fields, confirmed 2026-07-19). This dashboard used to spend
+ // DOM-only for every endpoint (the API client is gone since v6.28.2). This dashboard used to spend
  // up to 7 real API calls just to show a status table on every single visit to gpro.asp, the
  // most-visited page every race - now it only ever reports what's already been DOM-captured
  // (live parse when the current page happens to supply it, otherwise the DOM-fed stale cache
@@ -5584,7 +5444,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const keys = Object.keys(endpoints);
  const results = await Promise.allSettled(
  keys.map(key => {
- const fetcher = (key === 'office' || key === 'finance') ? getDataSmart(endpoints[key].ep) : Promise.resolve(getDataDomOnly(endpoints[key].ep, domParsers[key]));
+ const fetcher = Promise.resolve(getDataDomOnly(endpoints[key].ep, domParsers[key]));
  return fetcher.then(d => { data[key] = d; return d; });
  })
  );
@@ -5629,19 +5489,6 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  <tbody>${freshRows}</tbody>
  </table>` +
  `<div id="gpro-bg-capture-status" style="font-size:9px;color:#6b7280;margin-top:6px;">🔄 Refreshing Driver/Track/Supplier data in the background...</div>`
- );
-
- // Token status — API token is optional (DOM-parsed data is primary)
- const token = getToken();
- const callCount = getApiCallCount();
- const budgetColor = callCount >= API_CALL_BUDGET ? '#ef4444' : callCount >= API_CALL_BUDGET * 0.8 ? '#f59e0b' : '#10b981';
- const realRemaining = GM_getValue('gpro_api_requests_remaining', null);
- const realColor = realRemaining !== null && parseInt(realRemaining) <= 15 ? '#ef4444' : realRemaining !== null && parseInt(realRemaining) <= 35 ? '#f59e0b' : '#10b981';
- h += mkSection('API Token (optional)',
- mkRow('Status', token ? `<span style="color:#10b981;">Active</span>` : `<span style="color:#6b7280;">Not set (DOM-parsing only)</span>`) +
- mkRow('Token', token ? token.substring(0, 8) + '...' : '—') +
- mkRow('API Calls This Race', `<span style="color:${budgetColor};">${callCount}/${API_CALL_BUDGET}</span>`) +
- (realRemaining !== null ? mkRow('GPRO-Reported Remaining', `<span style="color:${realColor};">${realRemaining}</span>`) : '')
  );
 
  // "Data Updated" section removed 2026-08-13 (explicit user request: "why data updated part
@@ -5710,7 +5557,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  `<button id="gpro-cfg-home" style="background:#374151;color:#d1d5db;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;">Settings</button></div>`);
  setTimeout(() => {
  document.getElementById('gpro-retry-home')?.addEventListener('click', () => renderHome());
- document.getElementById('gpro-cfg-home')?.addEventListener('click', showTokenModal);
+ document.getElementById('gpro-cfg-home')?.addEventListener('click', showSettingsModal);
  }, 100);
  }
  }
@@ -5746,12 +5593,10 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // League is season-changing data (promotion/demotion between seasons) and therefore must NEVER
   // come from the eternal stale /Menu cache: getStaleData('/Menu') has no TTL, so a cached copy
   // from a previous league (e.g. "Amateur - 3" captured before a demotion to Rookie) would pin
-  // the wrong league forever - getDataSmart('/Menu') serves that stale copy before ever re-calling
-  // the API. Real bug fixed 2026-08-10: the market advisor kept showing Amateur guidance after
+  // the wrong league forever. Real bug fixed 2026-08-10: the market advisor kept showing Amateur guidance after
   // the account demoted to Rookie. Resolve fresh instead, cheapest first:
   //   1) current page's own group link (<a href="Standings.asp?Group=Rookie - 31">) - free, always current
-  //   2) apiGet('/Menu') - short-lived 20-min cache, then the real API
-  //   3) eternal stale /Menu only if the API genuinely fails (flagged, not silent)
+  //   2) the last group captured from a page (stale /Menu cache, flagged as such)
   function parseLeagueGroupFromDom() {
   try {
   // Scan EVERY Standings.asp?Group= link on the current page, not just the first - a page can
@@ -5781,28 +5626,18 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   }
 
   async function detectLeagueFresh() {
-  // Priority: trust a live page reading over any cached value. When we DO get a fresh group
-  // (DOM or real API), also write it back into the eternal stale /Menu cache so every other
-  // consumer of getDataSmart('/Menu') - background track-specs pre-cache, renderHome, etc -
-  // self-corrects instead of staying permanently pinned to a previous season's league.
+  // Priority: trust a live page reading over any cached value. A fresh DOM group is written back
+  // into the /Menu cache so every other reader (background track-specs pre-cache, renderHome,
+  // etc) self-corrects instead of staying pinned to a previous season's league.
   const domGroup = parseLeagueGroupFromDom();
   if (domGroup) {
   setStaleData('/Menu', { group: domGroup });
   return { league: String(domGroup).split(' - ')[0].trim() || null, group: domGroup, source: 'DOM' };
   }
-  try {
-  const menu = await apiGet('/Menu');
-  const group = menu && menu.group ? String(menu.group) : null;
-  if (group) {
-  // Only persist a group that came from a real API response - if the request failed and
-  // fallbackOrReject resolved the eternal stale value (marked __stale) it's not trustworthy
-  // enough to rewrite over itself, but it's still the best we have for THIS call.
-  return { league: String(group).split(' - ')[0].trim(), group, source: menu.__stale ? 'stale' : 'API' };
-  }
+  const stale = getStaleData('/Menu');
+  const group = stale && stale.data && stale.data.group ? String(stale.data.group) : null;
+  if (group) return { league: group.split(' - ')[0].trim(), group, source: 'stale' };
   return { league: null, group: null, source: 'none' };
-  } catch (e) {
-  return { league: null, group: null, source: 'none' };
-  }
   }
 
   // Small diagnostic line showing which league the panel resolved and where that value came from
@@ -5812,9 +5647,9 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   function leagueSourceLine(leagueInfo) {
   const league = leagueInfo && leagueInfo.league;
   if (!league) {
-  return `<div style="font-size:9px;color:#ef4444;margin:4px 0;">League: unknown - no group link on this page and /Menu unavailable. Edit "What to look for" below, or set currentLeague in gpro-data.js.</div>`;
+  return `<div style="font-size:9px;color:#ef4444;margin:4px 0;">League: unknown - no group link on this page and none captured yet. Edit "What to look for" below, or set currentLeague in gpro-data.js.</div>`;
   }
-  const srcText = { DOM: 'read off this page', API: 'live from API', stale: '⚠ from cached /Menu - may be out of date' }[leagueInfo.source] || leagueInfo.source;
+  const srcText = { DOM: 'read off this page', stale: '⚠ from the last page that showed it - may be out of date' }[leagueInfo.source] || leagueInfo.source;
   const color = leagueInfo.source === 'stale' ? '#f59e0b' : '#9ca3af';
   return `<div style="font-size:9px;color:${color};margin:4px 0;">League: <b>${esc(league)}</b> (${srcText})</div>`;
   }
@@ -6453,17 +6288,10 @@ const canAffordSessions = Math.floor(data.contract.salary / 750000);
  } catch (e) {}
  }
 
- // Resolves which tyre supplier is actually signed. The API path matches by numeric id
- // (office.tyreSupplierId -> supplierData.suppliers[].id); the DOM-capture path (Suppliers.asp,
- // getDataSmart's stale-cache tier) has no numeric ids, just names, and marks the active one via
- // `activeSupplierName`. Support both so a fully DOM-sourced office/suppliers pair still resolves.
- function resolveActiveSupplier(office, supplierData) {
+ // Resolves which tyre supplier is actually signed: Suppliers.asp's capture marks the active one
+ // by name (`activeSupplierName`).
+ function resolveActiveSupplier(supplierData) {
  if (!supplierData || !supplierData.suppliers) return null;
- const supplierId = office ? office.tyreSupplierId : null;
- if (supplierId) {
- const byId = supplierData.suppliers.find(s => s.id === parseInt(supplierId));
- if (byId) return byId;
- }
  if (supplierData.activeSupplierName) {
  return supplierData.suppliers.find(s => s.name === supplierData.activeSupplierName) || null;
  }
@@ -6633,35 +6461,30 @@ training: 'Parsing driver training data...',
  if (page === 'home') {
  await renderHome();
  } else if (page === 'qualify1' || page === 'qualify2') {
- // DOM-only for everything except Office (see below): weather + car setup/levels/wear are
+ // Weather + car setup/levels/wear are
  // directly readable off this exact page (Qualify.asp/Qualify2.asp show their own "Setup
  // related parts" table and weather widget). Track/Driver/Staff/Suppliers have no live-DOM
  // substitute on THIS page, but getDataDomOnly still resolves them from the DOM-fed stale
  // cache (populated by runPassiveCapture/backgroundCaptureAuxPages visiting/background-
  // fetching TrackDetails.asp/DriverProfile.asp/StaffAndFacilities.asp/Suppliers.asp) -
- // never a live API call. Office is the one confirmed exception: its fields (TD id, staff
- // conc/stress used in pit-time calc) have no DOM source anywhere on the site (checked
- // 2026-07-19 - see docs/page-structures.md), so it alone keeps the API fallback.
- const [practice, track, driver, office, staff, car, supplierData] = await Promise.all([
- getDataDomOnly('/Practice', buildLivePracticeDOM), getDataDomOnly('/TrackProfile'),
- getDataDomOnly('/DriProfile'), getDataSmart('/Office'), getDataDomOnly('/StaffAndFacilities'),
- getDataDomOnly('/UpdateCar', parseQualifyCarDOM), getDataDomOnly('/TyreSuppliers')
- ]);
- const supplier = resolveActiveSupplier(office, supplierData);
- const staffTd = await buildStaffTdInfo(office, staff);
+ // staff conc/stress for the pit-time calc come from StaffAndFacilities.asp, the TD from the
+ // home page's TDProfile.asp link (buildStaffTdInfo).
+ const practice = getDataDomOnly('/Practice', buildLivePracticeDOM), track = getDataDomOnly('/TrackProfile');
+ const driver = getDataDomOnly('/DriProfile'), staff = getDataDomOnly('/StaffAndFacilities');
+ const car = getDataDomOnly('/UpdateCar', parseQualifyCarDOM), supplierData = getDataDomOnly('/TyreSuppliers');
+ const supplier = resolveActiveSupplier(supplierData);
+ const staffTd = buildStaffTdInfo(staff);
  renderQualify(practice, track, driver, supplier, page === 'qualify2', mergeWithCachedCarData(car), staffTd);
  } else if (page === 'raceSetup') {
  // Same DOM-only policy as Qualify above, plus Testing (fuel-stint data) now has a real
  // parser (parseTestingDOM) fed by visiting/background-fetching Testing.asp, so it's
  // DOM-only too - Office remains the one confirmed no-DOM-source exception.
-  const [practice, track, testing, driver, office, staff, car, supplierData, leagueInfo] = await Promise.all([
-  getDataDomOnly('/Practice', buildLivePracticeDOM), getDataDomOnly('/TrackProfile'),
-  getDataDomOnly('/Testing', parseTestingDOM), getDataDomOnly('/DriProfile'),
-  getDataSmart('/Office'), getDataDomOnly('/StaffAndFacilities'), getDataDomOnly('/UpdateCar'),
-  getDataDomOnly('/TyreSuppliers'), detectLeagueFresh()
-  ]);
-  const supplier = resolveActiveSupplier(office, supplierData);
-  const staffTd = await buildStaffTdInfo(office, staff);
+  const practice = getDataDomOnly('/Practice', buildLivePracticeDOM), track = getDataDomOnly('/TrackProfile');
+  const testing = getDataDomOnly('/Testing', parseTestingDOM), driver = getDataDomOnly('/DriProfile');
+  const staff = getDataDomOnly('/StaffAndFacilities'), car = getDataDomOnly('/UpdateCar');
+  const supplierData = getDataDomOnly('/TyreSuppliers'), leagueInfo = await detectLeagueFresh();
+  const supplier = resolveActiveSupplier(supplierData);
+  const staffTd = buildStaffTdInfo(staff);
   renderRaceSetup(practice, track, testing, driver, supplier, mergeWithCachedCarData(car), staffTd, leagueInfo.league);
  } else if (page === 'updateCar') {
  // DOM-only for car data: UpdateCar.asp's own "Setup related parts" table already gives
@@ -6718,7 +6541,7 @@ training: 'Parsing driver training data...',
  `<button id="gpro-cfg" style="background:#374151;color:#d1d5db;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;">Settings</button></div>`);
  setTimeout(() => {
  document.getElementById('gpro-retry')?.addEventListener('click', init);
- document.getElementById('gpro-cfg')?.addEventListener('click', showTokenModal);
+ document.getElementById('gpro-cfg')?.addEventListener('click', showSettingsModal);
  }, 100);
  }
  }
@@ -7034,10 +6857,9 @@ training: 'Parsing driver training data...',
  createPanel('Sponsor Overview');
  body(`<div style="${ST.loading}">Loading sponsor data...</div>`);
  try {
- // Use getDataSmart for graceful fallback to cached data if token is expired
- const neg = await getDataSmart('/NegOverview').catch(() => ({}));
+ const neg = getDataDomOnly('/NegOverview') || {};
  if (!neg || !neg.carSpots) {
-  body(mkRec('No sponsor data available. Visit NegotiationsOverview.asp once to capture data, or check your API token.', 'warn'));
+  body(mkRec('No sponsor data available. Visit NegotiationsOverview.asp once to capture data.', 'warn'));
   return;
  }
  let h = '';
@@ -7072,12 +6894,10 @@ training: 'Parsing driver training data...',
  h += mkSection('Ongoing Negotiations', negTable + `<span style="font-size:9px;color:#6b7280;">⚠️ = GPRO flags this negotiation as needing your attention (a question is pending or progress stalled).</span>`, 'gpro-sec-sponsor-negs');
 
  // Per-sponsor negotiation-answer advice - only for negotiations GPRO itself flags as
- // needing attention, one API call each (bounded by GPRO's maxNegotiations, usually <=5).
+ // needing attention, from each negotiation's captured page (bounded by GPRO's maxNegotiations, usually <=5).
  const flagged = negs.filter(n => n.attention && n.sponsorId);
  if (flagged.length) {
- const profiles = await Promise.all(flagged.map(n =>
- getDataSmart(`/NegotiateSponsor?id=${n.sponsorId}`).catch(() => null)
- ));
+ const profiles = flagged.map(n => getDataDomOnly(`/NegotiateSponsor?id=${n.sponsorId}`));
  let adviceHtml = '';
  flagged.forEach((n, i) => {
  const advice = calcSponsorAnswerAdvice(profiles[i]);
@@ -7981,12 +7801,11 @@ training: 'Parsing driver training data...',
  GM_registerMenuCommand('Season Overview', renderSeasonOverview);
  GM_registerMenuCommand('Sponsor Overview', renderSponsorOverview);
  GM_registerMenuCommand('Driver & TD Market', renderMarketOverview);
- GM_registerMenuCommand('Settings', showTokenModal);
+ GM_registerMenuCommand('Settings', showSettingsModal);
  GM_registerMenuCommand('Clear Cache', () => {
- // Clear both the short-lived (20min) cache and the long-lived stale fallback cache
+ // Clear the long-lived page-data cache
  const endpoints = ['/Practice', '/TrackProfile', '/DriProfile', '/Office', '/TyreSuppliers', '/UpdateCar', '/Testing', '/StaffAndFacilities', '/TDProfile', '/NegOverview', '/AvailDrivers', '/AvailTDs', '/Menu'];
  endpoints.forEach(ep => {
- try { GM_setValue('cache_api_' + ep, null); } catch(e) {}
  try { GM_setValue('stale_api_' + ep, null); } catch(e) {}
  });
  // Also reset the season track-specs pre-cache flag so backgroundCacheSeasonTrackSpecs
@@ -7994,11 +7813,6 @@ training: 'Parsing driver training data...',
  // permanently skipped for a season it thinks is already done.
  try { GM_setValue('gpro_season_specs_cached_season', ''); } catch(e) {}
  alert('Cache cleared (including stale fallback data). Data will be fetched fresh on next page load.');
- location.reload();
- });
- GM_registerMenuCommand('Reset API Call Counter (new race)', () => {
- resetApiCallCount();
- alert(`API call counter reset to 0/${API_CALL_BUDGET}. Only do this once you're sure a new race has actually started - GPRO's own token limit doesn't reset automatically either.`);
  location.reload();
  });
  runPassiveCapture();

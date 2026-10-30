@@ -12,7 +12,7 @@ If you've ever stared at the tyre supplier page wondering which compound to pick
 
 GPRO gives you raw data. This tool turns it into **decisions**.
 
-- **Save API requests.** GPRO caps your API token at ~100 requests per race. Most tools burn through these quickly. This tool uses a three-tier data system (DOM → stale cache → API) so you rarely hit the limit.
+- **No API token needed.** Everything is read off GPRO's own pages — the page you're on, or a copy captured when you (or the tool, in the background) last loaded that page.
 - **Stop second-guessing.** Every recommendation shows *which model produced it* (per-track formulas, calibrated data, or custom analysis) so you know exactly how much to trust it.
 - **Get answers fast.** One floating panel on every page — no tab-switching, no spreadsheets, no copy-pasting between tools.
 
@@ -24,7 +24,7 @@ GPRO gives you raw data. This tool turns it into **decisions**.
 
 | Page | What You Get |
 |------|-------------|
-| **Dashboard** | Live data-freshness dashboard, API token status, one-click "Update All" |
+| **Dashboard** | Live data-freshness dashboard, one-click "Update All" |
 | **Q1 Advisor** | Car setup values, tyre strategy, weather forecast, rain qualifying plan |
 | **Q2 Advisor** | Same as Q1, plus first-stint fuel recommendation for the race |
 | **Race Advisor** | Full race strategy — fuel plan, pit laps, wet/rain plans, driver risk analysis, PHA comparison |
@@ -74,10 +74,7 @@ You need [Tampermonkey](https://www.tampermonkey.net/) (or a compatible userscri
 ## Getting Started
 
 1. Navigate to [gpro.net](https://www.gpro.net) and log in
-2. On your first visit, the tool will prompt you for an **API token**
-3. Get your token: **GPRO App → Menu → Miscellaneous → API access** → copy the token
-4. Paste it into the tool's settings modal
-5. Visit the **Dashboard** (gpro.asp) to see all your data load
+2. Visit the **Dashboard** (gpro.asp) — it captures your driver, track, suppliers, staff and testing pages in the background
 
 That's it. The floating panel will appear on every game page with page-specific recommendations.
 
@@ -85,9 +82,8 @@ That's it. The floating panel will appear on every game page with page-specific 
 
 Right-click the Tampermonkey icon or use the Tampermonkey menu:
 
-- **Settings** — Enter or change your API token
+- **Settings** — Driver-offer aggressiveness
 - **Clear Cache** — Wipe all cached data and reload
-- **Reset API Call Counter** — Reset the per-race budget counter (do this at the start of each new race)
 - **Season Overview** — View all 17 races with track profiles and intensity bars
 - **Sponsor Overview** — View sponsor negotiations and get answer advice
 - **Driver & TD Market** — Browse available drivers and technical directors
@@ -96,15 +92,12 @@ Right-click the Tampermonkey icon or use the Tampermonkey menu:
 
 ## How It Works
 
-### Three-Tier Data Resolution
+### Data Resolution
 
-The tool is designed to respect GPRO's API budget. Every piece of data goes through three tiers:
+Every piece of data comes from GPRO's own pages:
 
-1. **Live DOM parse** — Reads data directly from the page you're on (zero network cost)
-2. **Stale cache** — Long-lived cached data from previous API calls or background captures (no TTL)
-3. **API call** — Last resort only, counted against your per-race budget
-
-Most recommendations are generated without making a single API call.
+1. **Live page parse** — reads the page you're on
+2. **Captured copy** — the last time that page was read (by you visiting it, or the dashboard's background capture)
 
 ### Internal Formulas
 
@@ -127,7 +120,6 @@ The tool mostly works out of the box. A few optional settings:
 |---------|-------|-------------|
 | **CTR (Clear Track Risk)** | Race Advisor | Set your driver's CTR value for risk calculations |
 | **Wet/Dry overrides** | Q1/Q2 pages | Manually toggle session conditions when auto-detection is wrong |
-| **API token** | Tampermonkey menu → Settings | Required for API access |
 
 ---
 

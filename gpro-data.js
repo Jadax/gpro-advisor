@@ -1822,6 +1822,16 @@ driverAttributeLeaguePriority: {
  startFuel: 107, finishFuel: 9, finishTyres: 34, compounds: ['Medium', 'Medium'], boostLaps: [2, 38, 78],
  temp: { min: 30, max: 36 }, wetLaps: 0, raceSetup: { fw: 380, rw: 406, eng: 698, bra: 789, gear: 571, susp: 791, tyres: 'Medium' }, carPHA: { p: 19, h: 16, a: 15 },
  pits: [{ lap: 41, reason: 'No more fuel was left', tyreCond: 30, fuelLeftPct: 0, refilledTo: 110, pitTime: 30.859 }] },
+ { season: 113, race: 5, track: 'Mexico City', league: 'Rookie', laps: 69, source: 'screenshot 2026-10-30',
+ driver: { oa: 94, con: 174, tal: 130, agr: 0, exp: 112, tei: 94, sta: 8, cha: 82, mot: 126, rep: 0, wei: 84 },
+ risks: { overtake: 55, defend: 30, clearDry: 0, clearWet: 0, malf: 10 }, startPos: 5, finishPos: 4,
+ overtakes: { attempts: 15, blocked: 10, success: 5, onYou: 24, onYouBlocked: 15, onYouSuccess: 9 }, driverMistakes: [10, 27],
+ partLevels: [1, 2, 1, 1, 2, 1, 1, 2, 2, 2, 1],
+ startWear: [69, 38, 65, 67, 0, 62, 50, 0, 35, 0, 47],
+ finishWear: [78, 54, 76, 77, 14, 72, 63, 20, 45, 23, 59],
+ startFuel: 123, finishFuel: 13, finishTyres: 29, compounds: ['Hard', 'Hard'], boostLaps: [2, 33, 67],
+ temp: { min: 33, max: 39 }, wetLaps: 0, raceSetup: { fw: 586, rw: 777, eng: 723, bra: 586, gear: 535, susp: 406, tyres: 'Hard' }, carPHA: { p: 22, h: 20, a: 21 },
+ pits: [{ lap: 36, reason: 'No more fuel was left', tyreCond: 21, fuelLeftPct: 1, refilledTo: 123, pitTime: 36.901 }] },
  ],
 
 };
