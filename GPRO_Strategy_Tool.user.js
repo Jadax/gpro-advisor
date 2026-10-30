@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.31.0
+// @version 6.31.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -4245,7 +4245,11 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   else skip = skip || 'no start-fuel recommendation';
   }
   const riskTxt = planRiskIdx != null ? QUAL_RISK_OPTIONS[planRiskIdx] : '?';
-  publishPlan(isQ2 ? 'q2' : 'q1', { form: 'formQual', submit: 'DriveLap', fields, skip, sig: planSig(fields),
+  // A Q1 on Rain gets a second GPRO screen ("you will have to specify now the dry tyre compound
+  // ... for Qualify 2 and the Race", select DryTyres + Drive lap again; live 2026-10-30) - the lap
+  // is only driven after it. meta.dryTyres answers it with the race strategy's best dry compound.
+  const q1Dry = !isQ2 && tyre && tyre.bestDry ? TYRE_CODES[tyre.bestDry.name] : null;
+  publishPlan(isQ2 ? 'q2' : 'q1', { form: 'formQual', submit: 'DriveLap', fields, skip, sig: planSig(fields), meta: q1Dry ? { dryTyres: q1Dry } : null,
   summary: `${sessionLabel} ${sv ? `FW${sv['Front Wing']} RW${sv['Rear Wing']} E${sv['Engine']} B${sv['Brakes']} G${sv['Gearbox']} S${sv['Suspension']}` : ''}, ${isQ2 ? (thisSessionWet ? 'Rain' : (tyre && tyre.bestDry ? tyre.bestDry.name : 'locked dry compound')) : sessionTyreRec}, "${riskTxt}"${isQ2 ? `, start fuel ${planQ2Fuel}L` : ''}` });
   }
 
@@ -6074,6 +6078,11 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  pageWin.alert = (m) => { dialogs.push(String(m)); };
  pageWin.confirm = (m) => { dialogs.push(String(m)); return true; };
  } catch (e) { logError('dialog override failed', e); }
+ if (job.stage === 'submitted' && job.step === 'q1' && !job.dryAnswered && document.querySelector('select#DryTyres, select[name="DryTyres"]')) {
+ job.dryAnswered = true; window.name = AUTO_FRAME_PREFIX + JSON.stringify(job);
+ if (answerDryTyresScreen(document, job.meta)) return;
+ return report({ ok: false, msg: 'GPRO asked for the dry compound but the advisor has none' });
+ }
  if (job.stage === 'submitted') {
  // First message-looking line on the result page (GPRO's notices), for the activity log.
  const msgEl = Array.from(document.querySelectorAll('.error, .errormsg, .notice, .warning, font[color], .alert, p, td'))
@@ -6088,7 +6097,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (r.error) return report({ ok: false, msg: r.error });
  if (r.missing.length) return report({ ok: false, msg: `couldn't set ${r.missing.join(', ')}` });
  if (job.dryRun) return report({ ok: true, preview: true, msg: plan.summary, sig: plan.sig });
- job.stage = 'submitted';
+ job.stage = 'submitted'; job.meta = plan.meta || null;
  window.name = AUTO_FRAME_PREFIX + JSON.stringify(job);
  const err = submitPlannedForm(r.form, plan.submit);
  if (err) { job.stage = 'fill'; window.name = AUTO_FRAME_PREFIX + JSON.stringify(job); report({ ok: false, msg: err }); return; }
@@ -6237,6 +6246,19 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (added) say(`📒 Race log: +${added} race${added !== 1 ? 's' : ''} from your history (${queue.length} still queued)`);
  }
 
+ // GPRO's rain-Q1 follow-up screen: if this page asks for the race's dry compound, answer from the
+ // plan and press Drive lap again. Returns true when it clicked (a new page load follows).
+ function answerDryTyresScreen(doc, meta) {
+ const sel = doc.querySelector('select#DryTyres, select[name="DryTyres"]');
+ if (!sel || !meta || !meta.dryTyres) return false;
+ const opt = Array.from(sel.options).find((o) => o.value === String(meta.dryTyres));
+ const btn = sel.form && sel.form.elements.DriveLap;
+ if (!opt || !btn || btn.disabled) return false;
+ sel.value = opt.value;
+ btn.click();
+ return true;
+ }
+
  // ---- did it really happen? (read back from GPRO's own pages) ----
  // q1: Q2's "Drive lap" is disabled until Q1 has been driven (live 2026-10-30); q2: RaceSetup's
  // "Confirm settings" is disabled until Q2; car/facilities: their "Undo ..." button only enables
@@ -6331,6 +6353,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const doneFor = st.done[r.key];
  if (r.stage === 'submitted') {
  // This is the page GPRO returned after the click.
+ if (key === 'q1' && !r.dryAnswered && document.querySelector('select#DryTyres, select[name="DryTyres"]')) {
+ r.dryAnswered = true; saveTabRun(r);
+ const dryName = Object.keys(TYRE_CODES).find((n) => TYRE_CODES[n] === (r.meta && r.meta.dryTyres));
+ if (answerDryTyresScreen(document, r.meta)) { pilotLog(`· Q1 on Rain: dry compound for Q2/race set to ${dryName}`); return; }
+ pilotLog('⚠ Q1: GPRO asked for the dry compound but the advisor has none — choose it on the page'); return tabRunAdvance(r);
+ }
  await pause(PILOT_FETCH_GAP_MS);
  const ok = await verifyPost(step, { fields: r.fields, meta: r.meta }).catch(() => false);
  if (ok) {
