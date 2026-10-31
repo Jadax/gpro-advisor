@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.33.1
+// @version 6.33.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1883,11 +1883,36 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // Returns { stopLaps, stops, stints, stintFuels, startRecommend, committedFuel, total } where
   // startRecommend is the phase-aware need for stint 1 (NOT the committed value — a committed value
   // that's too heavy is surfaced as a warning by the caller).
-  function computeRaceFuelPlan(laps, dryRate, profile, tyreStops, committedFuel) {
+  // lockedStart: the start fuel GPRO has already fixed (Q2 driven - RaceSetup's FuelStart is
+  // read-only and Confirm is enabled). Then stint 1 is whatever that fuel covers - GPRO pits at the
+  // end of the last lap it can complete (Austin/Bucharest/Mexico) - and only the rest of the race is
+  // planned, with enough stops that no remaining stint is longer than the strategy's own stint
+  // length. v6.33.1 and earlier ignored it: after an 86 L Q2 at S113 R6 the race page was planned
+  // for a 128 L start (1 stop, 131 L refuel) - a fill that couldn't reach the flag.
+  function computeRaceFuelPlan(laps, dryRate, profile, tyreStops, committedFuel, lockedStart) {
   const phases = (profile && profile.phases) || [];
   const transitions = (profile && profile.transitions) || [];
   const transLaps = transitions.map(tr => tr.lap);
   const wetRate = (dryRate || 2.4) * 1.12; // wet consumption ~12% higher (documented GAPP ratio)
+  if (lockedStart > 0 && laps > 0) {
+  const rateLap = (l) => { for (const p of phases) { if (l >= p.startLap && l <= p.endLap) return p.condition === 'wet' ? wetRate : dryRate; } return dryRate; };
+  let used = 0, pit1 = 0;
+  while (pit1 < laps && used + rateLap(pit1 + 1) <= lockedStart) { used += rateLap(pit1 + 1); pit1++; }
+  if (pit1 >= laps) return { stopLaps: [], stops: 0, stints: 1, stintFuels: [lockedStart], startRecommend: lockedStart, committedFuel: lockedStart, lockedStart };
+  pit1 = Math.max(1, pit1);
+  const rem = laps - pit1;
+  const strategyStint = Math.ceil(laps / Math.max(1, (tyreStops || 0) + 1));
+  const remStops = Math.max((tyreStops || 0) - 1, Math.ceil(rem / strategyStint) - 1, 0);
+  const shift = (l) => l - pit1;
+  const subPhases = phases.filter((p) => p.endLap > pit1).map((p) => Object.assign({}, p, { startLap: Math.max(1, shift(p.startLap)), endLap: shift(p.endLap), laps: shift(p.endLap) - Math.max(1, shift(p.startLap)) + 1 }));
+  const subTrans = transLaps.filter((l) => l > pit1 + 1).map(shift);
+  let sub = null;
+  try { sub = buildPhaseFuelPlan(rem, subPhases, subTrans, dryRate || 2.4, wetRate, remStops); } catch (e) { logDebug('[GPRO][Fuel] locked-start remainder failed: ' + e.message); }
+  if (sub && sub.stintFuels) {
+  const stopLaps = [pit1].concat(sub.stopLaps.map((l) => l + pit1));
+  return { stopLaps, stops: stopLaps.length, stints: stopLaps.length + 1, stintFuels: [lockedStart].concat(sub.stintFuels), startRecommend: lockedStart, committedFuel: lockedStart, lockedStart };
+  }
+  }
   let plan = null;
   try {
   plan = buildPhaseFuelPlan(laps, phases, transLaps, dryRate || 2.4, wetRate, tyreStops);
@@ -4334,6 +4359,9 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   if (planQ2Fuel != null && planQ2Fuel >= 10 && planQ2Fuel <= TANK_MAX) fields.Fuel = planQ2Fuel;
   else skip = skip || 'no start-fuel recommendation';
   }
+  // Already driven (GPRO lists the session's lap time): nothing to fill or drive. Without this the
+  // pre-fill wrote a fresh start-fuel recommendation (128 L) into a Q2 that had been driven on 86 L.
+  if (sessionLapDriven(document, isQ2 ? 2 : 1)) skip = `${sessionLabel} already driven`;
   const riskTxt = planRiskIdx != null ? QUAL_RISK_OPTIONS[planRiskIdx] : '?';
   // A Q1 on Rain gets a second GPRO screen ("you will have to specify now the dry tyre compound
   // ... for Qualify 2 and the Race", select DryTyres + Drive lap again; live 2026-10-30) - the lap
@@ -4477,6 +4505,11 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // gapp calc this doesn't attempt yet.
  const domFuelStartEl = document.querySelector('input[name="FuelStart"]');
  const domFuelStart = domFuelStartEl ? parseInt(domFuelStartEl.value) || null : null;
+ // FuelStart is read-only on every visit, but before Q2 it still shows the PREVIOUS race's start
+ // fuel (123 L from Mexico on the R6 page before Q2). It's this race's only once Q2 is driven,
+ // which is when GPRO enables Confirm settings.
+ const confirmBtn = document.querySelector('[name="btnConfirmSettings"]');
+ const lockedStart = (confirmBtn && !confirmBtn.disabled && domFuelStart) ? domFuelStart : null;
    let fuel = (tyre && chosenTyreResult) ? (() => {
    const laps = tyre.laps;
    const totalFuel = tyre.totalFuel;
@@ -4485,12 +4518,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
    // SINGLE shared fuel-plan source (also used by renderQualify's Q2 "First Stint Fuel") — phase-aware
    // wet/dry per stint and feasible (no non-start stint > TANK_MAX). Using computeRaceFuelPlan here
    // guarantees Q2 and Race Setup produce IDENTICAL stop laps, per-stint fuel and recommended start.
-   const plan = computeRaceFuelPlan(laps, fuelPerLap, analyze.raceProfile, tyreStops, domFuelStart);
+   const plan = computeRaceFuelPlan(laps, fuelPerLap, analyze.raceProfile, tyreStops, domFuelStart, lockedStart);
    const stops = plan.stops;
    const stints = plan.stints;
    const firstStint = plan.startRecommend;
    const stintFuels = plan.stintFuels;
-   return { laps, fuelPerLap: tyre.fuelPerLap, totalFuel, stints, stops, fuelPerStint: Math.ceil(totalFuel / Math.max(1, stints)), stint1Fuel: firstStint, stopLaps: plan.stopLaps, stintFuels, fuelNote: '', tyreStops, fromDomFuelStart: !!domFuelStart, committedFuel: plan.committedFuel };
+   return { laps, fuelPerLap: tyre.fuelPerLap, totalFuel, stints, stops, fuelPerStint: Math.ceil(totalFuel / Math.max(1, stints)), stint1Fuel: firstStint, lockedStart: plan.lockedStart || null, stopLaps: plan.stopLaps, stintFuels, fuelNote: '', tyreStops, fromDomFuelStart: !!domFuelStart, committedFuel: plan.committedFuel };
    })() : null;
 
   // Fallback: if tyre strategy is unavailable (e.g. Rain compound has no valid strategy),
@@ -4632,7 +4665,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     // Start stint (stint 0) — carries its own share of boost fuel too, allocated physically like
     // the stop rows below (the Q2 rec the user types in already includes this portion, v6.27.4).
     const boostInStart = boostLapsList.filter(l => l >= stintStartOf(0) && l <= stintEndOf(0)).length;
-    const startFillRaw = startFuelVal + Math.round(boostInStart * perBoostLap);
+    // A locked start (Q2 driven) is what's in the car - nothing gets added to it.
+    const startFillRaw = fuel.lockedStart ? fuel.lockedStart : startFuelVal + Math.round(boostInStart * perBoostLap);
     const startFill = Math.min(TANK_MAX, startFillRaw);
     const startCapped = startFillRaw > TANK_MAX;
     let planTotal = startFill;
@@ -6406,10 +6440,20 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // "Confirm settings" is disabled until Q2; car/facilities: their "Undo ..." button only enables
  // after an update this race; race: the saved fields equal the plan; testing: laps done went up.
  async function fetchDoc(path) { return new DOMParser().parseFromString(await fetchPageHTML(path), 'text/html'); }
+ // "Qualify N lap data" table holds a lap time once that session is driven (live R6 pages). Q1's
+ // table only appears after Q1; Q2's says "No qualify laps done" until Q2 - and the small Q1/Q2/grid
+ // result tables right after it carry Q1's time, so only the row straight under the header counts.
+ function sessionLapDriven(doc, n) {
+ const txt = (doc.body ? doc.body.textContent : '').replace(/\s+/g, ' ');
+ const i = txt.indexOf(`Qualify ${n} lap data`);
+ if (i < 0) return false;
+ const seg = txt.slice(i, i + 140);
+ return !/No (qualify|practice) laps done/i.test(seg) && /\d+:\d{2}\.\d{3}s/.test(seg);
+ }
  function buttonEnabled(doc, name) { const b = doc.querySelector(`[name="${name}"]`); return !!b && !b.disabled; }
  const STEP_DONE_CHECKS = {
- q1: async () => buttonEnabled(await fetchDoc('Qualify2.asp'), 'DriveLap'),
- q2: async () => buttonEnabled(await fetchDoc('RaceSetup.asp'), 'btnConfirmSettings'),
+ q1: async () => sessionLapDriven(await fetchDoc('Qualify.asp'), 1),
+ q2: async () => sessionLapDriven(await fetchDoc('Qualify2.asp'), 2),
  car: async () => buttonEnabled(await fetchDoc('UpdateCar.asp'), 'btnUndoUpdateCar'),
  facilities: async () => buttonEnabled(await fetchDoc('StaffAndFacilities.asp'), 'btnUndoFacilitiesUpdate'),
  };
