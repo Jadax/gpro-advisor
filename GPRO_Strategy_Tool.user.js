@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.33.0
+// @version 6.33.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -30,7 +30,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.8.2
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.8.3
 // @run-at document-idle
 // ==/UserScript==
 
@@ -6392,7 +6392,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const $m = (v) => '$' + (v / 1e6).toFixed(1) + 'M';
  let advice;
  if (league === 'Rookie' && !m.promoted) advice = `You're P${m.pos}: only the top ${PROMOTION_SPOTS} are promoted, and a Rookie who stays down is reset to nothing but the driver - so this season's cash only matters for winning races now.`;
- else if (m.surplus > 0) advice = `If promoted, about ${$m(m.surplus)} would sit above the $50M tax line and lose ${$m(m.tax)} to the 25% tax. Spend that surplus before the last race on things that carry over: testing points (the autopilot's testing step already spends only money above $50M), facilities (they carry; ${league === 'Rookie' ? 'Amateur allows up to L40' : 'next league allows more'}) and staff training.`;
+ else if (m.surplus > 0) advice = `If promoted, about ${$m(m.surplus)} would sit above the $50M tax line and lose ${$m(m.tax)} to the 25% tax. Spend that surplus before the last race on what carries over and earns: testing points first (the autopilot's testing step already spends only money above $50M)${league === 'Rookie' ? '. Facilities beyond Pitstop + Commercial only convert testing points (GPRO Newbie Guide), so leave them for Amateur' : ', then facilities that convert testing points'}.`;
  else advice = `Projected to stay under the $50M tax line - nothing to spend down.`;
  return mkSection('Season-end money plan', mkRow('Cash now', $m(m.cash)) +
  mkRow('Average net per race', `${$m(m.avgNet)} (${m.races} race${m.races !== 1 ? 's' : ''} logged)`) +
