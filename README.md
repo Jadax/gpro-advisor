@@ -103,7 +103,7 @@ Every switch starts **off**. Turn on the master switch plus the steps you want, 
 | Testing | Drives test stints for car character points every race the cash and wear checks allow (a car level of testing points costs far less than a level of parts) |
 | Q1 | Drives the Q1 lap with the advisor's setup, tyre (Rain if wet, the race's dry compound if dry) and risk |
 | Q2 | Drives Q2 with the setup, risk and start fuel |
-| Race setup | Confirms setup, fuel per stop, boost laps and all risks; re-confirms if the forecast changes the plan |
+| Race setup | Confirms setup, fuel per stop (planned around the start fuel Q2 locked in), boost laps and all risks — once, then leaves it alone |
 
 - One run per race; nothing after qualifying closes; qualifies early to collect the early-qualifying bonus.
 - Never spends below **$5M** cash. Testing never pushes a part past 95% by the end of the next race.
