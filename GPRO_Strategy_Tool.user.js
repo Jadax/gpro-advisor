@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.32.0
+// @version 6.33.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -30,7 +30,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.8.1
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.8.2
 // @run-at document-idle
 // ==/UserScript==
 
@@ -3313,6 +3313,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  });
  const qt = t.match(/Qualification 1\s+Qualification 2\s+([\d:.]+)s\s*\(#(\d+)\)\s+([\d:.]+)s\s*\(#(\d+)\)/i);
  if (qt) rec.qualifying = { q1Time: qt[1], q1Pos: +qt[2], q2Time: qt[3], q2Pos: +qt[4] };
+ // Finances block ("Financial analysis of the last race"): net race total + balance after it,
+ // e.g. S113 R4 "Total: $8.445.820" / "Current balance: $58.202.124" (dot-thousands, costs "$-520.000").
+ const fin = t.match(/Financial analysis[\s\S]*?\bTotal:?\s*(\$\s*-?[\d.]+)/i);
+ if (fin) rec.netIncome = (/-/.test(fin[1]) ? -1 : 1) * parseGproCash(fin[1]);
+ const bal = t.match(/Current balance:?\s*(\$\s*-?[\d.]+)/i);
+ if (bal) rec.balanceAfter = (/-/.test(bal[1]) ? -1 : 1) * parseGproCash(bal[1]);
  const sup = t.match(/Tyre supplier\s+([A-Z][A-Za-z]+)/);
  if (sup) rec.supplier = sup[1];
  const pha = t.match(/Power\s+Handling\s+Acceleration\s+(\d+)\s+(\d+)\s+(\d+)/i);
@@ -4718,6 +4724,16 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  drHtml += mkRow('...if the car is malfunctioning', `${driverRiskRec.malfunctionRisk}`);
  drHtml += mkRow('Start of race', driverRiskRec.startRiskLabel);
  drHtml += mkRow('Pit on solvable problem if >', `${driverRiskRec.problemPitLaps} laps remaining`);
+ // Your own record at tracks with the same overtaking rating (race log) - the evidence these dials
+ // will be tuned against once enough races exist; shown, not applied.
+ {
+ const ovr = (track && track.overtaking) || ((D.trackPub && D.trackPub[(practice || {}).trackName || (track || {}).trackName]) || {}).overtaking;
+ const same = ovr ? getRaceLog().filter((r) => r.risks && r.overtakes && ((D.trackPub[r.track] || {}).overtaking === ovr)) : [];
+ if (same.length) {
+ drHtml += `<div style="font-size:9px;color:${PALETTE.textDim};margin-top:4px;">📒 Your record on ${esc(ovr)}-overtaking tracks: ` + same.map((r) =>
+ `${esc(r.track)} overtake ${r.risks.overtake}/defend ${r.risks.defend} → made ${r.overtakes.success}/${r.overtakes.attempts}, lost ${r.overtakes.onYouSuccess}/${r.overtakes.onYou}${r.driverMistakes && r.driverMistakes.length ? `, ${r.driverMistakes.length} mistake${r.driverMistakes.length !== 1 ? 's' : ''}` : ''}, P${r.startPos}→P${r.finishPos}`).join(' · ') + '</div>';
+ }
+ }
  const strategyTip = calcStrategyTip(driverRiskRec.overtaking, raceWetForRisk, rainAvgForRisk);
  if (strategyTip) drHtml += `<div style="font-size:9px;color:#9ca3af;padding-left:4px;margin-top:2px;">💡 ${strategyTip}</div>`;
  const distanceTip = calcDistanceTip(distanceKm, driver && driver.stamina);
@@ -5680,6 +5696,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // (same X/Y source count, plus a render-time timestamp that isn't per-source freshness info)
  // without adding anything the detailed table didn't already show.
 
+ h += mkSeasonMoneyPlan(String(((getStaleData('/Menu') || {}).data || {}).group || '').split(' - ')[0].trim());
+
  // Upgrade the button section
  h += `<div style="margin-top:10px;">`;
  h += `<button id="gpro-update-all" style="width:100%;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;border:none;padding:8px;border-radius:6px;cursor:pointer;font-weight:700;font-size:12px;letter-spacing:0.3px;">🔄 Update All Data</button>`;
@@ -6343,6 +6361,46 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return true;
  }
 
+ // ---- season-end money plan (rules 5.4, 7.1-7.3) ----
+ // Projection = cash now + races left x this season's average net race income (race log) + the
+ // final-standings prize for the current position. Rules: top 3 promote; promoted managers pay 25%
+ // on cash above $50M after the reset (7.3.2); a non-promoted Rookie is reset to nothing but the
+ // driver (7.2); every manager who qualified for all 17 races gets $5M at the reset (7.2). Points
+ // money is also paid but its amount isn't published, so it's left out. Own projection, labelled.
+ const SEASON_RACES = 17;
+ const TAX_LINE = 50000000, TAX_RATE = 0.25, ALL_RACES_BONUS = 5000000;
+ function seasonMoneyPlan(league) {
+ let standing = null;
+ try { standing = JSON.parse(GM_getValue('gpro_standing', 'null')); } catch (e) { standing = null; }
+ const cash = (getCachedCarData() || {}).cash;
+ const log = getRaceLog();
+ const season = log.length ? Math.max(...log.map((r) => r.season)) : null;
+ const incomes = log.filter((r) => r.season === season && r.netIncome != null).map((r) => r.netIncome);
+ if (!standing || !cash || !incomes.length) return null;
+ const avgNet = incomes.reduce((a, b) => a + b, 0) / incomes.length;
+ const racesLeft = Math.max(0, SEASON_RACES - standing.racesDone);
+ const prizeArr = D.prizeMoney && D.prizeMoney.finalStandings && D.prizeMoney.finalStandings[league];
+ const prize = prizeArr && standing.pos <= prizeArr.length ? prizeArr[standing.pos - 1] : 0;
+ const projected = cash + racesLeft * avgNet + prize;
+ const promoted = standing.pos <= PROMOTION_SPOTS;
+ const surplus = Math.max(0, projected - TAX_LINE);
+ return { cash, avgNet, races: incomes.length, racesLeft, prize, projected, promoted, surplus, tax: promoted ? surplus * TAX_RATE : 0, pos: standing.pos, league };
+ }
+ function mkSeasonMoneyPlan(league) {
+ const m = seasonMoneyPlan(league);
+ if (!m) return '';
+ const $m = (v) => '$' + (v / 1e6).toFixed(1) + 'M';
+ let advice;
+ if (league === 'Rookie' && !m.promoted) advice = `You're P${m.pos}: only the top ${PROMOTION_SPOTS} are promoted, and a Rookie who stays down is reset to nothing but the driver - so this season's cash only matters for winning races now.`;
+ else if (m.surplus > 0) advice = `If promoted, about ${$m(m.surplus)} would sit above the $50M tax line and lose ${$m(m.tax)} to the 25% tax. Spend that surplus before the last race on things that carry over: testing points (the autopilot's testing step already spends only money above $50M), facilities (they carry; ${league === 'Rookie' ? 'Amateur allows up to L40' : 'next league allows more'}) and staff training.`;
+ else advice = `Projected to stay under the $50M tax line - nothing to spend down.`;
+ return mkSection('Season-end money plan', mkRow('Cash now', $m(m.cash)) +
+ mkRow('Average net per race', `${$m(m.avgNet)} (${m.races} race${m.races !== 1 ? 's' : ''} logged)`) +
+ mkRow(`Projected after ${m.racesLeft} more race${m.racesLeft !== 1 ? 's' : ''}`, `${$m(m.projected)}${m.prize ? ` incl. ${$m(m.prize)} P${m.pos} prize` : ''}`) +
+ mkRec(advice, m.surplus > 0 && m.promoted ? 'warn' : 'info') +
+ `<div style="font-size:9px;color:${PALETTE.textDim};margin-top:4px;">Own projection from GPRO rules 5.4/7.1-7.3 and your logged race income; before any further spending, plus the $5M all-races bonus and points money paid at the reset.</div>`);
+ }
+
  // ---- did it really happen? (read back from GPRO's own pages) ----
  // q1: Q2's "Drive lap" is disabled until Q1 has been driven (live 2026-10-30); q2: RaceSetup's
  // "Confirm settings" is disabled until Q2; car/facilities: their "Undo ..." button only enables
@@ -6546,7 +6604,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (dryRun) { log(`👁 ${name}: ${r.msg}`); continue; }
  await pause(PILOT_FETCH_GAP_MS);
  const really = await verifyPost(step, r).catch(() => false);
- if (!really) { log(`⚠ ${name}: posted, but GPRO doesn't show it saved${r.pageMsg ? ` — page said: "${r.pageMsg}"` : ''}`); continue; }
+ if (!really) { log(`⚠ ${name}: posted from the background, but GPRO doesn't show it saved${r.pageMsg ? ` — page said: "${r.pageMsg}"` : ''} — use Run now`); continue; }
  doneFor[step.key] = { at: Date.now(), sig: r.sig };
  log(`✅ ${name}: ${r.msg}${r.pageMsg ? ` (GPRO: "${r.pageMsg}")` : ''}`);
  }
