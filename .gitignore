@@ -10,6 +10,3 @@ data/
 
 # Browser automation logs
 .playwright-mcp/
-
-# Future package tooling (none yet, but keep this ready)
-node_modules/

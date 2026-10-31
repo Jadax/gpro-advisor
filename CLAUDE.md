@@ -10,7 +10,6 @@ Tampermonkey userscript for gpro.net. Two files: `GPRO_Strategy_Tool.user.js` (l
 |------|---------|
 | `GPRO_Strategy_Tool.user.js` | Main script: DOM parsing, calculations, UI rendering |
 | `gpro-data.js` | Season data, track profiles, GAPP formulas, calibration, scraped data |
-| `gpro-public-api.yml` | **Reference only** — GPRO's OpenAPI spec (116k+ lines). Never load/glob it; grep field names |
 | `docs/page-structures.md` | Confirmed DOM selectors for game pages |
 | `README.md` | User-facing install guide |
 
@@ -18,7 +17,7 @@ Tampermonkey userscript for gpro.net. Two files: `GPRO_Strategy_Tool.user.js` (l
 
 ## Architecture
 
-1. **Data resolution**: `getDataDomOnly(endpoint, domParseFn?)` = live DOM parse (persisted) → long-lived captured copy (`getStaleData`, marked `__stale`) → null. **No API tier**: the token client (`apiGet`, `getDataSmart`, call budget, token UI, `/Office`) was removed v6.28.2 at the user's request — nothing was being read through it any more. Own driver ID comes from gpro.asp's driver link (`gpro_own_driver_id`), TD from the cached `/TDProfile`, tyre supplier from Suppliers.asp's `activeSupplierName`, league from page group links (else the last captured group). `gpro-public-api.yml` stays as a field-name reference only.
+1. **Data resolution**: `getDataDomOnly(endpoint, domParseFn?)` = live DOM parse (persisted) → long-lived captured copy (`getStaleData`, marked `__stale`) → null. **No API tier**: the token client (`apiGet`, `getDataSmart`, call budget, token UI, `/Office`) was removed v6.28.2 at the user's request — nothing was being read through it any more. Own driver ID comes from gpro.asp's driver link (`gpro_own_driver_id`), TD from the cached `/TDProfile`, tyre supplier from Suppliers.asp's `activeSupplierName`, league from page group links (else the last captured group). GPRO's OpenAPI spec (`gpro-public-api.yml`, cited in older code comments as a field-name source) was deleted 2026-10-31 to keep the project lean — `git show 3b87890:gpro-public-api.yml` if ever needed. Reference spreadsheets (Heino, MASTER/planner) live outside the repo; their facts are folded into CLAUDE.md/gpro-data.js.
 2. **GAPP-first formulas**: calc functions check `D.gapp` data first, fall back to own calibrated formulas. Key: `calcCarSetupSmart`, `calcTyreStrategySmart`, `calcPartsWear`.
 3. **Passive + background capture**: `runPassiveCapture()` on DriverProfile/TrackDetails/Suppliers/StaffAndFacilities/Testing visits; `backgroundCaptureAuxPages()` fetches those + Qualify.asp/NegOverview/TDProfile without navigation, throttled once/30min; `backgroundCacheSeasonTrackSpecs()` pre-fetches all tracks' TrackDetails.asp via Calendar.asp once per season.
 

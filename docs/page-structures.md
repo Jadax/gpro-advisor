@@ -2,7 +2,7 @@
 
 Captured 2026-07-17 from live pages (Season 111, Amateur - 3, manager Tushant Sharma / driver Jim Buller / Spa GP race week). Purpose: reference for building DOM-scraping fallbacks in `GPRO_Strategy_Tool.user.js` so the tool depends less on the `/backend/api/v2` token. Re-verify selectors periodically — GPRO's HTML has changed before (game is old, still ASP-based, occasionally tweaked).
 
-This file covers **DOM selectors** (scraping rendered HTML). For **API field/endpoint names**, see `../gpro-public-api.yml` (official OpenAPI spec) instead — grep it, never read it wholesale (~116k lines).
+This file covers **DOM selectors** (scraping rendered HTML). For **API field/endpoint names** (no longer used — the API client was removed v6.28.2), see `gpro-public-api.yml` in git history (`git show 3b87890:gpro-public-api.yml`` (official OpenAPI spec) instead — grep it, never read it wholesale (~116k lines).
 
 ---
 
