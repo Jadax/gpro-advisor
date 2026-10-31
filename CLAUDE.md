@@ -81,7 +81,7 @@ Every RaceAnalysis.asp visit parses GPRO's post-race report into one record per 
 
 ## Staff Advisor (StaffAndFacilities.asp)
 
-- **Rookie facility plan (user, 2026-10-27)**: Pitstop Training Center + Commercial → L20 (Rookie cap), every other facility → L5, budget permitting. `D.facilityTargets.Rookie`; the priority table shows the total vs live cash.
+- **Rookie facility plan (user, 2026-10-27)**: Pitstop Training Center + Commercial → L20 (Rookie cap), every other facility → L5, budget permitting. `D.facilityTargets.Rookie`; the priority table shows the total vs live cash. Backed by the GPRO Newbie Guide (only Pitstop + Commercial in Rookie; the other five only convert testing points → CCPs). Asked 2026-10-31 whether to raise the other five to L20 with the tax surplus: recommendation NO (they only pay off with regular testing, i.e. Amateur); the money plan says so. **Amateur+ `facilityTargets` have no recorded source — placeholders.**
 
 - Facility upgrade costs come from the page's own dropdowns (`slWindtunnel`/`slPitStop`/`slRDWorkshop`/`slRDDesignCenter`/`slEngineering`/`slLab`/`slCommercial`, option text "Upgrade to level N ($X)" = price to jump straight to N) via `parseStaffFacilitiesDOM().upgradeCosts`; the old flat "$500K/level" guess showed $2.5M for L0→L5 vs the real $656,250. Max training level is read from GPRO's own "maximum level of training is currently N" line (`maxTrainingLevel`), facility average only as fallback. A cap of 0 shows "Locked", not "MAXED".
 

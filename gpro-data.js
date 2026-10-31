@@ -173,7 +173,10 @@ Rookie: {
  // ============================================================
  facilityTargets: {
  // Rookie: user's own plan (2026-10-27) - Pitstop Training Center + Commercial to L20 (the
- // Rookie facility cap), every other facility to L5, budget permitting.
+ // Rookie facility cap), every other facility to L5, budget permitting. Matches the GPRO Newbie
+ // Guide: "Whilst in rookie the only things you may wish to upgrade are the Pit Stop Center & the
+ // Commercial center. The rest ... relate to how testing points are converted into car character
+ // points." The Amateur-and-up targets below have NO recorded source - treat as placeholders.
  Rookie: {
  'Pitstop Training Center': 20,
  'Commercial': 20,
