@@ -129,10 +129,11 @@ Same track/weather block as Qualify.asp. Additional:
 - Transaction descriptions seen: `Tyre supplier costs`, `Facility costs`, `Salary for your staff`, `Salary for your driver`, `Sponsor money`, `Qualifying position (N)`, `Race N finish position (N)`, `Qualify 1/2 lap costs`, `Car parts costs: <abbrevs>(lvl),...`, `Staff training: X`, `Driver training costs: X`, `Facility upgrade N levels: X`.
 - **Useful for auto-calibrating fuel/wear formulas** — car parts costs line shows exactly which parts were bought to what level and the exact $ paid, which could cross-check `PART_COSTS`/`CAR_COSTS` tables in the script live. Not currently consumed by the tool.
 
-## NegotiationsOverview.asp
+## NegotiationsOverview.asp / Sponsors.asp / NegotiateSponsor.asp (live 2026-11-01)
 
-- Active sponsor contracts table + ongoing negotiations table (progress %, priority, contested Y/N). Car spot names: Engine cover, Sidepods, Nose, Rear wing, Front wing.
-- Not consumed by the tool; could inform a future "sponsor priority" advisor.
+- Overview: contracts table (Sponsor | Car spot | Amount | Status "Active" | Races left | Satisfaction; empty rows read "Spot empty") + ongoing negotiations (Sponsor | Spot | Amount | Duration | Progress % | `select ddlPriority<ID>` Very high..Very low | Contested Yes/No | Est avg progress), form posts `btnChangePriorities`. Car spots: Engine cover, Sidepods, Nose, Rear wing, Front wing.
+- Sponsors.asp: rows `N. | name (link NegotiateSponsor.asp?ID=) | flag | createSkillGraph(n) ×6 (Finances, Expectations, Patience, Reputation, Image, Negotiation; rating = n+1 of 7) | Est avg progress %`.
+- NegotiateSponsor.asp?ID=: ratings as `<div class="flag" title="1-7">` bars; one unnamed form with hidden `manPostToken` + either `btnStartNego` (not negotiating), `btnCancelNego` (ongoing, onclick ConfirmCancel) or, when the sponsor has asked something, radio group `answer` (5 options) + submit (onclick CheckAnswers). Event log is supporter-only.
 
 ## TrainingSession.asp
 

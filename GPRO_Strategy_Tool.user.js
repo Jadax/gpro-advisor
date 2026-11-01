@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.34.1
+// @version 6.35.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -6150,6 +6150,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  { key: 'staffTrain', label: 'Staff training', url: 'StaffAndFacilities.asp' },
  { key: 'facilities', label: 'Facility upgrades (league targets, cash permitting)', url: 'StaffAndFacilities.asp' },
  { key: 'driverTrain', label: 'Driver training', url: 'TrainingSession.asp' },
+ { key: 'sponsors', label: 'Sponsor negotiations — answer questions, keep 2 going', url: 'NegotiationsOverview.asp', resolve: (log) => resolveSponsorJobs(log), everyRun: true },
  { key: 'testing', label: 'Testing for car points (league timing, wear + cash gated)', url: 'Testing.asp', repeat: 10 },
  { key: 'q1', label: 'Q1 lap', url: 'Qualify.asp' },
  { key: 'q2', label: 'Q2 lap + start fuel', url: 'Qualify2.asp' },
@@ -6165,6 +6166,11 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // by its text - UpdateCar/facility option VALUES are relative steps, not levels) or '@dry' (the
  // one dry compound Q2 offers after Q1). Fields we set are re-enabled: Q1's Risk select stays
  // disabled until the Qualify radio's onclick runs, and a disabled field is never posted.
+ // A plan's `submit` is the button's name, or '@submit' for the form's only submit button (sponsor
+ // forms have unnamed/varying ones).
+ function planSubmitButton(form, submit) {
+ return submit === '@submit' ? form.querySelector('input[type="submit"], button[type="submit"]') : form.elements[submit];
+ }
  function fillForm(plan, doc) {
  const form = doc.forms[plan.form] || doc.querySelector(`form[name="${plan.form}"]`);
  if (!form) return { error: `form "${plan.form}" not on the page` };
@@ -6180,7 +6186,11 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  }
  if (!el) { missing.push(name); return; }
  if (el.length != null && el.tagName !== 'SELECT') { // radio group
- const r = Array.from(el).find((x) => x.value === String(want));
+ // {text}: the option whose label reads like that (sponsor answers carry no meaningful value).
+ const labelOf = (x) => ((x.labels && x.labels[0] && x.labels[0].textContent) || (x.nextSibling && x.nextSibling.textContent) || (x.parentElement && x.parentElement.textContent) || '').replace(/\s+/g, ' ').trim().toLowerCase();
+ const r = (want && typeof want === 'object' && want.text)
+ ? Array.from(el).find((x) => labelOf(x).indexOf(want.text.toLowerCase()) === 0) || Array.from(el).find((x) => labelOf(x).indexOf(want.text.toLowerCase()) !== -1)
+ : Array.from(el).find((x) => x.value === String(want));
  if (!r) { missing.push(name); return; }
  r.checked = true; set.push(name); return;
  }
@@ -6215,7 +6225,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // total check, Training's confirm) isn't fired by requestSubmit; page dialogs inside the frame are
  // swallowed and their text reported (autopilotFrameHook).
  function submitPlannedForm(form, submitName) {
- const btn = form.elements[submitName];
+ const btn = planSubmitButton(form, submitName);
  if (!btn) return `the page has no "${submitName}" button`;
  if (btn.disabled) return `the page's "${btn.value || submitName}" button is disabled`;
  if (typeof form.requestSubmit === 'function') form.requestSubmit(btn);
@@ -6458,6 +6468,44 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  `<div style="font-size:9px;color:${PALETTE.textDim};margin-top:4px;">Own projection from GPRO rules 5.4/7.1-7.3 and your logged race income; before any further spending, plus the $5M all-races bonus and points money paid at the reset.</div>`);
  }
 
+ // ---- sponsor negotiations ----
+ // GPRO FAQ: "Your commercial team are spending too much time with too many sponsors, try
+ // concentrating on 1 or 2 sponsors" - so at most SPONSOR_TARGET_NEGOTIATIONS at a time, and a new
+ // one only while a car spot is free for it. Which sponsor: OWN HEURISTIC (GPRO publishes no formula)
+ // from the Sponsors.asp ratings (createSkillGraph(n) = rating n+1 of 7, same as the sponsor page's
+ // bars - Tecto read 7/3/4/3/3/5 on both, 2026-11-01): money first (finances x2), then patience and
+ // reputation, minus negotiation difficulty, minus how far other managers already are ("Est avg
+ // progress").
+ const SPONSOR_TARGET_NEGOTIATIONS = 2;
+ async function resolveSponsorJobs(log) {
+ const ov = await fetchDoc('NegotiationsOverview.asp');
+ const rows = Array.from(ov.querySelectorAll('tr')).filter((tr) => !tr.querySelector('tr'));
+ const idOf = (tr) => { const a = tr.querySelector('a[href*="NegotiateSponsor.asp?ID="]'); return a ? (a.getAttribute('href').match(/ID=(\d+)/) || [])[1] : null; };
+ const emptySpots = rows.filter((tr) => /Spot empty/i.test(tr.textContent)).length;
+ const ongoing = rows.filter((tr) => tr.querySelector('select[name^="ddlPriority"]')).map(idOf).filter(Boolean);
+ const active = rows.filter((tr) => /\bActive\b/.test(tr.textContent)).map(idOf).filter(Boolean);
+ const jobs = [];
+ for (const id of ongoing) {
+ await pause(PILOT_FETCH_GAP_MS);
+ const d = await fetchDoc(`NegotiateSponsor.asp?ID=${id}`);
+ if (d.querySelector('input[name="answer"]')) jobs.push({ key: 'sponsors', plan: 'sponsorAnswer', url: `NegotiateSponsor.asp?ID=${id}` });
+ }
+ const room = Math.min(SPONSOR_TARGET_NEGOTIATIONS - ongoing.length, emptySpots - ongoing.length);
+ if (room > 0) {
+ await pause(PILOT_FETCH_GAP_MS);
+ const list = await fetchDoc('Sponsors.asp');
+ const cands = Array.from(list.querySelectorAll('tr')).filter((tr) => !tr.querySelector('tr') && tr.querySelector('a[href*="NegotiateSponsor.asp?ID="]')).map((tr) => {
+ const r = (tr.textContent.match(/createSkillGraph\((\d+)\)/g) || []).map((x) => parseInt(x.replace(/\D/g, ''), 10) + 1);
+ const est = parseFloat((tr.textContent.match(/(\d+(?:\.\d+)?)\s*%\s*$/) || tr.textContent.match(/(\d+(?:\.\d+)?)\s*%/) || [])[1]) || 0;
+ const name = (tr.querySelector('a[href*="NegotiateSponsor.asp?ID="]').textContent || '').trim();
+ return { id: idOf(tr), name, r, est, score: r.length === 6 ? 2 * r[0] + r[2] + r[3] - r[5] - est / 20 : -99 };
+ }).filter((c) => c.id && c.r.length === 6 && ongoing.indexOf(c.id) === -1 && active.indexOf(c.id) === -1).sort((a, b) => b.score - a.score);
+ cands.slice(0, room).forEach((c) => { jobs.push({ key: 'sponsors', plan: 'sponsorStart', url: `NegotiateSponsor.asp?ID=${c.id}`, label: c.name }); log(`· Sponsors: picking ${c.name} (finances ${c.r[0]}/7, patience ${c.r[2]}, negotiation ${c.r[5]}, others at ${c.est}% — own scoring)`); });
+ }
+ if (!jobs.length) log(`· Sponsors: nothing to answer${ongoing.length >= SPONSOR_TARGET_NEGOTIATIONS ? ` (${ongoing.length} negotiations running)` : emptySpots <= ongoing.length ? ' (no free car spot)' : ''}`);
+ return jobs;
+ }
+
  // ---- did it really happen? (read back from GPRO's own pages) ----
  // q1: Q2's "Drive lap" is disabled until Q1 has been driven (live 2026-10-30); q2: RaceSetup's
  // "Confirm settings" is disabled until Q2; car/facilities: their "Undo ..." button only enables
@@ -6509,6 +6557,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (!form) return false;
  return Object.keys(r.fields).every((k) => { const el = form.elements[k]; const v = r.fields[k]; return !el || typeof v === 'object' || String(el.value) === String(v); });
  }
+ if (step.key === 'sponsorAnswer' || step.key === 'sponsorStart') {
+ const d = await fetchDoc(step.url);
+ if (step.key === 'sponsorStart') return !d.querySelector('[name="btnStartNego"]');
+ // Answered = no question waiting, or a different one now.
+ return !d.querySelector('input[name="answer"]') || !(r.meta && r.meta.question && (d.body.textContent || '').indexOf(r.meta.question) !== -1);
+ }
  if (step.key === 'testing' && r.meta && r.meta.lapsDone != null) {
  const t = parseTestingDOM(await fetchDoc('Testing.asp'));
  return !!(t && t.session && t.session.lapsDone > r.meta.lapsDone);
@@ -6552,11 +6606,17 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const next = await pilotRefresh(pilotLog, status);
  if (!next) return false;
  const st = pilotState();
- const queue = PILOT_STEPS.filter((x) => st.steps[x.key]).map((x) => x.key);
- if (!queue.length) { pilotLog('Nothing switched on — turn on the steps you want first.'); return false; }
+ const queue = [];
+ for (const x of PILOT_STEPS.filter((y) => st.steps[y.key])) {
+ if (!x.resolve) { queue.push({ key: x.key, plan: x.key, url: x.url }); continue; }
+ const jobs = await x.resolve(pilotLog).catch((e) => { pilotLog(`⚠ ${x.label.split(' —')[0]}: ${e.message}`); return []; });
+ if (!jobs.length) { st.done[next.key] = st.done[next.key] || {}; st.done[next.key][x.key] = { at: Date.now(), skipped: true }; savePilotState(st); }
+ jobs.forEach((j) => queue.push(j));
+ }
+ if (!queue.length) { pilotLog('Nothing to do — every switched-on step is done or has nothing to act on.'); return false; }
  pilotLog(`▶ Run started for S${next.season} R${next.race}: ${queue.length} step${queue.length !== 1 ? 's' : ''}`);
  saveTabRun({ key: next.key, queue, idx: 0, stage: 'open', started: Date.now(), repeats: 0 });
- tabRunGo(PILOT_STEPS.find((x) => x.key === queue[0]).url);
+ tabRunGo(queue[0].url);
  return true;
  }
  function tabRunAdvance(r) {
@@ -6568,17 +6628,20 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return;
  }
  saveTabRun(r);
- tabRunGo(PILOT_STEPS.find((x) => x.key === r.queue[r.idx]).url);
+ tabRunGo(r.queue[r.idx].url);
  }
  async function tabRunHook() {
  if (IN_AUTO_FRAME || window.top !== window) return;
  const r = tabRunState();
  if (!r) return;
  if (Date.now() - r.started > TABRUN_MAX_MS) { saveTabRun(null); pilotLog('⚠ Run stopped: it ran past 10 minutes'); return; }
- const key = r.queue[r.idx];
- const step = PILOT_STEPS.find((x) => x.key === key);
- if (!step) { saveTabRun(null); return; }
- const name = step.label.split(' —')[0];
+ const job = r.queue[r.idx];
+ const key = job && job.plan;
+ const owner = job && PILOT_STEPS.find((x) => x.key === job.key);
+ if (!owner) { saveTabRun(null); return; }
+ // The step as the rest of this hook sees it: its plan key and its (possibly page-specific) URL.
+ const step = Object.assign({}, owner, { key, url: job.url });
+ const name = owner.label.split(' —')[0];
  const st = pilotState();
  st.done[r.key] = st.done[r.key] || {};
  const doneFor = st.done[r.key];
@@ -6593,7 +6656,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  await pause(PILOT_FETCH_GAP_MS);
  const ok = await verifyPost(step, { fields: r.fields, meta: r.meta }).catch(() => false);
  if (ok) {
- doneFor[key] = { at: Date.now(), sig: r.sig }; savePilotState(st);
+ doneFor[owner.key] = { at: Date.now(), sig: r.sig }; savePilotState(st);
  pilotLog(`✅ ${name}: ${r.summary}`);
  if (step.repeat && r.repeats + 1 < step.repeat) { r.repeats++; r.stage = 'open'; saveTabRun(r); tabRunGo(step.url); return; }
  } else {
@@ -6603,10 +6666,10 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  }
  return tabRunAdvance(r);
  }
- if (location.pathname.split('/').pop().toLowerCase() !== step.url.toLowerCase()) { tabRunGo(step.url); return; }
+ if ((location.pathname.split('/').pop() + location.search).toLowerCase() !== step.url.toLowerCase()) { tabRunGo(step.url); return; }
  // On the step's page, freshly rendered.
  const prev = doneFor[key];
- if (prev && !step.repeat) {
+ if (prev && !step.repeat && !owner.everyRun) {
  const really = prev.skipped || !STEP_DONE_CHECKS[key] || await STEP_DONE_CHECKS[key]().catch(() => true);
  if (really) return tabRunAdvance(r);
  pilotLog(`↻ ${name}: logged as done but GPRO doesn't show it — doing it now`);
@@ -6617,12 +6680,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (!plan) { pilotLog(`⚠ ${name}: the advisor computed no plan on this page`); return tabRunAdvance(r); }
  if (plan.skip) {
  pilotLog(`· ${name}: ${plan.skip}`);
- doneFor[key] = { at: Date.now(), skipped: true }; savePilotState(st);
+ doneFor[owner.key] = { at: Date.now(), skipped: true }; savePilotState(st);
  return tabRunAdvance(r);
  }
  const f = fillForm(plan, document);
  if (f.error || f.missing.length) { pilotLog(`⚠ ${name}: ${f.error || `couldn't set ${f.missing.join(', ')}`}`); return tabRunAdvance(r); }
- const btn = f.form.elements[plan.submit];
+ const btn = planSubmitButton(f.form, plan.submit);
  if (!btn || btn.disabled) { pilotLog(`⚠ ${name}: the page's "${(btn && btn.value) || plan.submit}" button is ${btn ? 'disabled' : 'missing'}`); return tabRunAdvance(r); }
  Object.assign(r, { stage: 'submitted', fields: plan.fields, meta: plan.meta || null, sig: plan.sig, summary: plan.summary });
  saveTabRun(r);
@@ -6658,6 +6721,23 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (!dryRun && !st.steps[step.key]) continue;
  let prev = doneFor[step.key];
  const name = step.label.split(' —')[0];
+ if (step.resolve) {
+ // Page-specific jobs (e.g. one per sponsor) - checked every run, not once per race.
+ status(name);
+ const jobs = await step.resolve(log).catch((e) => { log(`⚠ ${name}: ${e.message}`); return []; });
+ for (const job of jobs) {
+ const js = { key: job.plan, url: job.url, label: step.label };
+ await pause(PILOT_FETCH_GAP_MS);
+ const r = await runFrameStep(js, dryRun);
+ if (!r.ok) { log(`⚠ ${name}: ${r.msg}`); continue; }
+ if (r.skipped || r.preview) { log(`${r.preview ? '👁' : '·'} ${name}: ${r.msg}`); continue; }
+ await pause(PILOT_FETCH_GAP_MS);
+ if (!(await verifyPost(js, r).catch(() => false))) { log(`⚠ ${name}: posted from the background, but GPRO doesn't show it saved — use Run now`); continue; }
+ log(`✅ ${name}: ${r.msg}`);
+ }
+ if (!dryRun) doneFor[step.key] = { at: Date.now(), skipped: !jobs.length };
+ continue;
+ }
  if (!dryRun && prev) {
  // A stored "done" is re-checked where GPRO shows it (a v6.30 Q1 was logged done but never driven).
  if (!prev.skipped && STEP_DONE_CHECKS[step.key] && !(await STEP_DONE_CHECKS[step.key]().catch(() => true))) {
@@ -7944,6 +8024,9 @@ training: 'Parsing driver training data...',
  body(`<div style="${ST.loading}">Reading negotiation...</div>`);
  try {
  const data = parseNegotiateSponsorDOM(document);
+ // Start page (not negotiating yet): the autopilot only comes here for the sponsor it picked.
+ const startBtn = document.querySelector('[name="btnStartNego"]');
+ if (startBtn) publishPlan('sponsorStart', { form: 0, submit: 'btnStartNego', fields: {}, sig: 'start', summary: `started negotiations with ${(data && data.sponsorName) || 'the sponsor'}` });
  if (!data || !data.questions.length) {
   body(mkRec('No negotiation questions found on this page. If this just loaded, wait a moment and click Retry.', 'warn') +
    `<div style="margin-top:8px;"><button id="gpro-retry" style="background:#374151;color:#d1d5db;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;">Retry</button></div>`);
@@ -7985,6 +8068,7 @@ training: 'Parsing driver training data...',
  const sa = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.sponsorAnswers) || {};
  const c = data.characteristics || {};
 
+ const recommended = {};
  h += mkSection('Recommended Answers',
   data.questions.map(q => {
    // Map sponsor characteristics -> chosen answer, adjusted by manager context.
@@ -8025,6 +8109,7 @@ training: 'Parsing driver training data...',
    answer = 'Match the sponsor\u2019s stated preference (consistent with your plans)';
    why = 'No specific guidance matched this question - answer honestly and consistently to protect reputation.';
    }
+   recommended[q.question] = answer;
    return `<div style="margin:6px 0;padding:6px;background:#1e293b;border-radius:4px;">` +
     `<div style="font-size:10px;color:#60a5fa;font-weight:700;margin-bottom:2px;">${q.question}</div>` +
     `<div style="font-size:11px;color:#10b981;font-weight:600;">Ideal reply: ${answer}</div>` +
@@ -8033,6 +8118,17 @@ training: 'Parsing driver training data...',
     `</div>`;
   }).join('') +
   `<span style="font-size:9px;color:#f59e0b;">Answering before the next race keeps the negotiation moving; answer honestly and consistently to protect reputation.</span>`);
+
+ // Autopilot: the question waiting on this page (a radio group named `answer`, live 2026-11-01)
+ // gets the recommended reply - matched to the page's own option text, never invented.
+ const pendingQ = document.querySelector('input[name="answer"]') && data.questions.find((q) => q.options && q.options.length);
+ if (pendingQ) {
+ const want = recommended[pendingQ.question] || '';
+ const hit = pendingQ.options.find((o) => o.toLowerCase().indexOf(want.toLowerCase()) === 0) || pendingQ.options.find((o) => want && o.toLowerCase().indexOf(want.toLowerCase()) !== -1);
+ publishPlan('sponsorAnswer', { form: 0, submit: '@submit', fields: hit ? { answer: { text: hit } } : {}, meta: { question: pendingQ.question },
+ skip: hit ? null : `recommended "${want}" isn't one of the page's options for "${pendingQ.question}"`,
+ sig: hit || '', summary: `${data.sponsorName || 'sponsor'}: "${pendingQ.question}" → ${hit}` });
+ }
 
  body(h);
  } catch (err) {

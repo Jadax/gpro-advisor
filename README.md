@@ -101,6 +101,7 @@ Every switch starts **off**. Turn on the master switch plus the steps you want, 
 | Facility upgrades | Raises facilities to your league targets, in order, while cash stays above the reserve |
 | Driver training | Books the advisor's top training recommendation |
 | Testing | Drives test stints for car character points every race the cash and wear checks allow (a car level of testing points costs far less than a level of parts) |
+| Sponsors | Answers waiting negotiation questions with the advisor's recommended reply, and starts a new negotiation (best-scored sponsor) while fewer than 2 are running and a car spot is free |
 | Q1 | Drives the Q1 lap with the advisor's setup, tyre (Rain if wet, the race's dry compound if dry) and risk |
 | Q2 | Drives Q2 with the setup, risk and start fuel |
 | Race setup | Confirms setup, fuel per stop (planned around the start fuel Q2 locked in), boost laps and all risks — once, then leaves it alone |
