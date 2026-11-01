@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.34.0
+// @version 6.34.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1486,7 +1486,7 @@ if (h.includes('TrainingSession.asp')) return 'training';
  // both are always on the home page, so no extra request is needed to discover them.
  async function backgroundCaptureAuxPages(homeDoc) {
  const root = homeDoc || document;
- const results = { driver: false, track: false, suppliers: false, staff: false, weather: false, testing: false, td: false, neg: false };
+ const results = { driver: false, track: false, suppliers: false, staff: false, weather: false, testing: false, td: false, neg: false, car: false };
  const driverLink = root.querySelector('a[href*="DriverProfile.asp?ID="]');
  const trackLink = root.querySelector('a[href*="TrackDetails.asp?id="]');
  const tdLink = root.querySelector('a[href*="TDProfile.asp"]');
@@ -1517,6 +1517,12 @@ if (h.includes('TrainingSession.asp')) return 'training';
  const s = parseTyreSuppliersDOM(doc);
  if (s) { setStaleData('/TyreSuppliers', s); results.suppliers = true; }
  }).catch((e) => logError('background Suppliers fetch failed:', e.message)));
+ // Car levels/wear/cash/upgrade options change after every race and every purchase - refreshed
+ // here so analyses and the autopilot never run on the last visit's car.
+ jobs.push(fetchPageHTML('UpdateCar.asp').then((html) => {
+ const d = parseUpdateCarDOM(new DOMParser().parseFromString(html, 'text/html'));
+ if (d && d.parts && d.parts.length) { cacheCarFromUpdateCar(d, getCachedCarData() || {}); results.car = true; }
+ }).catch((e) => logError('background UpdateCar fetch failed:', e.message)));
  jobs.push(fetchPageHTML('StaffAndFacilities.asp').then((html) => {
  const doc = new DOMParser().parseFromString(html, 'text/html');
  const staff = parseStaffFacilitiesDOM(doc);
@@ -3416,11 +3422,15 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // UPDATE CAR DOM PARSER
  // ============================================================
  // Parses real dropdown data from UpdateCar.asp page for accurate costs
- function parseUpdateCarDOM() {
+ function parseUpdateCarDOM(root) {
+ root = root || document;
+ // A fetched copy (background refresh) has no layout, so innerText would run its cells together -
+ // docToText rebuilds the tab/newline structure the live page's innerText has.
+ const pageText = root === document ? root.body.innerText : docToText(root);
  const result = { parts: [], cash: 0 };
 
  // First try direct DOM element containing "Current account balance"
- const allPs = document.querySelectorAll('p');
+ const allPs = root.querySelectorAll('p');
  for (const p of allPs) {
  const txt = p.textContent || '';
  if (/current account balance/i.test(txt)) {
@@ -3434,7 +3444,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
 
  // Fallback: try text patterns on body (handles dot and comma separators)
  if (result.cash === 0) {
- const allText = document.body.innerText;
+ const allText = pageText;
  const cashPatterns = [
  /Current account balance:\s*\$?([\d.,]+)/i,
  /Account balance:\s*\$?([\d.,]+)/i,
@@ -3460,7 +3470,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // number for a financial figure is worse than no number: better to return 0 (falls through to
  // the last known-good cached value) than guess.
  // Find all part rows - each has a select dropdown (name="BuyChassis", "BuyEngine", etc. on UpdateCar.asp)
- const selects = document.querySelectorAll('select[name^="Buy"], select[id^="Buy"]');
+ const selects = root.querySelectorAll('select[name^="Buy"], select[id^="Buy"]');
  const nameMap = {
  'BuyChassis': 'Chassis', 'BuyEngine': 'Engine', 'BuyFWing': 'Front Wing',
  'BuyRWing': 'Rear Wing', 'BuyUnderbody': 'Underbody', 'BuySidepods': 'Sidepods',
@@ -3552,7 +3562,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  logDebug(`DOM parse: ${result.parts.length} parts found, ${missingLvl} missing levels, ${missingWear} missing wear`);
  } else {
  logError('DOM parse: NO selects found with name/id starting with "Buy"');
- logDebug('All selects on page:', Array.from(document.querySelectorAll('select')).map(s => s.name || s.id || '(unnamed)').join(', '));
+ logDebug('All selects on page:', Array.from(root.querySelectorAll('select')).map(s => s.name || s.id || '(unnamed)').join(', '));
  }
 
  // Text-based fallback: only for parts where the primary parse genuinely found nothing
@@ -3562,7 +3572,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // happened to match next on the page.
  const textFallbackParts = result.parts.filter(p => !p.levelFound || !p.wearFound);
  if (textFallbackParts.length > 0) {
- const allText = document.body.innerText;
+ const allText = pageText;
  for (const p of textFallbackParts) {
  if (!p.levelFound) {
  const nameEsc = p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -3588,7 +3598,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // If still no parts found, try scanning ALL table rows on the page
  if (result.parts.length === 0) {
  logDebug('Trying table row fallback for levels...');
- const allRows = document.querySelectorAll('tr');
+ const allRows = root.querySelectorAll('tr');
  for (const row of allRows) {
  const tds = row.querySelectorAll('td');
  if (tds.length < 3) continue;
@@ -3616,7 +3626,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  }
 
  // Also parse car character (Power/Handling/Acceleration) from DOM
- const allText = document.body.innerText;
+ const allText = pageText;
  const charMatch = allText.match(/Power[:\s]*(\d+).*?Handling[:\s]*(\d+).*?Acceleration[:\s]*(\d+)/is);
  if (charMatch) {
  result.carPower = parseInt(charMatch[1]) || 0;
@@ -5237,34 +5247,10 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return projection;
  }
 
- // ============================================================
- // RENDER: UPDATE CAR
- // ============================================================
- function renderUpdateCar(car, trackData, driver, league) {
- const domData = parseUpdateCarDOM();
- // Now DOM-only for car data (no /UpdateCar API call - see init()'s updateCar branch): if the
- // page's own DOM parse found nothing AND there's no cached car object either, there's genuinely
- // no data to show - say so plainly instead of silently rendering an all-zero-parts analysis.
- const hasAnyCarData = (domData.parts && domData.parts.length > 0) || (car && PART_LVL_KEYS.some(k => car[k]));
- if (!hasAnyCarData) {
- body(mkRec('No car data found on this page yet. If this page just loaded, wait a moment and click Retry.', 'warn') +
- `<div style="margin-top:8px;"><button id="gpro-retry" style="background:#374151;color:#d1d5db;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;">Retry</button></div>`);
- setTimeout(() => { document.getElementById('gpro-retry')?.addEventListener('click', () => location.reload()); }, 100);
- return;
- }
- logDebug('API car levels:', PART_LVL_KEYS.map(k => `${k}=${car?.[k] ?? 'null'}`).join(', '));
- logDebug('API car wear:', PART_WEAR_KEYS.map(k => `${k}=${car?.[k] ?? 'null'}`).join(', '));
- logDebug('API car cash:', car?.cash ?? 'null', '| DOM cash:', domData.cash);
- logDebug('DOM parts:', domData.parts.map(p => `${p.name}: lvl=${p.currentLevel} wear=${p.currentWear}`).join(' | '));
- // Real bug fixed 2026-07-31: this only overwrote the cached/API cash figure when the fresh
- // DOM reading was GREATER than what was already cached - a heuristic meant to avoid clobbering
- // a real value with a failed-parse zero, but cash is a live balance that legitimately goes DOWN
- // whenever the user spends money. Once any purchase happened, domData.cash (fresh, lower, TRUE)
- // could never pass `> apiCash` (stale, higher, from before the purchase) - so the panel got
- // permanently stuck showing the old higher balance, persisting it back into the cache on every
- // subsequent visit (reported: panel showed $9,794,534 while the account was actually down to
- // $7,382,670). We're live on UpdateCar.asp right now, so a valid DOM reading is always the most
- // authoritative source available - it should simply win, not just when it happens to be bigger.
+ // Merges a parseUpdateCarDOM reading into `car` (DOM is authoritative, incl. lower cash and 0%
+ // wear - see the two bug notes below) and saves it as the car cache every page reads. Shared by
+ // renderUpdateCar and the background refresh, so levels/wear/cash stay current without a visit.
+ function cacheCarFromUpdateCar(domData, car) {
  if (domData.cash > 100 && car) car.cash = domData.cash;
 
  // Merge DOM-parsed levels/wear with API data (DOM is authoritative). Real bug fixed 2026-08-13,
@@ -5307,6 +5293,37 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // both so the two systems agree.
  setStaleData('/UpdateCar', cachedCar);
  }
+ }
+
+ // ============================================================
+ // RENDER: UPDATE CAR
+ // ============================================================
+ function renderUpdateCar(car, trackData, driver, league) {
+ const domData = parseUpdateCarDOM();
+ // Now DOM-only for car data (no /UpdateCar API call - see init()'s updateCar branch): if the
+ // page's own DOM parse found nothing AND there's no cached car object either, there's genuinely
+ // no data to show - say so plainly instead of silently rendering an all-zero-parts analysis.
+ const hasAnyCarData = (domData.parts && domData.parts.length > 0) || (car && PART_LVL_KEYS.some(k => car[k]));
+ if (!hasAnyCarData) {
+ body(mkRec('No car data found on this page yet. If this page just loaded, wait a moment and click Retry.', 'warn') +
+ `<div style="margin-top:8px;"><button id="gpro-retry" style="background:#374151;color:#d1d5db;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;">Retry</button></div>`);
+ setTimeout(() => { document.getElementById('gpro-retry')?.addEventListener('click', () => location.reload()); }, 100);
+ return;
+ }
+ logDebug('API car levels:', PART_LVL_KEYS.map(k => `${k}=${car?.[k] ?? 'null'}`).join(', '));
+ logDebug('API car wear:', PART_WEAR_KEYS.map(k => `${k}=${car?.[k] ?? 'null'}`).join(', '));
+ logDebug('API car cash:', car?.cash ?? 'null', '| DOM cash:', domData.cash);
+ logDebug('DOM parts:', domData.parts.map(p => `${p.name}: lvl=${p.currentLevel} wear=${p.currentWear}`).join(' | '));
+ // Real bug fixed 2026-07-31: this only overwrote the cached/API cash figure when the fresh
+ // DOM reading was GREATER than what was already cached - a heuristic meant to avoid clobbering
+ // a real value with a failed-parse zero, but cash is a live balance that legitimately goes DOWN
+ // whenever the user spends money. Once any purchase happened, domData.cash (fresh, lower, TRUE)
+ // could never pass `> apiCash` (stale, higher, from before the purchase) - so the panel got
+ // permanently stuck showing the old higher balance, persisting it back into the cache on every
+ // subsequent visit (reported: panel showed $9,794,534 while the account was actually down to
+ // $7,382,670). We're live on UpdateCar.asp right now, so a valid DOM reading is always the most
+ // authoritative source available - it should simply win, not just when it happens to be bigger.
+ cacheCarFromUpdateCar(domData, car);
 
  const ctrUpdateCar = getCtr();
  const analysis = analyzeCar(car, domData, trackData, driver, ctrUpdateCar, league);
