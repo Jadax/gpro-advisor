@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.35.0
+// @version 6.35.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -30,7 +30,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.8.3
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.8.4
 // @run-at document-idle
 // ==/UserScript==
 
@@ -7262,7 +7262,10 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  // Optimal-training reference (user-provided 2026-08-10): target attribute levels to aim for and
   // the session that raises each one, shown against the driver's current skill values so the gap
   // to each target is visible at a glance. Guidance, not a verified formula.
-  const optimalTraining = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.driverOptimalTraining) || [];
+  // From Amateur up the driver is headed for (or racing in) Pro: entries' proTarget replaces target.
+  const proBound = ['Amateur', 'Pro', 'Master', 'Elite'].includes(league);
+  const optimalTraining = ((typeof GPRO_DATA !== 'undefined' && GPRO_DATA.driverOptimalTraining) || [])
+  .map(ot => (proBound && ot.proTarget != null) ? Object.assign({}, ot, { target: ot.proTarget }) : ot);
   if (optimalTraining.length) {
   let optHtml = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:10px;">';
   optHtml += '<tr style="color:#60a5fa;font-weight:700;"><td style="padding:3px;">Skill</td><td style="text-align:center;">Now</td><td style="text-align:center;">Target</td><td style="text-align:center;">Gap</td><td style="padding:3px;">Session</td></tr>';
@@ -7373,7 +7376,7 @@ const canAffordSessions = Math.floor(data.contract.salary / 750000);
   }).sort((a, b) => b.lev - a.lev);
   // Projected OA if the user's optimal-training targets (D.driverOptimalTraining) were all met
   const targetMap = {};
-  ((typeof GPRO_DATA !== 'undefined' && GPRO_DATA.driverOptimalTraining) || []).forEach(t => { if (t.skill && t.target != null) targetMap[t.skill] = t.target; });
+  optimalTraining.forEach(t => { if (t.skill && t.target != null) targetMap[t.skill] = t.target; });
   const oaAtTarget = oaKeys.reduce((s, k) => s + (targetMap[k] != null ? targetMap[k] : attrVal(k)) * oaCalcW[k], 0);
   const capColor = oaCap != null
   ? (oaSum > oaCap ? VERDICT.bad : oaCap - oaSum <= 5 ? VERDICT.warn : VERDICT.good)

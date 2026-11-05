@@ -790,10 +790,10 @@ Rookie: {
   // Motivation are points not spent on the attributes that make race pace. `prefer` (read by
   // recruitmentScore) overrides the filter field's direction: 'low' = lower scores better, 'any' =
   // left out of the score. Those carry no numeric floor, so the filter bar leaves them blank.
-  concentration: { target: '150+', priority: 1, note: 'Consistency + error reduction (experienced-manager floor for Amateur).' },
+  concentration: { target: '150+', priority: 1, note: 'Consistency + error reduction (experienced-manager floor for Amateur). Train toward ~220 if you mean to promote to Pro.' },
   talent: { target: '110+', priority: 2, note: 'Raw speed, untrainable - market pick is the only chance to get it.' },
   experience: { target: '120+', priority: 3, note: 'Grows +1/race; strategy, tyre management, setup precision.' },
-  stamina: { target: '85+', priority: 4, note: 'Energy over a race distance - matters once races get longer and closer.' },
+  stamina: { target: '85+', priority: 4, note: 'Energy over a race distance - matters once races get longer and closer. Train above 100 if you mean to promote to Pro.' },
   aggressiveness:{ target: 'some, but zero is fine', priority: 5, prefer: 'any', note: 'Not scored - zero is fine per the same guidance.' },
   techInsight: { target: 'as low as possible', priority: 6, prefer: 'low', note: 'OA cap: points here crowd out pace attributes.' },
   charisma: { target: 'as low as possible', priority: 7, prefer: 'low', note: 'OA cap: points here crowd out pace attributes.' },
@@ -811,8 +811,11 @@ Rookie: {
    maxSalary: 3500000,
    maxAge: 38,
    attributes: {
-  concentration: { target: 'as high as affordable', priority: 1, note: 'Still the top lever for consistency - no sourced numeric target beyond Amateur' },
-  stamina: { target: 'as high as affordable', priority: 2, note: 'Race distance/fatigue matters more as pace closes up - "Stamina=Speed" holds at every level' },
+  // Con ~220 / Sta above 100: experienced-manager guidance relayed by the user 2026-11-05
+  // ("if you intend to promote to Pro i would increase stamina to above 100 and concentration to
+  // about 220"). Also the training goal for an Amateur driver headed for Pro (driverOptimalTraining).
+  concentration: { target: '220+', priority: 1, note: 'About 220 (experienced-manager guidance for Pro).' },
+  stamina: { target: '100+', priority: 2, note: 'Above 100 (experienced-manager guidance for Pro) - race distance/fatigue matters more as pace closes up.' },
   talent: { target: 'as high as affordable', priority: 3, note: 'Raw speed - TD (available from Pro) can partly compensate for setup gaps' },
   experience: { target: 'as high as affordable', priority: 4, note: 'Strategy/tyre management/setup precision' },
   techInsight: { target: 'as high as affordable', priority: 5, note: 'Setup precision, margin of acceptance' },
@@ -1327,8 +1330,10 @@ Rookie: {
   // this is the manager's own preferred build-out plan for Rookie/Amateur. Presented as guidance,
   // not a verified formula (GPRO's wiki says training isn't perfectly deterministic per session).
   driverOptimalTraining: [
-  { skill: 'concentration', label: 'Concentration', target: 200, session: 'Yoga', note: 'Train to 200 via Yoga' },
-  { skill: 'stamina', label: 'Stamina', target: 100, session: 'Fitness Class + Testing', note: 'Fitness Class + Testing (2x 50 laps = adds 5 stamina)' },
+  // proTarget: used from Amateur up (a driver headed for / racing in Pro) - experienced-manager
+  // guidance via the user 2026-11-05: concentration about 220, stamina above 100.
+  { skill: 'concentration', label: 'Concentration', target: 200, proTarget: 220, session: 'Yoga', note: 'Train to 200 via Yoga' },
+  { skill: 'stamina', label: 'Stamina', target: 100, proTarget: 101, session: 'Fitness Class + Testing', note: 'Fitness Class + Testing (2x 50 laps = adds 5 stamina)' },
   { skill: 'techInsight', label: 'Technical Insight', target: 125, session: 'Technical training', note: 'Train to 125 via Technical training' },
   { skill: 'aggressiveness', label: 'Aggression', target: 100, session: 'Ninja training', note: 'Train to 100 via Ninja training' },
   ],
