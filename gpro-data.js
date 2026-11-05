@@ -784,25 +784,23 @@ Rookie: {
   },
   Amateur: {
   // Amateur: Car carries over. Invest in driver + car balance.
-  // Priority: Concentration > Talent > Experience > Tech Insight
+  // Same experienced-manager rules as Rookie (2026-11-05; the user chose them over the 2026-10-27
+  // Amateur set, which wanted Motivation/TechI/Charisma as LOW as possible): Stamina + Motivation
+  // first, Concentration 180+, Experience, low Aggression, Talent mainly for rain, Tech Insight not
+  // needed, ~$500K/race salary. Kept from the 2026-10-27 set where the new rules give no number:
+  // Tal 110+, Exp 120+, Sta 85+. Promoting to Pro: Sta above 100, Con about 220.
   targetOA: { min: 90, max: 110 },
-  maxSalary: 2500000,
+  maxSalary: 500000,
   maxAge: 37,
   attributes: {
-  // Amateur targets replaced 2026-10-27 with experienced-manager guidance (relayed by the user):
-  // Con 150+, Tal 110+, Exp 120+, Sta 85+, Agr "some, but zero is fine", TechI/Cha/Mot "as low as
-  // possible". Rationale: driver OA is CAPPED (Amateur 110), so OA points spent on TechI/Charisma/
-  // Motivation are points not spent on the attributes that make race pace. `prefer` (read by
-  // recruitmentScore) overrides the filter field's direction: 'low' = lower scores better, 'any' =
-  // left out of the score. Those carry no numeric floor, so the filter bar leaves them blank.
-  concentration: { target: '150+', priority: 1, note: 'Consistency + error reduction (experienced-manager floor for Amateur). Train toward ~220 if you mean to promote to Pro.' },
-  talent: { target: '110+', priority: 2, note: 'Raw speed, untrainable - market pick is the only chance to get it.' },
-  experience: { target: '120+', priority: 3, note: 'Grows +1/race; strategy, tyre management, setup precision.' },
-  stamina: { target: '85+', priority: 4, note: 'Energy over a race distance - matters once races get longer and closer. Train above 100 if you mean to promote to Pro.' },
-  aggressiveness:{ target: 'some, but zero is fine', priority: 5, prefer: 'any', note: 'Not scored - zero is fine per the same guidance.' },
-  techInsight: { target: 'as low as possible', priority: 6, prefer: 'low', note: 'OA cap: points here crowd out pace attributes.' },
-  charisma: { target: 'as low as possible', priority: 7, prefer: 'low', note: 'OA cap: points here crowd out pace attributes.' },
-  motivation: { target: 'as low as possible', priority: 8, prefer: 'low', note: 'Guidance says zero; volatile anyway (spikes with results).' },
+  stamina: { target: '85+', priority: 1, note: 'Stamina = speed. Train above 100 if you mean to promote to Pro.' },
+  motivation: { target: 'as high as affordable', priority: 2, note: 'Low motivation makes a driver slower.' },
+  concentration: { target: '180+', priority: 3, note: 'Qualifying pace + consistent race laps. Train toward ~220 if you mean to promote to Pro.' },
+  experience: { target: '120+', priority: 4, note: 'Lowers tyre/part wear and fuel use, adds overall speed; grows +1/race.' },
+  aggressiveness:{ target: '0-49', priority: 5, note: 'Helps overtaking/defending but adds tyre and part wear - keep low.' },
+  talent: { target: '110+', priority: 6, note: 'Mainly useful in the rain; untrainable.' },
+  charisma: { target: '0-250', priority: 7, prefer: 'any', note: 'Sponsor income; not scored.' },
+  techInsight: { target: 'not needed', priority: 8, prefer: 'any', note: 'Mostly not needed - the tool computes the setups. Not scored.' },
   },
   budget: 'Balance car upgrades (L5-7) with driver development. Never go into debt.',
  },
