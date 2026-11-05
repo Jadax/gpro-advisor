@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.35.1
+// @version 6.35.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -30,7 +30,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.8.4
+// @require file:///G:/My%20Drive/VibeCoding/GPRO%20Tool/gpro-data.js?v=5.8.5
 // @run-at document-idle
 // ==/UserScript==
 
@@ -7634,6 +7634,11 @@ const canAffordSessions = Math.floor(data.contract.salary / 750000);
   bidStrat = s === 'value' ? 0.5 : s === 'aggressive' ? 2.0 : s === 'balanced' ? (contested ? 1.25 : 1.0) : bidStrat;
   } catch (e) {}
   let recSalary = Math.max(Math.round(ask * 0.5 / 10000) * 10000, Math.round((ask * bidStrat) / 10000) * 10000);
+  // Sole bidder (user's own experience, 2026-11-05): "you can go as low as 600k if you are the only
+  // bidder". Applies unless Settings asks for an aggressive bid.
+  const SOLE_BIDDER_SALARY = 600000;
+  const soleBidder = !contested && GM_getValue('gpro_bid_strategy', 'balanced') !== 'aggressive';
+  if (soleBidder) recSalary = Math.min(ask || SOLE_BIDDER_SALARY, SOLE_BIDDER_SALARY);
   // Don't blow your whole cash on one season-long salary; sanity-cap at ~70% of held cash.
   const seasonCap = Math.floor(cash * 0.7);
   recSalary = Math.min(recSalary, seasonCap);
@@ -7642,9 +7647,12 @@ const canAffordSessions = Math.floor(data.contract.salary / 750000);
   const recSignFee = Math.min(Math.round((recSalary * 1.0) / 5000) * 5000, recSalary * 3);
   // Bonuses: keep them modest (result-only upside), never near the legal max - that's the "proven
   // top-tools overpay" trap with zero upside unless the driver actually delivers.
-  const recWinBonus = Math.min(Math.round((recSalary * 0.4) / 5000) * 5000, maxRaceBonus);
-  const recPodiumBonus = Math.min(Math.round((recSalary * 0.25) / 5000) * 5000, maxRaceBonus);
-  const recPointBonus = Math.min(Math.round((recSalary * 0.2) / 5000) * 5000, maxRaceBonus);
+  // User's own experience (2026-11-05): "offer bonuses just do $5 per bonus" - a token amount
+  // that still counts as offering bonuses.
+  const BONUS_TOKEN = 5;
+  const recWinBonus = BONUS_TOKEN;
+  const recPodiumBonus = BONUS_TOKEN;
+  const recPointBonus = BONUS_TOKEN;
   const recRaces = 17;
   const recChampBonus = 0;
 
@@ -7654,7 +7662,8 @@ const canAffordSessions = Math.floor(data.contract.salary / 750000);
   const bufNote = affordable ? '' : mkRec('This recommended offer exceeds the cash you hold — trim salary/races below to stay solvent.', 'bad');
 
   h += mkSection('Recommended offer' + (contested ? ' (driver is contested)' : ''),
-  mkRow('Salary per race', '$' + recSalary.toLocaleString() + `<span style="color:#9ca3af;font-size:9px;"> (~${Math.round(recSalary / Math.max(1, ask) * 10) / 10}x his $${ask.toLocaleString()} ask)</span>`) +
+  mkRow('Salary per race', '$' + recSalary.toLocaleString() + `<span style="color:#9ca3af;font-size:9px;"> (~${Math.round(recSalary / Math.max(1, ask) * 10) / 10}x the $${ask.toLocaleString()} ask${soleBidder ? ' - you are the only bidder' : ''})</span>`) +
+  (soleBidder && ask && recSalary < ask * 0.3 ? `<div style="font-size:9px;color:#9ca3af;">GPRO will ask you to confirm a salary under 0.3x the ask - that's expected.</div>` : '') +
   mkRow('Signing on fee', '$' + recSignFee.toLocaleString() + `<span style="color:#9ca3af;font-size:9px;"> (${recSignFee === 0 ? 'must be > 0' : Math.round(recSignFee / recSalary * 10) / 10 + 'x salary — keep < 3x'})</span>`) +
   mkRow('Bonus per win', '$' + recWinBonus.toLocaleString() + '<span style="color:#6b7280;font-size:9px;"> result-only</span>') +
   mkRow('Bonus per podium', '$' + recPodiumBonus.toLocaleString() + '<span style="color:#6b7280;font-size:9px;"> result-only</span>') +
@@ -8584,7 +8593,9 @@ training: 'Parsing driver training data...',
  // empirically unreachable for most of the market, see the "no trustworthy numeric floor" note
  // elsewhere) - this is a manually-requested starting value, same editable/clearable field as
  // everything else.
-  if (cfgLabel === 'driver') filterDefaults.concentration = 200;
+  // 2026-11-05: an experienced manager's guidance (via the user) put the bar at 180+, so the
+  // default follows the league entry's own floor when it has one.
+  if (cfgLabel === 'driver' && filterDefaults.concentration == null) filterDefaults.concentration = 200;
   // Talent default added 2026-08-14 (explicit user request: "driver talent needs to be at least a
   // 100 - so going forward add that to the driver market filter"). Same class as the concentration
   // default above - talent has no trustworthy numeric floor from the league sources (see the

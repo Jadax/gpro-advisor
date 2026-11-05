@@ -760,22 +760,27 @@ Rookie: {
  // Talent/experience/techInsight/aggressiveness/stamina below DO carry real median-derived
  // numeric floors from the same scrape and still gate the shortlist.
   Rookie: {
-  // Rookie: Car resets each season. Focus on cheap, balanced driver.
-  // Priority: Concentration > Talent > Experience > Tech Insight
+  // Rookie targets replaced 2026-11-05 with an experienced manager's in-game findings (relayed by
+  // the user): Concentration 180+ (qualifying pace + consistent race laps); Stamina and Motivation
+  // are "probably the most important" (Stamina = speed, low motivation = slower driver); Experience
+  // lowers tyre/part wear and fuel use and adds speed; Talent is only really useful in the rain;
+  // Aggression helps overtaking/defending but adds tyre and part wear; Tech Insight is mostly not
+  // needed (the setup tool supplies the setups). Pay as little as possible - around $500K/race or
+  // less. Talent 100+ is the user's own earlier market-filter floor (2026-08-14).
   targetOA: { min: 75, max: 85 },
-  maxSalary: 2000000, // per GPRO Newbie Guide: don't pay much over $2M/race in Rookie
+  maxSalary: 500000,
   maxAge: 36,
   attributes: {
-  concentration: { target: 'as high as affordable', priority: 1, note: 'Consistency + error reduction. No trustworthy numeric floor sourced (the old "200+" was empirically unreachable - 0 of 100 sampled max-OA Rookie drivers had it). Train toward 200 via Yoga once owned.' },
-  talent: { target: '150+', priority: 2, note: 'Raw speed; untrainable - the ONE attribute with no training path, so market pick is your only chance to get it right. Naturally 200+ in most of the market - treat <150 as a red flag. Real bug fixed 2026-08-12: the sourced floor used to read 60 (a market-median artifact), directly contradicting this note - a 69-talent driver was clearing it and getting recommended as Top Pick.' },
-  experience: { target: '90-150', priority: 3, note: 'Grows +1/race; affects strategy and tyre management' },
-  techInsight: { target: '80-150', priority: 4, note: 'Setup precision and fuel consumption. Train toward 125 via Technical training' },
-  aggressiveness:{ target: '0-49', priority: 5, note: 'Keep low to reduce tyre/parts wear; 100 via Ninja training if raising intentionally' },
-  stamina: { target: '0-45', priority: 6, note: 'Train toward 100 via Fitness Class + Testing (2x 50 laps = +5 stamina)' },
-  charisma: { target: '0-250', priority: 7, note: 'Helps with sponsor income' },
-  motivation: { target: '0-250', priority: 8, note: 'Helps with training speed' },
+  stamina: { target: 'as high as affordable', priority: 1, note: 'Stamina = speed (experienced-manager guidance). Train via Fitness Class + Testing.' },
+  motivation: { target: 'as high as affordable', priority: 2, note: 'Low motivation makes a driver slower (experienced-manager guidance).' },
+  concentration: { target: '180+', priority: 3, note: 'Qualifying pace + consistent race laps (experienced-manager guidance: 180+). Train toward 200 via Yoga once owned.' },
+  experience: { target: '90-150', priority: 4, note: 'Lowers tyre/part wear and fuel use, adds overall speed; grows +1/race.' },
+  aggressiveness:{ target: '0-49', priority: 5, note: 'Helps overtaking/defending but adds tyre and part wear - keep low.' },
+  talent: { target: '100+', priority: 6, note: 'Mainly useful in the rain (experienced-manager guidance); untrainable. 100 = your market-filter floor.' },
+  charisma: { target: '0-250', priority: 7, prefer: 'any', note: 'Sponsor income; not scored.' },
+  techInsight: { target: 'not needed', priority: 8, prefer: 'any', note: 'Mostly not needed - the tool computes the setups (experienced-manager guidance). Not scored.' },
   },
-  budget: 'Save as much as possible. Car resets to L1. Spend only on driver.',
+  budget: 'Pay as little as possible for the driver - around $500K/race or less. Car resets to L1 unless promoted.',
   },
   Amateur: {
   // Amateur: Car carries over. Invest in driver + car balance.
