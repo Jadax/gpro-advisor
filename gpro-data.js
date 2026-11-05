@@ -768,15 +768,16 @@ Rookie: {
   // needed (the setup tool supplies the setups). Pay as little as possible - around $500K/race or
   // less. Talent 100+ is the user's own earlier market-filter floor (2026-08-14).
   targetOA: { min: 75, max: 85 },
-  maxSalary: 500000,
+  // $600K/race: the user's own Rookie ceiling (2026-11-05).
+  maxSalary: 600000,
   maxAge: 36,
   attributes: {
   stamina: { target: 'as high as affordable', priority: 1, note: 'Stamina = speed (experienced-manager guidance). Train via Fitness Class + Testing.' },
   motivation: { target: 'as high as affordable', priority: 2, note: 'Low motivation makes a driver slower (experienced-manager guidance).' },
-  concentration: { target: '180+', priority: 3, note: 'Qualifying pace + consistent race laps (experienced-manager guidance: 180+). Train toward 200 via Yoga once owned.' },
-  experience: { target: '90-150', priority: 4, note: 'Lowers tyre/part wear and fuel use, adds overall speed; grows +1/race.' },
-  aggressiveness:{ target: '0-49', priority: 5, note: 'Helps overtaking/defending but adds tyre and part wear - keep low.' },
-  talent: { target: '100+', priority: 6, note: 'Mainly useful in the rain (experienced-manager guidance); untrainable. 100 = your market-filter floor.' },
+  concentration: { target: '180+', priority: 4, note: 'Qualifying pace + consistent race laps (experienced-manager guidance: 180+). Train toward 200 via Yoga once owned.' },
+  experience: { target: '90-150', priority: 5, note: 'Lowers tyre/part wear and fuel use, adds overall speed; grows +1/race.' },
+  aggressiveness:{ target: '0-49', priority: 6, note: 'Helps overtaking/defending but adds tyre and part wear - keep low.' },
+  talent: { target: '100+', priority: 3, note: 'Untrainable, so it sets how far the driver can be trained long-term (user, 2026-11-05); in a race it mainly shows in the rain. 100 = your market-filter floor.' },
   charisma: { target: '0-250', priority: 7, prefer: 'any', note: 'Sponsor income; not scored.' },
   techInsight: { target: 'not needed', priority: 8, prefer: 'any', note: 'Mostly not needed - the tool computes the setups (experienced-manager guidance). Not scored.' },
   },
@@ -795,10 +796,10 @@ Rookie: {
   attributes: {
   stamina: { target: '85+', priority: 1, note: 'Stamina = speed. Train above 100 if you mean to promote to Pro.' },
   motivation: { target: 'as high as affordable', priority: 2, note: 'Low motivation makes a driver slower.' },
-  concentration: { target: '180+', priority: 3, note: 'Qualifying pace + consistent race laps. Train toward ~220 if you mean to promote to Pro.' },
-  experience: { target: '120+', priority: 4, note: 'Lowers tyre/part wear and fuel use, adds overall speed; grows +1/race.' },
-  aggressiveness:{ target: '0-49', priority: 5, note: 'Helps overtaking/defending but adds tyre and part wear - keep low.' },
-  talent: { target: '110+', priority: 6, note: 'Mainly useful in the rain; untrainable.' },
+  concentration: { target: '180+', priority: 4, note: 'Qualifying pace + consistent race laps. Train toward ~220 if you mean to promote to Pro.' },
+  experience: { target: '120+', priority: 5, note: 'Lowers tyre/part wear and fuel use, adds overall speed; grows +1/race.' },
+  aggressiveness:{ target: '0-49', priority: 6, note: 'Helps overtaking/defending but adds tyre and part wear - keep low.' },
+  talent: { target: '110+', priority: 3, note: 'Untrainable, so it sets how far the driver can be trained long-term (user, 2026-11-05); in a race it mainly shows in the rain.' },
   charisma: { target: '0-250', priority: 7, prefer: 'any', note: 'Sponsor income; not scored.' },
   techInsight: { target: 'not needed', priority: 8, prefer: 'any', note: 'Mostly not needed - the tool computes the setups. Not scored.' },
   },
