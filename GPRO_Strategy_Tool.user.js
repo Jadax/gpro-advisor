@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.37.0
+// @version 6.38.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1854,6 +1854,53 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
    return { stopLaps, stints: stopLaps.length + 1, stintFuels };
    }
 
+  // ---- rain at the start, but the first race window says it stops (v6.38.0) ----
+  // Q2's weather IS the race-start weather (wiki "Weather"). Wiki: with 0% in a window, "if it is
+  // already raining, you can be sure that it will stop raining during the period" (after 1 to 29
+  // min). GPRO Newbie Guide: rain in Q2 + a very low first-window chance means the rain stops,
+  // "usually after a few laps" - start on Rain and pit early, or start on dry tyres and "lose a
+  // little time at the beginning of the race but not have to make a pit stop". A car started on dry
+  // tyres in the rain is NOT pitted for Rain: rain at the start never "starts" (forum TopicId 27349).
+  // Default = dry start (the guide's no-stop option, and what the user's league rivals ran at S113 R7
+  // Brands Hatch). Once the log holds wet starts like this, the choice is re-made from data: dry wins
+  // while (median laps until the rain stopped) x (dry-tyre minus Rain-tyre wet penalty) < pit time.
+  const WET_START_DRY_MAX = 1; // own cut-off: the forecast's lowest printed band, "0%-1%"
+  function wetStartEvidence() {
+  const stops = [];
+  getRaceLog().forEach((r) => {
+  const ev = r.rainEvidence, w = r.forecast && r.forecast.windows;
+  if (ev && ev.startWet && ev.rainStopLap && w && w[0] && w[0].rainMax <= WET_START_DRY_MAX) stops.push(ev.rainStopLap - 1);
+  });
+  return { n: stops.length, medianLaps: stops.length ? medianOf(stops) : null };
+  }
+  function wetStartChoice(domWet, seg1RainMax, trackName) {
+  if (!domWet || seg1RainMax == null || seg1RainMax > WET_START_DRY_MAX) return null;
+  const ws = wetStartEvidence();
+  const pe = rainPolicyEvidence();
+  const gt = trackName ? lookupGappTrack(trackName, 'trackData') : null;
+  const pitSec = gt && gt.values ? gt.values[10] : null;
+  let startDry = true, basis = 'guide';
+  if (ws.medianLaps != null && pe.dryTyrePenalty != null && pe.rainTyrePenalty != null && pitSec) {
+  startDry = ws.medianLaps * (pe.dryTyrePenalty - pe.rainTyrePenalty) < pitSec;
+  basis = 'log';
+  }
+  return { startDry, basis, ws, pe, pitSec, seg1RainMax };
+  }
+  // The race-start wet state the PLAN uses: rain at the start that stops in window 1 with a dry start
+  // chosen counts as a dry race (no weather pit, dry start tyre).
+  function plannedStartWet(domWet, seg1RainMax, trackName) {
+  const c = wetStartChoice(domWet, seg1RainMax, trackName);
+  return c ? !c.startDry : !!domWet;
+  }
+  function wetStartLine(c) {
+  if (!c) return '';
+  const ev = c.ws.n ? ` Your log: ${c.ws.n} wet start${c.ws.n !== 1 ? 's' : ''} like this, rain stopped after ~${c.ws.medianLaps} lap${c.ws.medianLaps !== 1 ? 's' : ''}.` : ' Your log has no wet start like this yet - measured after the race.';
+  const head = c.startDry
+  ? `🌦 Rain at the start (Q2 box), but the first 30 min forecast ${c.seg1RainMax <= 0 ? '0%' : '0-1%'}: the rain stops early (wiki), usually after a few laps (GPRO Newbie Guide). Start on dry tyres - you lose a little time while it rains but make no weather pit.`
+  : `🌧 Rain at the start, first 30 min forecast ${c.seg1RainMax}% - start on Rain: your log says the early stop costs less than the laps lost on dry tyres in the rain.`;
+  return `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">${head}${ev} Own rule from the wiki/guide${c.basis === 'log' ? ' + your log' : ''}.</div>`;
+  }
+
   // Shared race-profile resolution used by BOTH renderQualify (Q2 "First Stint Fuel") and
   // renderRaceSetup (Fuel & Tyre Strategy). GPRO's DOM weather widget (the Q2/Race-start box) is the
   // ground truth for whether the race STARTS wet, even when the forecast segments read dry. When the
@@ -3394,11 +3441,11 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // GPRO's RaceSetup has "wait to pit if it starts/stops raining" (LapsWaitPitRain/Dry, 0-80, GPRO
  // default 3). Other managers set the rain wait high (60+ laps) so the driver doesn't pit for a
  // passing shower. Our plan already treats a forecast window under 40% rain as dry, so for such a
- // race the driver stays out (wait = the race length, capped at the field's 80) - otherwise GPRO's
+ // race the driver stays out (wait = the race length, the field's own maximum) - otherwise GPRO's
  // default makes him pit for Rain after 3 wet laps, which the plan never asked for. Every race then
  // logs what happened (rainEvidence + the forecast snapshot) and rainPolicyEvidence() re-checks it.
  const RACE_FORECASTS_KEY = 'gpro_race_forecasts';
- const RAIN_WAIT_MAX = 80; // the field's own range (RaceSetup.asp, 0-80)
+ // The wait field's range is 0..race laps (RaceSetup.asp label "(0 - 75)" at 75-lap Brands Hatch).
  function lapSeconds(txt) {
  const m = /^(\d+):(\d{2}\.\d{3})$/.exec(String(txt || '').trim());
  return m ? +m[1] * 60 + parseFloat(m[2]) : null;
@@ -3425,8 +3472,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const wetOnDry = clean.filter((r) => wet(r) && r.tyres !== 'Rain');
  const wetOnRain = clean.filter((r) => wet(r) && r.tyres === 'Rain');
  const allWet = (rec.lapRows || []).filter((r) => r.lap > 0 && wet(r));
+ const raced = (rec.lapRows || []).filter((r) => r.lap > 0).sort((a, b) => a.lap - b.lap);
+ const startWet = raced.length ? wet(raced[0]) : false;
+ const firstDry = startWet ? raced.find((r) => !wet(r)) : null;
  return { dryAvg: avg(dryOnDry), nDry: dryOnDry.length, wetOnDryAvg: avg(wetOnDry), nWetOnDry: wetOnDry.length,
- wetOnRainAvg: avg(wetOnRain), nWetOnRain: wetOnRain.length, wetLapList: allWet.map((r) => r.lap) };
+ wetOnRainAvg: avg(wetOnRain), nWetOnRain: wetOnRain.length, wetLapList: allWet.map((r) => r.lap),
+ startWet, rainStopLap: firstDry ? firstDry.lap : null, startTyres: raced.length ? raced[0].tyres : null };
  }
  // Forecast window k = race minutes [30k, 30k+30) (window 4 runs to the flag). Laps are placed by
  // this manager's own cumulative lap time - an approximation: the wiki ties weather periods to
@@ -3457,8 +3508,9 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const ws = r.forecast && r.forecast.windows;
  if (!ws || !ws.some((w) => w.startLap != null)) return;
  races++;
- ws.forEach((w) => {
+ ws.forEach((w, k) => {
  if (w.startLap == null || w.rainMax == null) return;
+ if (k === 0 && r.rainEvidence && r.rainEvidence.startWet) return;
  const b = bands.find((x) => w.rainMax >= x.lo && w.rainMax <= x.hi);
  if (!b) return;
  b.windows++;
@@ -3512,7 +3564,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  breakEven = gain > 0 ? (2 * pitLoss) / gain : Infinity;
  }
  const stayOut = breakEven == null || breakEven >= (lapsPerPeriod || 0);
- return { stayOut, wait: stayOut ? Math.min(RAIN_WAIT_MAX, totalLaps) : null, breakEven, ev };
+ return { stayOut, wait: stayOut ? totalLaps : null, breakEven, ev };
  }
  function rainWaitLine(plan) {
  if (!plan) return '';
@@ -4243,7 +4295,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // resolveRaceStartProfile helper guarantees Q2 and Race Setup produce the SAME wet-start phases
  // and therefore the same recommended start fuel (they previously used different wet-state sources).
  if (qDomTemps && qDomTemps.q2Rain !== null && analyze) {
- const r = resolveRaceStartProfile(weather, parseInt(track && track.laps) || 0, qDomTemps.q2Rain, analyze);
+ const r = resolveRaceStartProfile(weather, parseInt(track && track.laps) || 0, plannedStartWet(qDomTemps.q2Rain, analyze.segs[0].rainMax, (track || {}).trackName), analyze);
  logDebug(`[GPRO][Qualify] race profile resolved: type=${r.analyze.raceProfile.type}, phases=${r.phases.length}`);
  }
  logDebug(`[GPRO][Qualify] q2Rain=${qDomTemps ? qDomTemps.q2Rain : 'n/a'}, q2WetQ=${q2WetQ}`);
@@ -4616,12 +4668,13 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   GM_setValue('gpro_q1_wet_manual', '0');
   GM_setValue('gpro_q2_wet_manual', '0');
  const earlyDomTemps = scrapeSessionTempsFromDOM();
- const earlyRaceWet = earlyDomTemps && earlyDomTemps.q2Rain !== null ? earlyDomTemps.q2Rain : !!(analyze && analyze.commitRain);
+ const wetStart = (earlyDomTemps && analyze) ? wetStartChoice(earlyDomTemps.q2Rain, analyze.segs[0].rainMax, (practice || {}).trackName || (track || {}).trackName) : null;
+ const earlyRaceWet = earlyDomTemps && earlyDomTemps.q2Rain !== null ? (wetStart ? !wetStart.startDry : earlyDomTemps.q2Rain) : !!(analyze && analyze.commitRain);
  logDebug(`[GPRO][RaceSetup] DOM scrape: ${JSON.stringify(earlyDomTemps)}, earlyRaceWet=${earlyRaceWet}, forecast commitRain=${analyze ? analyze.commitRain : 'N/A'}`);
  // Override commitRain with the DOM widget's actual state when available — shared helper keeps this
  // IDENTICAL to what renderQualify's Q2 "First Stint Fuel" uses, so the two pages never drift.
  if (earlyDomTemps && earlyDomTemps.q2Rain !== null && analyze) {
- const r = resolveRaceStartProfile(weather, totalLaps, earlyDomTemps.q2Rain, analyze);
+ const r = resolveRaceStartProfile(weather, totalLaps, earlyRaceWet, analyze);
  logDebug(`[GPRO][RaceSetup] commitRain overridden to DOM: ${earlyDomTemps.q2Rain}; profile type=${r.analyze.raceProfile.type}, phases=${r.phases.length}`);
  }
  logDebug(`[GPRO][RaceSetup] resolved race profile: type=${analyze && analyze.raceProfile ? analyze.raceProfile.type : 'n/a'}`);
@@ -4855,7 +4908,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">Plan carries ~${planTotal}L (fills above, ⚡boost included) over ${fuel.stops} stop${fuel.stops !== 1 ? 's' : ''} · dry ${fuel.fuelPerLap}L/lap. Max tank ${TANK_MAX}L. Each fill covers its laps up to the pit + ~½ lap reserve (GPRO pits once the next lap can't be completed, so extra fuel only moves the pit later); the last stint gets +6% since there's no pit behind it.</div>`;
  if (wetContingency) fsHtml += `<div style="font-size:9px;color:${VERDICT.warn};margin-top:4px;">🌦 Weather contingency — the wet windows are only ${wetContingency.bandText} rain-probability: if the track is clearly dry at any forward pit, fit ${dryCompound} instead of Rain and the fuel numbers still hold (±few L). (own heuristic)</div>`;
   rainWait = rainWaitPlan(analyze, totalLaps, estimateLapsPerWeatherPeriod(track), tyre && tyre.pitLoss);
-  fsHtml += rainWaitLine(rainWait) + forecastEvidenceLine();
+  fsHtml += wetStartLine(wetStart) + rainWaitLine(rainWait) + forecastEvidenceLine();
   const memLine = trackMemoryLine(trackName);
   if (memLine) fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">📒 Your history here (race log): ${esc(memLine)}</div>`;
   fsHtml += `</div>`;
@@ -5078,7 +5131,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  for (let i = 1; i <= 4; i++) {
  rSegs.push(Math.max(parseInt(weather[`raceQ${i}RainPLow`] || 0), parseInt(weather[`raceQ${i}RainPHigh`] || 0)));
  }
- raceWet = (rsDomTemps && rsDomTemps.q2Rain !== null) ? rsDomTemps.q2Rain : rSegs[0] >= 40;
+ raceWet = (rsDomTemps && rsDomTemps.q2Rain !== null) ? plannedStartWet(rsDomTemps.q2Rain, rSegs[0], (practice || {}).trackName || (track || {}).trackName) : rSegs[0] >= 40;
  } else if (track) {
  const t = parseFloat(track.trackTemp || track.temperature) || 25;
  q1Temp = q2Temp = raceTemp = t;
@@ -5263,6 +5316,9 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const boosts = (boostLapsList || []).slice().sort((a, b) => a - b);
   for (let i = 1; i <= 3; i++) fields['BoostLap' + i] = boosts[i - 1] || 0;
   if (rainWait && rainWait.stayOut) fields.LapsWaitPitRain = rainWait.wait;
+  // Wiki/Newbie Guide: GPRO dries the whole track at once, so a car on Rain should pit for dry
+  // tyres as soon as it stops raining - wait 0 (GPRO's default is 3).
+  fields.LapsWaitPitDry = 0;
   // Snapshot of what was planned against which forecast - read back when the race is logged.
   {
   const nr = nextRaceInfo();
@@ -5309,7 +5365,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
    setSessionWetManual('gpro_q2_wet', newQ2Wet);
    // Re-scrape DOM widget for live rain state (don't rely solely on forecast for race wet)
    const liveDomTemps = scrapeSessionTempsFromDOM();
-   const newRaceWet = (liveDomTemps && liveDomTemps.q2Rain !== null) ? liveDomTemps.q2Rain : rSegs[0] >= 40;
+   const newRaceWet = (liveDomTemps && liveDomTemps.q2Rain !== null) ? plannedStartWet(liveDomTemps.q2Rain, rSegs[0], raceTrackName) : rSegs[0] >= 40;
   const newSetup = calcCarSetupSmart(q1Temp, q2Temp, raceTemp, newQ1Wet, newQ2Wet, dominantWet, setupTrackPower, raceTrackName, driver, car);
   if (newSetup) {
   setup = newSetup; // keep the Copy buttons in sync with what's actually shown after a weather change
