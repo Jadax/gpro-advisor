@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.35.4
+// @version 6.36.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -3166,8 +3166,14 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // races x ~70 rows would bloat GM storage); raceStints reads either form.
  if (rec.lapRows) {
  const st = raceStints(rec);
- rec = Object.assign({}, rec, { stintInfo: st.map((x) => ({ compound: x.compound, wetLaps: x.wetLaps })) });
+ rec = Object.assign({}, rec, { stintInfo: st.map((x) => ({ compound: x.compound, wetLaps: x.wetLaps })), rainEvidence: rainLapEvidence(rec) });
  delete rec.lapRows;
+ }
+ // The forecast + wait-to-pit settings Race Setup planned for this race (saved when it rendered),
+ // so the rain policy can be checked against what really happened.
+ if (!rec.forecast) {
+ const snap = getRaceForecasts()[`${rec.season}-${rec.race}`];
+ if (snap) rec = Object.assign({}, rec, { forecast: snap });
  }
  let stored = [];
  try { stored = JSON.parse(GM_getValue(RACE_LOG_KEY, '[]')) || []; } catch (e) { stored = []; }
@@ -3361,7 +3367,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // Lap table rows: "12 [B] 1:23.269 3 Medium Cloudy 33° 60% -". B marks a boost lap.
  rec.lapRows = [];
  const lapRe = /^\s*(\d{1,3})\s*(B)?\s+(\d+:\d{2}\.\d{3}|-)\s+(\d{1,2})\s+(Extra Soft|Soft|Medium|Hard|Rain)\s+([A-Za-z][A-Za-z ]*?)\s+(-?\d+)\s*°\s+(\d+)\s*%[ \t]*([^\n]*)/gim;
- while ((m = lapRe.exec(t))) rec.lapRows.push({ lap: +m[1], boost: !!m[2], pos: +m[4], tyres: m[5], weather: m[6].trim(), temp: +m[7], hum: +m[8], event: (m[9] || '').trim() });
+ while ((m = lapRe.exec(t))) rec.lapRows.push({ lap: +m[1], boost: !!m[2], time: lapSeconds(m[3]), pos: +m[4], tyres: m[5], weather: m[6].trim(), temp: +m[7], hum: +m[8], event: (m[9] || '').trim() });
  rec.driverMistakes = rec.lapRows.filter((r) => /mistake/i.test(r.event)).map((r) => r.lap);
  // Overtaking table: "Overtaking attempts initiated: <blocked> <successful>" / "...made upon you: ..."
  const ot = t.match(/Overtaking attempts initiated:?\s*(\d+)\s+(\d+)[\s\S]*?made upon you:?\s*(\d+)\s+(\d+)/i);
@@ -3378,6 +3384,97 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  }
 
  // One-line memory of earlier races at this track (shown on Race Setup). null when none logged.
+ // ---- rain policy: stay out on dry tyres vs pit for Rain (user, 2026-11-08) ----
+ // GPRO's RaceSetup has "wait to pit if it starts/stops raining" (LapsWaitPitRain/Dry, 0-80, GPRO
+ // default 3). Other managers set the rain wait high (60+ laps) so the driver doesn't pit for a
+ // passing shower. Our plan already treats a forecast window under 40% rain as dry, so for such a
+ // race the driver stays out (wait = the race length, capped at the field's 80) - otherwise GPRO's
+ // default makes him pit for Rain after 3 wet laps, which the plan never asked for. Every race then
+ // logs what happened (rainEvidence + the forecast snapshot) and rainPolicyEvidence() re-checks it.
+ const RACE_FORECASTS_KEY = 'gpro_race_forecasts';
+ const RAIN_WAIT_MAX = 80; // the field's own range (RaceSetup.asp, 0-80)
+ function lapSeconds(txt) {
+ const m = /^(\d+):(\d{2}\.\d{3})$/.exec(String(txt || '').trim());
+ return m ? +m[1] * 60 + parseFloat(m[2]) : null;
+ }
+ function getRaceForecasts() {
+ try { return JSON.parse(GM_getValue(RACE_FORECASTS_KEY, '{}')) || {}; } catch (e) { return {}; }
+ }
+ function saveRaceForecast(key, snap) {
+ const all = getRaceForecasts();
+ all[key] = snap;
+ const keys = Object.keys(all);
+ if (keys.length > 60) keys.slice(0, keys.length - 60).forEach((k) => delete all[k]);
+ GM_setValue(RACE_FORECASTS_KEY, JSON.stringify(all));
+ }
+ // Average lap time by condition/tyre from one race's lap table. Laps that aren't clean racing laps
+ // are dropped: lap 1, pit laps and the out-lap after them, boost laps, laps with an event.
+ function rainLapEvidence(rec) {
+ const pitLaps = new Set();
+ (rec.pits || []).forEach((p) => { pitLaps.add(p.lap); pitLaps.add(p.lap + 1); });
+ const clean = (rec.lapRows || []).filter((r) => r.lap > 1 && r.time && !r.boost && !pitLaps.has(r.lap) && !(r.event && r.event !== '-'));
+ const wet = (r) => /rain/i.test(r.weather || '');
+ const avg = (rows) => rows.length ? Math.round(rows.reduce((a, r) => a + r.time, 0) / rows.length * 1000) / 1000 : null;
+ const dryOnDry = clean.filter((r) => !wet(r) && r.tyres !== 'Rain');
+ const wetOnDry = clean.filter((r) => wet(r) && r.tyres !== 'Rain');
+ const wetOnRain = clean.filter((r) => wet(r) && r.tyres === 'Rain');
+ const allWet = (rec.lapRows || []).filter((r) => r.lap > 0 && wet(r));
+ return { dryAvg: avg(dryOnDry), nDry: dryOnDry.length, wetOnDryAvg: avg(wetOnDry), nWetOnDry: wetOnDry.length,
+ wetOnRainAvg: avg(wetOnRain), nWetOnRain: wetOnRain.length, wetLapList: allWet.map((r) => r.lap) };
+ }
+ // What the log says so far: seconds per lap lost on dry tyres in the wet and on Rain tyres in the
+ // wet (each vs that race's own dry laps), and how often forecast windows under 40% really rained.
+ function rainPolicyEvidence() {
+ const log = getRaceLog();
+ const dryPen = [], rainPen = [];
+ let lowWindows = 0, lowRained = 0;
+ log.forEach((r) => {
+ const ev = r.rainEvidence;
+ if (ev && ev.dryAvg) {
+ if (ev.nWetOnDry >= 2) dryPen.push(ev.wetOnDryAvg - ev.dryAvg);
+ if (ev.nWetOnRain >= 2) rainPen.push(ev.wetOnRainAvg - ev.dryAvg);
+ }
+ const f = r.forecast;
+ if (f && f.windows && ev && ev.wetLapList) {
+ f.windows.forEach((w) => {
+ if (!(w.rainMax > 0 && w.rainMax < 40) || !(w.endLap >= w.startLap)) return;
+ lowWindows++;
+ if (ev.wetLapList.some((l) => l >= w.startLap && l <= w.endLap)) lowRained++;
+ });
+ }
+ });
+ return { dryTyrePenalty: dryPen.length ? medianOf(dryPen) : null, nDry: dryPen.length,
+ rainTyrePenalty: rainPen.length ? medianOf(rainPen) : null, nRain: rainPen.length, lowWindows, lowRained };
+ }
+ // Wait-to-pit plan for this race. Only the "starts raining" wait is set, and only when the plan
+ // runs the race dry although some window carries a rain chance. Once the log has measured both
+ // penalties, staying out must also beat pitting twice (to Rain and back) over one whole forecast
+ // window of rain; when it doesn't, GPRO's default wait is left alone.
+ function rainWaitPlan(analyze, totalLaps, lapsPerPeriod, pitLoss) {
+ if (!analyze || !analyze.raceProfile || analyze.raceProfile.type !== 'dry' || !(analyze.maxRain > 0) || !(totalLaps > 0)) return null;
+ const ev = rainPolicyEvidence();
+ let breakEven = null;
+ if (ev.dryTyrePenalty != null && ev.rainTyrePenalty != null && pitLoss > 0) {
+ const gain = ev.dryTyrePenalty - ev.rainTyrePenalty;
+ breakEven = gain > 0 ? (2 * pitLoss) / gain : Infinity;
+ }
+ const stayOut = breakEven == null || breakEven >= (lapsPerPeriod || 0);
+ return { stayOut, wait: stayOut ? Math.min(RAIN_WAIT_MAX, totalLaps) : null, breakEven, ev };
+ }
+ function rainWaitLine(plan) {
+ if (!plan) return '';
+ const ev = plan.ev;
+ const bits = [];
+ if (ev.lowWindows) bits.push(`windows forecast under 40% rained in ${ev.lowRained} of ${ev.lowWindows}`);
+ if (ev.dryTyrePenalty != null) bits.push(`dry tyres in rain cost ${ev.dryTyrePenalty.toFixed(1)}s/lap (${ev.nDry} race${ev.nDry !== 1 ? 's' : ''})`);
+ if (ev.rainTyrePenalty != null) bits.push(`Rain tyres in rain ${ev.rainTyrePenalty.toFixed(1)}s/lap`);
+ const evidence = bits.length ? ` Your log: ${bits.join(', ')}.` : ' Your log has no rain on dry tyres yet - checked again after every race.';
+ const head = plan.stayOut
+ ? `☔ If it rains: stay out on dry tyres (wait ${plan.wait} laps before pitting for Rain). Every forecast window is under 40%, so the plan runs dry; other managers don't switch tyres for a passing shower.`
+ : `☔ If it rains: GPRO's default wait kept - in your log, ${plan.breakEven.toFixed(0)}+ laps of rain already pay back pitting to Rain and back, and one forecast window is longer than that.`;
+ return `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">${head}${evidence} Own heuristic.</div>`;
+ }
+
  function trackMemoryLine(trackName) {
  if (!trackName) return null;
  const key = (lookupGappTrack(trackName, 'wearData') || {}).key || trackName;
@@ -4458,6 +4555,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const weather = extractWeather(practice);
   const totalLaps = track ? (parseInt(track.laps) || 0) : 0;
   const analyze = analyzeWeather(weather, totalLaps, estimateLapsPerWeatherPeriod(track));
+  let rainWait = null;
   // Scrape DOM widget early — the tyre strategy needs the actual game rain state (from the
   // widget) rather than relying solely on the forecast. When the widget shows dry but the
   // forecast has ≥40% rain in segment 1, commitRain should follow the widget (dry).
@@ -4703,6 +4801,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   fuel.carriedTotal = planTotal;
   fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">Plan carries ~${planTotal}L (fills above, ⚡boost included) over ${fuel.stops} stop${fuel.stops !== 1 ? 's' : ''} · dry ${fuel.fuelPerLap}L/lap. Max tank ${TANK_MAX}L. Each fill covers its laps up to the pit + ~½ lap reserve (GPRO pits once the next lap can't be completed, so extra fuel only moves the pit later); the last stint gets +6% since there's no pit behind it.</div>`;
  if (wetContingency) fsHtml += `<div style="font-size:9px;color:${VERDICT.warn};margin-top:4px;">🌦 Weather contingency — the wet windows are only ${wetContingency.bandText} rain-probability: if the track is clearly dry at any forward pit, fit ${dryCompound} instead of Rain and the fuel numbers still hold (±few L). (own heuristic)</div>`;
+  rainWait = rainWaitPlan(analyze, totalLaps, estimateLapsPerWeatherPeriod(track), tyre && tyre.pitLoss);
+  fsHtml += rainWaitLine(rainWait);
   const memLine = trackMemoryLine(trackName);
   if (memLine) fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">📒 Your history here (race log): ${esc(memLine)}</div>`;
   fsHtml += `</div>`;
@@ -5099,7 +5199,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   }
 
   // Autopilot / "Fill this page's form". Start tyre/fuel come from Q1/Q2 (the page locks them);
-  // wait-to-pit fields and team-mate passing have no advisor logic, so they stay as GPRO has them.
+  // team-mate passing has no advisor logic, so it stays as GPRO has it. Wait-to-pit: rainWaitPlan.
   {
   const rv = setup && setup.Race;
   const fields = {};
@@ -5109,6 +5209,17 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   if (driverRiskRec) Object.assign(fields, { RiskOver: driverRiskRec.overtakeRisk, RiskDefend: driverRiskRec.defendRisk, DriverRisk: driverRiskRec.dryRisk, RiskWet: driverRiskRec.wetRisk, DriverRiskProb: driverRiskRec.malfunctionRisk, StartRisk: driverRiskRec.startRisk, AskPits: 1, LapsStopProb: driverRiskRec.problemPitLaps });
   const boosts = (boostLapsList || []).slice().sort((a, b) => a - b);
   for (let i = 1; i <= 3; i++) fields['BoostLap' + i] = boosts[i - 1] || 0;
+  if (rainWait && rainWait.stayOut) fields.LapsWaitPitRain = rainWait.wait;
+  // Snapshot of what was planned against which forecast - read back when the race is logged.
+  {
+  const nr = nextRaceInfo();
+  if (nr && nr.key && analyze && analyze.segs) {
+  const lpp = Math.round(estimateLapsPerWeatherPeriod(track) || LAPS_PER_PERIOD_FALLBACK);
+  saveRaceForecast(nr.key, { track: trackName || null, laps: totalLaps,
+  windows: analyze.segs.map((sg, k) => ({ rainMin: sg.rainMin, rainMax: sg.rainMax, startLap: k * lpp + 1, endLap: k === 3 ? totalLaps : Math.min((k + 1) * lpp, totalLaps) })),
+  lapsWaitPitRain: fields.LapsWaitPitRain != null ? fields.LapsWaitPitRain : null });
+  }
+  }
   const raceDryCode = tyre && tyre.bestDry ? TYRE_CODES[tyre.bestDry.name] : null;
   if (raceDryCode) Object.assign(fields, { StartTyres: { ifEnabled: startIsWet ? TYRE_CODES.Rain : raceDryCode }, DryTyres: { ifEnabled: raceDryCode }, RainTyres: { ifEnabled: TYRE_CODES.Rain } });
   // Confirmed for this race = Q2 driven (Confirm enabled) and GPRO shows a saved setup (FWing is 0

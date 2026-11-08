@@ -76,7 +76,7 @@ Same track/weather block as Qualify.asp. Additional:
 - Car setup inputs: `name="FWing"|"RWing"|"Engine"|"Brakes"|"Gear"|"Suspension"`, default `value="0"` (means "use Q2 setup").
 - Fuel strategy: `name="FuelStart"` (readonly, computed from Q2), `name="FuelStop1".."FuelStop5"`.
 - Tyre strategy selects: `name="StartTyres"|"RainTyres"|"DryTyres"`.
-- Wait-to-pit inputs: `name="LapsWaitPitRain"|"LapsWaitPitDry"` (labelled "Wait to pit if it starts/stops raining", default value `3` for both, range 0-80). GAPP has no formula for these two fields (checked `calcs.py`/`data.py`) — the script's own heuristic recommendation for them lives in `renderRaceSetup`, gated on `analyze.maxRain >= 15`.
+- Wait-to-pit inputs: `name="LapsWaitPitRain"|"LapsWaitPitDry"` (labelled "Wait to pit if it starts/stops raining", default value `3` for both, range 0-80). GAPP has no formula for these two fields (checked `calcs.py`/`data.py`). The race plan sets `LapsWaitPitRain` via `rainWaitPlan` (v6.36.0); `LapsWaitPitDry` is left at GPRO's value.
 - Risk inputs: `name="RiskOver"` (overtake), `name="RiskDefend"`, `name="DriverRisk"` (clear+dry = CTR), `name="RiskWet"` (clear+wet), `name="DriverRiskProb"` (malfunctioning).
 - Boost laps: `name="BoostLap1"|"BoostLap2"|"BoostLap3"`.
 - Start risk: `<select name="StartRisk">` (0=Avoid trouble..3=Force to front).
