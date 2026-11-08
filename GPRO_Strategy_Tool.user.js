@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.36.0
+// @version 6.37.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -3167,14 +3167,14 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (rec.lapRows) {
  const st = raceStints(rec);
  rec = Object.assign({}, rec, { stintInfo: st.map((x) => ({ compound: x.compound, wetLaps: x.wetLaps })), rainEvidence: rainLapEvidence(rec) });
+ const win = forecastWindowsFromLaps(rec);
+ if (win) rec.forecast = Object.assign({}, rec.forecast || {}, { windows: win, source: 'race report' });
  delete rec.lapRows;
  }
  // The forecast + wait-to-pit settings Race Setup planned for this race (saved when it rendered),
  // so the rain policy can be checked against what really happened.
- if (!rec.forecast) {
  const snap = getRaceForecasts()[`${rec.season}-${rec.race}`];
- if (snap) rec = Object.assign({}, rec, { forecast: snap });
- }
+ if (snap) rec = Object.assign({}, rec, { forecast: rec.forecast ? Object.assign({}, snap, rec.forecast, { lapsWaitPitRain: snap.lapsWaitPitRain }) : snap });
  let stored = [];
  try { stored = JSON.parse(GM_getValue(RACE_LOG_KEY, '[]')) || []; } catch (e) { stored = []; }
  stored = stored.filter((r) => !(r.season === rec.season && r.race === rec.race));
@@ -3380,6 +3380,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  rec.temp = { min: Math.min(...temps), max: Math.max(...temps), avg: Math.round(temps.reduce((a, b) => a + b, 0) / temps.length * 10) / 10 };
  rec.wetLaps = raced.filter((r) => /rain/i.test(r.weather)).length;
  }
+ // The report repeats the race forecast (live S113 R1-R6, 2026-11-08: "Rain probability: 0% - 5%"
+ // or a single "0%"), so forecast-vs-reality is known for every logged race.
+ const fcRe = /Rain probability:?\s*(\d+)\s*%(?:\s*-\s*(\d+)\s*%)?/gi;
+ const fc = [];
+ while ((m = fcRe.exec(t))) fc.push({ rainMin: +m[1], rainMax: m[2] != null ? +m[2] : +m[1] });
+ if (fc.length === 4) rec.forecastWindows = fc;
  return rec;
  }
 
@@ -3422,6 +3428,52 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return { dryAvg: avg(dryOnDry), nDry: dryOnDry.length, wetOnDryAvg: avg(wetOnDry), nWetOnDry: wetOnDry.length,
  wetOnRainAvg: avg(wetOnRain), nWetOnRain: wetOnRain.length, wetLapList: allWet.map((r) => r.lap) };
  }
+ // Forecast window k = race minutes [30k, 30k+30) (window 4 runs to the flag). Laps are placed by
+ // this manager's own cumulative lap time - an approximation: the wiki ties weather periods to
+ // Elite pace, so for a slower car a window ends a lap or two earlier than mapped here.
+ function forecastWindowsFromLaps(rec) {
+ const fw = rec.forecastWindows;
+ const rows = (rec.lapRows || []).filter((r) => r.lap > 0).sort((a, b) => a.lap - b.lap);
+ if (!fw || fw.length !== 4 || !rows.length || rows.some((r) => !r.time)) return null;
+ const out = fw.map((w) => Object.assign({}, w, { startLap: null, endLap: null, wetLaps: 0 }));
+ let elapsed = 0;
+ rows.forEach((r) => {
+ const k = Math.min(3, Math.floor(elapsed / 1800));
+ const w = out[k];
+ if (w.startLap == null) w.startLap = r.lap;
+ w.endLap = r.lap;
+ if (/rain/i.test(r.weather || '')) w.wetLaps++;
+ elapsed += r.time;
+ });
+ return out;
+ }
+ const FORECAST_BANDS = [[0, 9], [10, 19], [20, 29], [30, 39], [40, 59], [60, 100]];
+ // Every logged window (that the race reached), grouped by its forecast's upper rain %: how many
+ // had any rain lap. This is what the 40% "wet window" line and the stay-out rule are checked against.
+ function forecastBandEvidence() {
+ const bands = FORECAST_BANDS.map(([lo, hi]) => ({ lo, hi, windows: 0, rained: 0 }));
+ let races = 0;
+ getRaceLog().forEach((r) => {
+ const ws = r.forecast && r.forecast.windows;
+ if (!ws || !ws.some((w) => w.startLap != null)) return;
+ races++;
+ ws.forEach((w) => {
+ if (w.startLap == null || w.rainMax == null) return;
+ const b = bands.find((x) => w.rainMax >= x.lo && w.rainMax <= x.hi);
+ if (!b) return;
+ b.windows++;
+ if (w.wetLaps > 0) b.rained++;
+ });
+ });
+ return { races, bands: bands.filter((b) => b.windows) };
+ }
+ function forecastEvidenceLine() {
+ const ev = forecastBandEvidence();
+ if (!ev.races) return '';
+ return `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">📒 Forecast vs reality (${ev.races} race${ev.races !== 1 ? 's' : ''} logged): ` +
+ ev.bands.map((b) => `${b.lo}-${b.hi}% rained in ${b.rained} of ${b.windows} window${b.windows !== 1 ? 's' : ''}`).join(' · ') +
+ `. The plan calls a window wet from 40% (unsourced cut-off, checked against this).</div>`;
+ }
  // What the log says so far: seconds per lap lost on dry tyres in the wet and on Rain tyres in the
  // wet (each vs that race's own dry laps), and how often forecast windows under 40% really rained.
  function rainPolicyEvidence() {
@@ -3435,11 +3487,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (ev.nWetOnRain >= 2) rainPen.push(ev.wetOnRainAvg - ev.dryAvg);
  }
  const f = r.forecast;
- if (f && f.windows && ev && ev.wetLapList) {
+ if (f && f.windows) {
  f.windows.forEach((w) => {
- if (!(w.rainMax > 0 && w.rainMax < 40) || !(w.endLap >= w.startLap)) return;
+ if (!(w.rainMax > 0 && w.rainMax < 40) || w.startLap == null || !(w.endLap >= w.startLap)) return;
  lowWindows++;
- if (ev.wetLapList.some((l) => l >= w.startLap && l <= w.endLap)) lowRained++;
+ const wet = w.wetLaps != null ? w.wetLaps > 0 : !!(ev && ev.wetLapList && ev.wetLapList.some((l) => l >= w.startLap && l <= w.endLap));
+ if (wet) lowRained++;
  });
  }
  });
@@ -4802,7 +4855,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">Plan carries ~${planTotal}L (fills above, ⚡boost included) over ${fuel.stops} stop${fuel.stops !== 1 ? 's' : ''} · dry ${fuel.fuelPerLap}L/lap. Max tank ${TANK_MAX}L. Each fill covers its laps up to the pit + ~½ lap reserve (GPRO pits once the next lap can't be completed, so extra fuel only moves the pit later); the last stint gets +6% since there's no pit behind it.</div>`;
  if (wetContingency) fsHtml += `<div style="font-size:9px;color:${VERDICT.warn};margin-top:4px;">🌦 Weather contingency — the wet windows are only ${wetContingency.bandText} rain-probability: if the track is clearly dry at any forward pit, fit ${dryCompound} instead of Rain and the fuel numbers still hold (±few L). (own heuristic)</div>`;
   rainWait = rainWaitPlan(analyze, totalLaps, estimateLapsPerWeatherPeriod(track), tyre && tyre.pitLoss);
-  fsHtml += rainWaitLine(rainWait);
+  fsHtml += rainWaitLine(rainWait) + forecastEvidenceLine();
   const memLine = trackMemoryLine(trackName);
   if (memLine) fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">📒 Your history here (race log): ${esc(memLine)}</div>`;
   fsHtml += `</div>`;
@@ -6496,9 +6549,11 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  async function harvestRaceHistory(say, maxPages) {
  const st = pilotState();
  const locked = new Set(st.harvest.locked || []);
- const logged = new Set(getRaceLog().map((r) => `${r.season},${r.race}`));
+ // A race counts as logged only once it carries its forecast windows - records captured before
+ // v6.37.0 (and screenshot seeds) are re-read once so forecast-vs-reality covers them too.
+ const logged = new Set(getRaceLog().filter((r) => r.forecast && r.forecast.windows && r.forecast.source === 'race report').map((r) => `${r.season},${r.race}`));
  let queue = st.harvest.queue || [];
- if (!queue.length || Date.now() - (st.harvest.listedAt || 0) > 12 * 3600e3) {
+ if (!queue.length || Date.now() - (st.harvest.listedAt || 0) > 12 * 3600e3 || !st.harvest.forecastPass) {
  // The season dropdown (S) lists every season this manager raced; each season's race dropdown
  // (SR) lists its races. Re-listed every 12 h so new races join the queue.
  const first = new DOMParser().parseFromString(await fetchPageHTML('RaceAnalysis.asp'), 'text/html');
@@ -6512,6 +6567,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  Array.from(d.querySelectorAll('select[name="SR"] option')).forEach((o) => { if (o.value && !logged.has(o.value) && !locked.has(o.value)) queue.push(o.value); });
  }
  st.harvest.listedAt = Date.now();
+ st.harvest.forecastPass = true;
  }
  let added = 0, tried = 0;
  while (queue.length && tried < maxPages) {
@@ -6522,7 +6578,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (rec) { saveRaceRecord(rec); added++; } else locked.add(sr);
  } catch (e) { logError('race history fetch failed', sr, e.message); }
  }
- const st2 = pilotState(); st2.harvest = { queue, listedAt: st.harvest.listedAt, locked: Array.from(locked) }; savePilotState(st2);
+ const st2 = pilotState(); st2.harvest = { queue, listedAt: st.harvest.listedAt, locked: Array.from(locked), forecastPass: !!st.harvest.forecastPass }; savePilotState(st2);
  if (added) say(`📒 Race log: +${added} race${added !== 1 ? 's' : ''} from your history (${queue.length} still queued)`);
  }
 
