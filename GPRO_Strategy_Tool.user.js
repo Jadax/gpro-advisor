@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.38.0
+// @version 6.38.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1942,7 +1942,10 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // planned, with enough stops that no remaining stint is longer than the strategy's own stint
   // length. v6.33.1 and earlier ignored it: after an 86 L Q2 at S113 R6 the race page was planned
   // for a 128 L start (1 stop, 131 L refuel) - a fill that couldn't reach the flag.
-  function computeRaceFuelPlan(laps, dryRate, profile, tyreStops, committedFuel, lockedStart) {
+  // maxStintLaps: the chosen compound's lifeLaps. Without it the locked-start re-plan assumed every
+  // stint is laps/(stops+1) long - a lower bound that added a stop (S113 R7 Brands Hatch dry start:
+  // 68 L locked, 2-stop Hard -> 3 stops planned where 2 fit).
+  function computeRaceFuelPlan(laps, dryRate, profile, tyreStops, committedFuel, lockedStart, maxStintLaps) {
   const phases = (profile && profile.phases) || [];
   const transitions = (profile && profile.transitions) || [];
   const transLaps = transitions.map(tr => tr.lap);
@@ -1954,11 +1957,15 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   if (pit1 >= laps) return { stopLaps: [], stops: 0, stints: 1, stintFuels: [lockedStart], startRecommend: lockedStart, committedFuel: lockedStart, lockedStart };
   pit1 = Math.max(1, pit1);
   const rem = laps - pit1;
-  const strategyStint = Math.ceil(laps / Math.max(1, (tyreStops || 0) + 1));
+  const strategyStint = maxStintLaps > 0 ? maxStintLaps : Math.ceil(laps / Math.max(1, (tyreStops || 0) + 1));
   const remStops = Math.max((tyreStops || 0) - 1, Math.ceil(rem / strategyStint) - 1, 0);
   const shift = (l) => l - pit1;
   const subPhases = phases.filter((p) => p.endLap > pit1).map((p) => Object.assign({}, p, { startLap: Math.max(1, shift(p.startLap)), endLap: shift(p.endLap), laps: shift(p.endLap) - Math.max(1, shift(p.startLap)) + 1 }));
-  const subTrans = transLaps.filter((l) => l > pit1 + 1).map(shift);
+  // A weather transition within a third of a stint after the fuel pit merges into that pit, the
+  // same rule buildPhaseFuelPlan uses for wear stops - otherwise the plan pitted again on the next
+  // lap for 5 L (seen in a Brands Hatch harness run: pits L18 + L19).
+  const mergeGap = Math.max(1, Math.round(strategyStint / 3));
+  const subTrans = transLaps.filter((l) => l > pit1 + mergeGap).map(shift);
   let sub = null;
   try { sub = buildPhaseFuelPlan(rem, subPhases, subTrans, dryRate || 2.4, wetRate, remStops); } catch (e) { logDebug('[GPRO][Fuel] locked-start remainder failed: ' + e.message); }
   if (sub && sub.stintFuels) {
@@ -2424,10 +2431,14 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // which this tool doesn't read, so it's left at 1 for Rain.
  // Life is divided by the race-log tyre factor (observed / predicted wear per lap) once active.
  const tyreCal = tyreWearCalibration();
- function stopsFor(tyreTypeIdx, wetFactor, ctFactor) {
+ // Usable km on one set (down to the wear limit) - the same number stopsFor divides the race by.
+ function usableLifeKm(tyreTypeIdx, wetFactor, ctFactor) {
  const life = gappTyreLifeKm({ trackWearLevel, temp: rTemp, supFactor, typeIdx: tyreTypeIdx, suspLvl, aggr, exp, weight, trackWearFactor, wetFactor, ctFactor })
  / ((tyreTypeIdx !== sc.rainTyreTypeIndex && tyreCal.active) ? tyreCal.factor : 1);
- const stops = Math.ceil(trackDistanceTotal / (life * ((100 - wearLimit) / 100))) - 1;
+ return life * ((100 - wearLimit) / 100);
+ }
+ function stopsFor(tyreTypeIdx, wetFactor, ctFactor) {
+ const stops = Math.ceil(trackDistanceTotal / usableLifeKm(tyreTypeIdx, wetFactor, ctFactor)) - 1;
  return Math.max(0, stops);
  }
 
@@ -2524,6 +2535,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
 
   results.push({
   name: c.name, stops, fuelPerStint, stints, lapsPerStint,
+  // Laps one set lasts to the wear limit - the longest stint this compound allows.
+  lifeLaps: Math.floor(usableLifeKm(c.idx, c.wetFactor, ctFactor) / (trackDistanceTotal / laps)),
   total: total.toFixed(1), tcd: tcd.toFixed(1), fld: fld.toFixed(1), pits: pits.toFixed(1),
   finalWear: wearLimit.toFixed(1), isRain, mixedFuelInfo,
   });
@@ -4732,7 +4745,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
    // SINGLE shared fuel-plan source (also used by renderQualify's Q2 "First Stint Fuel") — phase-aware
    // wet/dry per stint and feasible (no non-start stint > TANK_MAX). Using computeRaceFuelPlan here
    // guarantees Q2 and Race Setup produce IDENTICAL stop laps, per-stint fuel and recommended start.
-   const plan = computeRaceFuelPlan(laps, fuelPerLap, analyze.raceProfile, tyreStops, domFuelStart, lockedStart);
+   const plan = computeRaceFuelPlan(laps, fuelPerLap, analyze.raceProfile, tyreStops, domFuelStart, lockedStart, chosenTyreResult.lifeLaps);
    const stops = plan.stops;
    const stints = plan.stints;
    const firstStint = plan.startRecommend;
