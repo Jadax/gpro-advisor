@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.38.5
+// @version 6.38.6
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -6989,7 +6989,9 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  jobs.forEach((j) => queue.push(j));
  }
  if (!queue.length) { pilotLog('Nothing to do — every switched-on step is done or has nothing to act on.'); return false; }
- pilotLog(`▶ Run started for S${next.season} R${next.race}: ${queue.length} step${queue.length !== 1 ? 's' : ''}`);
+ // The installed version is logged so a stale Tampermonkey copy is visible (2026-11-11: a bug fixed
+ // in the repo kept firing because the installed copy was older).
+ pilotLog(`▶ Run started for S${next.season} R${next.race}: ${queue.length} step${queue.length !== 1 ? 's' : ''} (script v${(typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '?'})`);
  saveTabRun({ key: next.key, queue, idx: 0, stage: 'open', started: Date.now(), repeats: 0 });
  tabRunGo(queue[0].url);
  return true;
