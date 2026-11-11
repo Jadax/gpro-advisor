@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.38.1
+// @version 6.38.5
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @match https://www.gpro.net/gb/gpro.asp
@@ -1878,7 +1878,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const ws = wetStartEvidence();
   const pe = rainPolicyEvidence();
   const gt = trackName ? lookupGappTrack(trackName, 'trackData') : null;
-  const pitSec = gt && gt.values ? gt.values[10] : null;
+  const measured = pitLossEvidence();
+  const pitSec = measured ? measured.median : (gt && gt.values ? gt.values[10] : null);
   let startDry = true, basis = 'guide';
   if (ws.medianLaps != null && pe.dryTyrePenalty != null && pe.rainTyrePenalty != null && pitSec) {
   startDry = ws.medianLaps * (pe.dryTyrePenalty - pe.rainTyrePenalty) < pitSec;
@@ -3227,6 +3228,10 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (rec.lapRows) {
  const st = raceStints(rec);
  rec = Object.assign({}, rec, { stintInfo: st.map((x) => ({ compound: x.compound, wetLaps: x.wetLaps })), rainEvidence: rainLapEvidence(rec) });
+ const ploss = measuredPitLoss(rec);
+ if (ploss != null) rec.pitLossMeasured = ploss;
+ const cpl = carProblemLoss(rec);
+ if (cpl != null) rec.carProblemLoss = cpl;
  const win = forecastWindowsFromLaps(rec);
  if (win) rec.forecast = Object.assign({}, rec.forecast || {}, { windows: win, source: 'race report' });
  delete rec.lapRows;
@@ -3442,6 +3447,15 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  }
  // The report repeats the race forecast (live S113 R1-R6, 2026-11-08: "Rain probability: 0% - 5%"
  // or a single "0%"), so forecast-vs-reality is known for every logged race.
+ // "Technical problems / Lap 57  The cooling of the car stopped functioning" (S113 R8 Brands Hatch).
+ const tpAt = t.search(/Technical problems/i);
+ if (tpAt >= 0) {
+ const tpEnd = t.slice(tpAt).search(/Tyres condition after finish/i);
+ const sec = t.slice(tpAt, tpEnd > 0 ? tpAt + tpEnd : tpAt + 800);
+ const tpRe = /Lap\s*(\d+)\s+([^\n\t]+)/gi;
+ rec.techProblems = [];
+ while ((m = tpRe.exec(sec))) rec.techProblems.push({ lap: +m[1], text: m[2].trim(), part: partFromProblemText(m[2]) });
+ }
  const fcRe = /Rain probability:?\s*(\d+)\s*%(?:\s*-\s*(\d+)\s*%)?/gi;
  const fc = [];
  while ((m = fcRe.exec(t))) fc.push({ rainMin: +m[1], rainMax: m[2] != null ? +m[2] : +m[1] });
@@ -3459,6 +3473,13 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // logs what happened (rainEvidence + the forecast snapshot) and rainPolicyEvidence() re-checks it.
  const RACE_FORECASTS_KEY = 'gpro_race_forecasts';
  // The wait field's range is 0..race laps (RaceSetup.asp label "(0 - 75)" at 75-lap Brands Hatch).
+ // Upper bound GPRO prints beside a numeric box, e.g. "Wait to pit if it starts raining: (0 - 75)".
+ function fieldRangeMax(name, root) {
+ const el = (root || document).querySelector(`[name="${name}"]`);
+ const row = el && (el.closest('tr') || el.parentElement);
+ const m = row ? /\(\s*\d+\s*-\s*(\d+)\s*\)/.exec(row.textContent) : null;
+ return m ? +m[1] : null;
+ }
  function lapSeconds(txt) {
  const m = /^(\d+):(\d{2}\.\d{3})$/.exec(String(txt || '').trim());
  return m ? +m[1] * 60 + parseFloat(m[2]) : null;
@@ -3591,6 +3612,79 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  ? `☔ If it rains: stay out on dry tyres (wait ${plan.wait} laps before pitting for Rain). Every forecast window is under 40%, so the plan runs dry; other managers don't switch tyres for a passing shower.`
  : `☔ If it rains: GPRO's default wait kept - in your log, ${plan.breakEven.toFixed(0)}+ laps of rain already pay back pitting to Rain and back, and one forecast window is longer than that.`;
  return `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">${head}${evidence} Own heuristic.</div>`;
+ }
+
+ // ---- part failures: learned from GPRO's own "Technical problems" (v6.38.3) ----
+ // GPRO wiki (Technical Problems / Update Car): a part can fail at any wear, even new, and the
+ // chance rises with wear; 100% does not stop a car starting. No curve is published. So "will this
+ // part break" comes from this manager's own failures: the lowest wear at which a part has broken
+ // becomes the fail line (default 100). Failures below FAILURE_WEAR_FLOOR count as random (forum
+ // TopicId 1681: an admin called a ~67-70% failure "normal unlucky random"), so one freak failure
+ // can't flag every part. First data point: S113 R8 Brands Hatch, Cooling L1 91% at the start
+ // broke on lap 57 of 75 (~98%), then +3 s/lap for 19 laps, P5 -> P8.
+ const FAILURE_WEAR_FLOOR = 90; // own cut-off between "worn out" and "random" failures
+ const FAIL_LINE = () => partFailureEvidence().line;
+ const PROBLEM_PART_WORDS = [['chassis', 'Chassis'], ['engine', 'Engine'], ['front wing', 'Front Wing'], ['rear wing', 'Rear Wing'], ['underbody', 'Underbody'],
+ ['sidepod', 'Sidepods'], ['cooling', 'Cooling'], ['gear', 'Gearbox'], ['brake', 'Brakes'], ['suspension', 'Suspension'], ['electronic', 'Electronics']];
+ function partFromProblemText(txt) {
+ const low = String(txt || '').toLowerCase();
+ const hit = PROBLEM_PART_WORDS.find(([w]) => low.includes(w));
+ return hit ? hit[1] : null;
+ }
+ // Wear when it broke = start + race wear x lap/laps. The finish reading is capped at 100, so for a
+ // part that ended at 100 this is a lower bound (it may have been more worn).
+ function partFailureEvidence() {
+ const fails = [];
+ getRaceLog().forEach((r) => {
+ (r.techProblems || []).forEach((tp) => {
+ const i = PART_NAMES.indexOf(tp.part);
+ if (i < 0 || !r.startWear || !r.finishWear || !(r.laps > 0)) return;
+ const wearAt = r.startWear[i] + (r.finishWear[i] - r.startWear[i]) * Math.min(1, tp.lap / r.laps);
+ fails.push({ season: r.season, race: r.race, track: r.track, part: tp.part, lap: tp.lap, wearAt: Math.round(wearAt * 10) / 10, secPerLap: r.carProblemLoss || null });
+ });
+ });
+ const worn = fails.filter((f) => f.wearAt >= FAILURE_WEAR_FLOOR);
+ const line = worn.length ? Math.floor(Math.min(...worn.map((f) => f.wearAt))) : 100;
+ return { fails, line, basis: worn.length ? worn.reduce((a, f) => (f.wearAt < a.wearAt ? f : a)) : null };
+ }
+ function failLineNote() {
+ const ev = partFailureEvidence();
+ if (!ev.basis) return '';
+ const b = ev.basis;
+ return `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">📒 A part counts as failing when it would end the race at ${ev.line}%+ - your ${esc(b.part)} broke at ~${b.wearAt}% (${esc(b.track)}, S${b.season} R${b.race}, lap ${b.lap}${b.secPerLap ? `, then ${b.secPerLap.toFixed(1)} s/lap slower` : ''}). GPRO publishes no failure curve; this line moves with every failure logged.</div>`;
+ }
+ // What a stop really cost: (pit lap + out lap) - 2 x the median clean dry lap of the race. Stops
+ // whose pit/out lap also carries a mistake or problem are skipped. S113 R8 Brands Hatch: L22
+ // 1:32.3 + L23 1:59.3 vs ~1:21.0 -> ~50 s, double GAPP's 25.5 s pit time.
+ function measuredPitLoss(rec) {
+ const rows = (rec.lapRows || []).filter((r) => r.lap > 1 && r.time);
+ const byLap = {}; rows.forEach((r) => { byLap[r.lap] = r; });
+ const pitLaps = new Set((rec.pits || []).flatMap((p) => [p.lap, p.lap + 1]));
+ const clean = rows.filter((r) => !pitLaps.has(r.lap) && !r.boost && (!r.event || r.event === '-') && !/rain/i.test(r.weather || ''));
+ if (clean.length < 5) return null;
+ const base = medianOf(clean.map((r) => r.time));
+ const losses = (rec.pits || []).map((p) => {
+ const a = byLap[p.lap], b = byLap[p.lap + 1];
+ if (!a || !b || /mistake|problem/i.test(`${a.event} ${b.event}`)) return null;
+ return a.time + b.time - 2 * base;
+ }).filter((x) => x != null && x > 0);
+ return losses.length ? Math.round(medianOf(losses) * 10) / 10 : null;
+ }
+ function pitLossEvidence() {
+ const v = getRaceLog().map((r) => r.pitLossMeasured).filter((x) => x > 0);
+ return v.length ? { median: medianOf(v), n: v.length } : null;
+ }
+ // Seconds per lap a technical problem cost: median "Car problem" lap vs the median clean lap of the
+ // same stint before it.
+ function carProblemLoss(rec) {
+ const rows = (rec.lapRows || []).filter((r) => r.lap > 1 && r.time);
+ const hit = rows.filter((r) => /car problem/i.test(r.event || ''));
+ if (hit.length < 3) return null;
+ const first = Math.min(...hit.map((r) => r.lap));
+ const lastPit = Math.max(0, ...(rec.pits || []).map((p) => p.lap).filter((l) => l < first));
+ const before = rows.filter((r) => r.lap > lastPit + 1 && r.lap < first && !r.boost && (!r.event || r.event === '-') && !/rain/i.test(r.weather || ''));
+ if (before.length < 3) return null;
+ return Math.round((medianOf(hit.map((r) => r.time)) - medianOf(before.map((r) => r.time))) * 100) / 100;
  }
 
  function trackMemoryLine(trackName) {
@@ -3960,6 +4054,38 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return null;
  }
 
+ // The captured /TrackProfile is whatever TrackDetails.asp was read LAST - it can belong to an
+ // earlier race. Every plan for a race must use THAT race's track (Q1/Q2/RaceSetup: the page's own
+ // track name; UpdateCar: the home page's "Next race"). A mismatch is replaced by the race's own
+ // published specs (D.trackPub - laps, tyre wear, power/handling/accel, overtaking, pit time).
+ // Found 2026-11-11: an autopilot race confirm was rejected because the rain wait used another
+ // track's lap count, and a 2-stop plan matches the default 'Medium' tyre wear, while Brands Hatch's
+ // own 'Low' rating gives 1 stop.
+ function trackKeyOf(name) {
+ if (!name) return null;
+ const g = lookupGappTrack(name, 'trackData');
+ return g ? g.key : String(name).toLowerCase().replace(/\(.*?\)|\bgp\b/g, '').replace(/[^a-z]/g, '');
+ }
+ function trackFromPub(key) {
+ const pub = key && D.trackPub && D.trackPub[key];
+ if (!pub) return null;
+ return { trackName: key, laps: pub.laps, timeInOutPits: pub.pitSec, trackPower: pub.power, trackHandl: pub.handling, trackAccel: pub.accel,
+ fuelConsumption: pub.fuelCons, tyreWear: pub.tyreWear, overtaking: pub.overtaking, gripLevel: pub.grip, avgSpeed: pub.avgSpeed, lapDistance: pub.lapKm, __fromPub: true };
+ }
+ function resolveRaceTrack(track, raceTrackName) {
+ const want = trackKeyOf(raceTrackName);
+ if (!want) return track;
+ if (track && trackKeyOf(track.trackName) === want) {
+ // Same track: fill fields the capture lacked from the published specs.
+ const pub = trackFromPub(want);
+ if (pub) Object.keys(pub).forEach((k) => { if (k !== '__fromPub' && (track[k] == null || track[k] === '')) track[k] = pub[k]; });
+ return track;
+ }
+ const pub = trackFromPub(want);
+ if (track) logError(`[GPRO] captured track profile is ${track.trackName}, this race is ${raceTrackName} - using ${pub ? 'its published specs' : 'no track data'}`);
+ return pub || null;
+ }
+
  function analyzeCar(carData, domData, trackData, driver, ctr, league) {
  if (!carData) return null;
  const leagueTargets = getLeagueCarTargets(league);
@@ -4018,7 +4144,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  return { name, idx: i, lvl, wear, remaining, endWear, totalRaceWear, gappRaceWear, ownTotalRaceWear, opts, isFast, alertPct, target, priority,
  critical: remaining <= CRITICAL_WEAR, flagged: remaining <= alertPct,
  belowTarget: lvl < target, atTarget: lvl >= target,
- willFail: laps > 0 && endWear >= 100, atRisk: laps > 0 && endWear >= 85,
+ willFail: laps > 0 && endWear >= FAIL_LINE(), atRisk: laps > 0 && endWear >= 85,
  perfLoss: Math.round(perfLoss * 10) / 10, failRisk };
  });
 
@@ -4920,7 +5046,9 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   fuel.carriedTotal = planTotal;
   fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">Plan carries ~${planTotal}L (fills above, ⚡boost included) over ${fuel.stops} stop${fuel.stops !== 1 ? 's' : ''} · dry ${fuel.fuelPerLap}L/lap. Max tank ${TANK_MAX}L. Each fill covers its laps up to the pit + ~½ lap reserve (GPRO pits once the next lap can't be completed, so extra fuel only moves the pit later); the last stint gets +6% since there's no pit behind it.</div>`;
  if (wetContingency) fsHtml += `<div style="font-size:9px;color:${VERDICT.warn};margin-top:4px;">🌦 Weather contingency — the wet windows are only ${wetContingency.bandText} rain-probability: if the track is clearly dry at any forward pit, fit ${dryCompound} instead of Rain and the fuel numbers still hold (±few L). (own heuristic)</div>`;
-  rainWait = rainWaitPlan(analyze, totalLaps, estimateLapsPerWeatherPeriod(track), tyre && tyre.pitLoss);
+  // Race length from GAPP's track row (by this race's name) first - the captured /TrackProfile can
+  // be a different, earlier track, and a wait above the field's range is rejected by GPRO.
+  rainWait = rainWaitPlan(analyze, (tyre && tyre.laps) || totalLaps, estimateLapsPerWeatherPeriod(track), tyre && tyre.pitLoss);
   fsHtml += wetStartLine(wetStart) + rainWaitLine(rainWait) + forecastEvidenceLine();
   const memLine = trackMemoryLine(trackName);
   if (memLine) fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">📒 Your history here (race log): ${esc(memLine)}</div>`;
@@ -5328,7 +5456,18 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   if (driverRiskRec) Object.assign(fields, { RiskOver: driverRiskRec.overtakeRisk, RiskDefend: driverRiskRec.defendRisk, DriverRisk: driverRiskRec.dryRisk, RiskWet: driverRiskRec.wetRisk, DriverRiskProb: driverRiskRec.malfunctionRisk, StartRisk: driverRiskRec.startRisk, AskPits: 1, LapsStopProb: driverRiskRec.problemPitLaps });
   const boosts = (boostLapsList || []).slice().sort((a, b) => a - b);
   for (let i = 1; i <= 3; i++) fields['BoostLap' + i] = boosts[i - 1] || 0;
-  if (rainWait && rainWait.stayOut) fields.LapsWaitPitRain = rainWait.wait;
+  // GPRO validates the wait against the range printed beside the box ("(0 - 75)" at Brands Hatch)
+  // and rejects the whole confirm otherwise: "The number of laps to wait before pitting when the
+  // track gets wet is invalid" (autopilot run, 2026-11-11). Clamp to that printed max; if it can't
+  // be read, leave the box as GPRO has it.
+  // ALWAYS set: GPRO carries the last race's value into the form (75 from Brands Hatch sat in
+  // Slovakiaring's 0-53 box), so leaving it untouched posts an invalid number. Not staying out = 0
+  // (wiki/Newbie Guide default: pit as soon as it starts raining).
+  {
+  const waitMax = fieldRangeMax('LapsWaitPitRain');
+  const want = (rainWait && rainWait.stayOut) ? rainWait.wait : 0;
+  fields.LapsWaitPitRain = waitMax != null ? Math.min(want, waitMax) : 0;
+  }
   // Wiki/Newbie Guide: GPRO dries the whole track at once, so a car on Rain should pit for dry
   // tyres as soon as it stops raining - wait 0 (GPRO's default is 3).
   fields.LapsWaitPitDry = 0;
@@ -5471,7 +5610,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // projection disagree with analyzeCar's single-race number for the very same race.
   const endWear = Math.min(100, startWear + raceWear);
   runningWear[name] = endWear;
-  return { name, startWear: Math.round(startWear), endWear: Math.round(endWear), raceWear: Math.round(raceWear), willFail: endWear >= 100, atRisk: endWear >= 85 };
+  return { name, startWear: Math.round(startWear), endWear: Math.round(endWear), raceWear: Math.round(raceWear), willFail: endWear >= FAIL_LINE(), atRisk: endWear >= 85 };
  });
  const willFailCount = parts.filter(p => p.willFail).length;
  const atRiskCount = parts.filter(p => p.atRisk && !p.willFail).length;
@@ -5623,7 +5762,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // Recommendations - only ever for parts projected to FAIL this race (user rule, see analyzeCar).
  // Always rendered: with nothing failing it says so plainly instead of the section silently vanishing.
  {
- let recsHtml = analysis.recs.length ? '' : mkRec('No part is projected to break this race — no upgrade, replace or downgrade needed.', 'good');
+ let recsHtml = failLineNote() + (analysis.recs.length ? '' : mkRec('No part is projected to break this race — no upgrade, replace or downgrade needed.', 'good'));
  analysis.recs.forEach(r => {
  const rc = r.color === '#ef4444' ? 'bad' : r.color === '#f59e0b' ? 'warn' : 'info';
  let text = `<strong>${r.part.name}</strong> (L${r.part.lvl}, ${Math.round(r.part.wear)}% wear / ${Math.round(r.part.remaining)}% remaining): ${r.verdict}`;
@@ -7980,7 +8119,7 @@ training: 'Parsing driver training data...',
  // fetching TrackDetails.asp/DriverProfile.asp/StaffAndFacilities.asp/Suppliers.asp) -
  // staff conc/stress for the pit-time calc come from StaffAndFacilities.asp, the TD from the
  // home page's TDProfile.asp link (buildStaffTdInfo).
- const practice = getDataDomOnly('/Practice', buildLivePracticeDOM), track = getDataDomOnly('/TrackProfile');
+ const practice = getDataDomOnly('/Practice', buildLivePracticeDOM), track = resolveRaceTrack(getDataDomOnly('/TrackProfile'), practice && practice.trackName);
  const driver = getDataDomOnly('/DriProfile'), staff = getDataDomOnly('/StaffAndFacilities');
  const car = getDataDomOnly('/UpdateCar', parseQualifyCarDOM), supplierData = getDataDomOnly('/TyreSuppliers');
  const supplier = resolveActiveSupplier(supplierData);
@@ -7990,7 +8129,7 @@ training: 'Parsing driver training data...',
  // Same DOM-only policy as Qualify above, plus Testing (fuel-stint data) now has a real
  // parser (parseTestingDOM) fed by visiting/background-fetching Testing.asp, so it's
  // DOM-only too - Office remains the one confirmed no-DOM-source exception.
-  const practice = getDataDomOnly('/Practice', buildLivePracticeDOM), track = getDataDomOnly('/TrackProfile');
+  const practice = getDataDomOnly('/Practice', buildLivePracticeDOM), track = resolveRaceTrack(getDataDomOnly('/TrackProfile'), practice && practice.trackName);
   const testing = getDataDomOnly('/Testing', parseTestingDOM), driver = getDataDomOnly('/DriProfile');
   const staff = getDataDomOnly('/StaffAndFacilities'), car = getDataDomOnly('/UpdateCar');
   const supplierData = getDataDomOnly('/TyreSuppliers'), leagueInfo = await detectLeagueFresh();
@@ -8005,9 +8144,10 @@ training: 'Parsing driver training data...',
  // always physically on when this runs. getCachedCarData() (this project's separate
  // long-lived DOM-fed car cache, populated by prior visits to this same page) is the base
  // rather than {} purely for continuity if any single DOM field is momentarily unreadable.
-  const [track, driver, leagueInfo] = await Promise.all([
+  const [capturedTrack, driver, leagueInfo] = await Promise.all([
   getDataDomOnly('/TrackProfile'), getDataDomOnly('/DriProfile'), detectLeagueFresh()
   ]);
+  const track = resolveRaceTrack(capturedTrack, (nextRaceInfo() || {}).track);
   const car = getCachedCarData() || {};
   renderUpdateCar(car, track, driver, leagueInfo.league);
  } else if (page === 'staff') {
