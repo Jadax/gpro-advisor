@@ -61,13 +61,10 @@ GPRO gives you raw data. This tool turns it into **decisions**.
 
 You need [Tampermonkey](https://www.tampermonkey.net/) (or a compatible userscript manager) installed in your browser.
 
-1. Clone this repo or download `GPRO_Strategy_Tool.user.js` and `gpro-data.js` into the same folder
-2. Open Tampermonkey dashboard → **Utilities** tab → **Import from file**
-3. Select `GPRO_Strategy_Tool.user.js` (the `@require` for `gpro-data.js` is already configured with a local `file://` path)
-4. **If you moved the files**, update the `@require file://` path in the script header to match your actual file location
-5. **Enable local file access** — go to your browser's extension settings for Tampermonkey and turn on **"Allow access to file URLs."** This is easy to miss and the script will silently fail to load its data without it — if the panel never appears, this is almost always why.
+1. Open https://raw.githubusercontent.com/Jadax/gpro-advisor/main/GPRO_Strategy_Tool.user.js — Tampermonkey shows its install page; click **Install**.
+2. That's it. `gpro-data.js` loads from the same GitHub repo, and Tampermonkey keeps the script up to date from there (`@updateURL`). To pull a new version immediately: Tampermonkey menu → **Check for userscript updates**.
 
-> The `@require` currently points at a local `file://` path rather than a hosted URL, so this is a two-file, same-folder setup rather than a single-click install. If you'd rather host `gpro-data.js` somewhere and point `@require` at that URL instead, that works too.
+The copilot's run log starts with the installed version ("▶ Run started … (script v6.39.0)") so you can see which version ran.
 
 ---
 

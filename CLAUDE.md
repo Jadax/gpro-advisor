@@ -27,7 +27,8 @@ Tampermonkey userscript for gpro.net. Two files: `GPRO_Strategy_Tool.user.js` (l
 
 ## Active Rules
 
-- **After changing `gpro-data.js`: bump BOTH `@version` in the userscript AND the `?v=` on the `@require file://...gpro-data.js` line.** Tampermonkey caches `@require` by exact URL.
+- **Shipping = commit AND push to `origin/main` (github.com/Jadax/gpro-advisor, public).** Since v6.39.0 the user's Tampermonkey copy auto-updates from `raw.githubusercontent.com/Jadax/gpro-advisor/main/` (`@updateURL`/`@downloadURL`) and `gpro-data.js` is `@require`d from there too — an unpushed fix never reaches the game (2026-11-11: a fixed rain-wait bug kept failing because the installed copy was older; the run log now prints the installed version). Always bump `@version` (Tampermonkey only updates on a higher version). Never commit secrets — the repo is public.
+- **After changing `gpro-data.js`: bump BOTH `@version` in the userscript AND the `?v=` on the `@require ...gpro-data.js` line.** Tampermonkey caches `@require` by exact URL.
 - **No API.** Read data via `getDataDomOnly` / page fetches (`fetchPageHTML`); don't reintroduce a token client.
 - **DOM parsers** exist for: UpdateCar, QualifyCar, DriverProfile, TrackDetails, TyreSuppliers, StaffFacilities, Testing, AvailList (markets), TdProfile (**never verified against a live TD profile** — flag if its warning fires), Calendar, NegOverview, Weather, RaceAnalysis (**text-based** on `body.innerText`, built from screenshots, never checked against live markup — its "couldn't read" warning means send a screenshot).
 - **Money strings are dot-thousands** (`$5.902.387`) — reuse `parseGproCash`.
