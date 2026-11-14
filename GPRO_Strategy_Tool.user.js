@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.42.0
+// @version 6.42.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @updateURL https://raw.githubusercontent.com/Jadax/gpro-advisor/main/GPRO_Strategy_Tool.user.js
@@ -32,7 +32,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require https://raw.githubusercontent.com/Jadax/gpro-advisor/main/gpro-data.js?v=5.8.10
+// @require https://raw.githubusercontent.com/Jadax/gpro-advisor/main/gpro-data.js?v=5.8.11
 // @run-at document-idle
 // ==/UserScript==
 
@@ -7665,8 +7665,20 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  const testLapsTrack = t[12] || 60;
  // Measured test wear / GAPP prediction (testingLedger) once 5+ part readings exist.
  const ledger = testingLedger();
- const testWearCal = ledger.testWearRatio || 1;
  out.predWearPerLap = [];
+ // Seeded measurements (D.testWearSeed) on this testing track at the same part level, compared with
+ // the raw GAPP rate below; logged ones (testingLedger) come with their own prediction.
+ const seedRatios = [];
+ (D.testWearSeed || []).filter((sd) => sd.track === testing.trackName).forEach((sd) => {
+ PART_NAMES.forEach((n, i) => {
+ if (sd.wear[n] == null || (sd.levels[n] || 0) !== (parseInt(car[PART_LVL_KEYS[i]]) || 1)) return;
+ const raw = gappPartRaceWear(testWearT, lf, i, sd.levels[n], 0, df) / testLapsTrack;
+ if (raw > 0) seedRatios.push((sd.wear[n] / sd.laps) / raw);
+ });
+ });
+ const allRatios = seedRatios.concat(ledger.testWearRatio != null ? [ledger.testWearRatio] : []);
+ const testWearCal = allRatios.length ? medianOf(allRatios) : 1;
+ out.testWearCal = allRatios.length ? { ratio: testWearCal, n: seedRatios.length + (ledger.testWearRatio != null ? ledger.wearPerLap.length : 0) } : null;
  let lapBudget = lapsLeft, binding = null;
  out.wearAfter = [];
  PART_NAMES.forEach((n, i) => {
@@ -7828,7 +7840,11 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
   }
   if (L.pointsPerLap != null) lines.push(`Measured ${L.pointsPerLap.toFixed(2)} test points/lap (gpro-tools table: ~0.8)`);
   lines.push(L.rate ? `Conversion: ~${L.rate.per100.toFixed(1)} CCP per 100 test laps (${L.rate.laps} laps that have landed)` : `Conversion: not measured yet - needs test laps ${CCP_LAG_RACES}+ races old and race reports since`);
-  lines.push(L.testWearRatio != null ? `Test wear runs ${L.testWearRatio.toFixed(2)}x GAPP's prediction (${L.wearPerLap.length} measured stints) - the wear gates above use it` : 'Test wear per lap: measured from the next stints (part wear is read after every testing reading)');
+  lines.push(tp.testWearCal ? `Test wear runs ${tp.testWearCal.ratio.toFixed(2)}x GAPP's prediction here (${tp.testWearCal.n} measured part readings) - the wear gates above use it` : 'Test wear per lap: measured from the next stints (part wear is read after every testing reading)');
+  {
+  const sd = (D.testWearSeed || []).slice(-1)[0];
+  if (sd) lines.push(`Last measured: ${sd.laps} laps at ${esc(sd.track)} added ${Object.entries(sd.wear).map(([k, v]) => `${k} +${v}`).join(', ')} % wear - roughly a race's worth on the wings and gearbox`);
+  }
   h += mkSection('Testing ledger', `<div style="font-size:10px;color:${PALETTE.text};line-height:1.5;">${lines.map((x) => '• ' + x).join('<br>')}</div>`);
   }
   publishPlan('testing', { form: 'formQual', submit: 'DriveStint', fields: tp.autoFields || {}, skip: tp.skip, meta: { lapsDone: testing.session ? testing.session.lapsDone : null }, summary: tp.skip ? '' : `${tp.autoLaps} laps on ${tp.tyre}, ${tp.autoFields.Fuel}L`, sig: tp.autoFields ? planSig(tp.autoFields) : '' });

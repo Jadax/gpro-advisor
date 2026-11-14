@@ -1845,6 +1845,16 @@ driverAttributeLeaguePriority: {
  // Races transcribed from the user's own GPRO race-analysis screenshots, so calibration starts
  // with real data. A record captured live on RaceAnalysis.asp for the same season/race replaces
  // its seed. Austin: boost laps were not transcribed (null = unknown, not zero).
+ // Measured testing wear (live, 2026-11-14): S113 before race 10, 100 laps at Kyalami (2 x 50,
+ // "No special priority", Hard), wear = Testing.asp's part table now minus the S113 R9 Slovakiaring
+ // finish (no race and no level change in between for these parts; Engine/Brakes/Underbody were
+ // replaced, so left out). Test points after the session: 25.2/25.2/25.2 (0.25 per axis per lap).
+ // Read by testingLedger/calcTestingPlan as measured wear per test lap.
+ testWearSeed: [
+ { season: 113, race: 10, track: 'Kyalami', laps: 100, levels: { 'Chassis': 2, 'Front Wing': 2, 'Rear Wing': 2, 'Sidepods': 2, 'Cooling': 2, 'Gearbox': 3, 'Suspension': 3, 'Electronics': 2 },
+ wear: { 'Chassis': 12, 'Front Wing': 18, 'Rear Wing': 18, 'Sidepods': 10, 'Cooling': 16, 'Gearbox': 18, 'Suspension': 10, 'Electronics': 12 }, testPoints: { p: 25.2, h: 25.2, a: 25.2 } },
+ ],
+
  raceLogSeed: [
  { season: 113, race: 3, track: 'Austin', league: 'Rookie', laps: 56, source: 'screenshot 2026-10-24',
  driver: { oa: 89, con: 174, tal: 130, agr: 0, exp: 110, tei: 94, sta: 6, cha: 81, mot: 74, rep: 0, wei: 86 },
