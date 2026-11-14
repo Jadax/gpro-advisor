@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.40.4
+// @version 6.41.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @updateURL https://raw.githubusercontent.com/Jadax/gpro-advisor/main/GPRO_Strategy_Tool.user.js
@@ -7893,6 +7893,11 @@ const canAffordSessions = Math.floor(data.contract.salary / 750000);
  // ============================================================
  // Shown when the user physically visits a market page — same data as the menu command
  // but using DOM-parsed data when available, falling back to API.
+ // League the manager signs in now (for the OA cap) - set by renderMarketPage; the driver TARGETS can
+ // be another league via the "Choosing a driver for" dropdown (user, 2026-11-14: promotion is coming
+ // and the next driver should fit Amateur).
+ let marketSigningLeague = null;
+ const MARKET_TARGET_LEAGUE_KEY = 'gpro_market_target_league';
  async function renderMarketPage(type) {
  createPanel(type === 'drivers' ? 'Driver Market Advisor' : 'TD Market Advisor');
  body(`<div style="${ST.loading}">Loading market data...</div>`);
@@ -7922,7 +7927,7 @@ const canAffordSessions = Math.floor(data.contract.salary / 750000);
  const marketCash = cachedCarForMarket && cachedCarForMarket.cash > 0 ? cachedCarForMarket.cash : null;
  // Hoisted out of the if/else below so the post-body() wiring section can reference whichever
  // one applies without a ReferenceError (const inside each branch would go out of scope).
- let sel = null, tdSel = null;
+ let sel = null, tdSel = null, targetLeague = null;
 
   if (type === 'drivers') {
   // allRows = page 1 (live) + whatever's cached from a previous visit - a partial view, not the
@@ -7931,9 +7936,16 @@ const canAffordSessions = Math.floor(data.contract.salary / 750000);
   const drivers = allRows;
   h += mkDecisionBoard([{ id: 'gpro-sec-market-drivers', label: 'Drivers', verdict: `${drivers.length} cached so far`, tone: drivers.length ? 'info' : 'warn' }]);
   h += leagueSourceLine(leagueInfo);
-  sel = D.driverSelection && D.driverSelection[league];
+  marketSigningLeague = league;
+  const targetLeagues = Object.keys(D.driverSelection || {});
+  const savedTarget = GM_getValue(MARKET_TARGET_LEAGUE_KEY, '');
+  targetLeague = targetLeagues.includes(savedTarget) ? savedTarget : league;
+  h += `<div style="display:flex;align-items:center;gap:8px;margin:6px 0;font-size:11px;color:#d1d5db;">Choosing a driver for <select id="gpro-target-league" style="background:#111827;color:#e5e7eb;border:1px solid #374151;border-radius:6px;padding:3px 6px;">` +
+  targetLeagues.map((l) => `<option value="${esc(l)}"${l === targetLeague ? ' selected' : ''}>${esc(l)}${l === league ? ' (current)' : ''}</option>`).join('') + `</select></div>`;
+  if (targetLeague !== league) h += `<div style="font-size:9px;color:#f59e0b;margin-bottom:4px;">Targets, filters and scoring follow ${esc(targetLeague)}. GPRO only lets you sign drivers up to your current league's OA cap (${esc(league)}: ${((D.leagues || {})[league] || {}).driverMaxOA || '?'}), so a higher-OA ${esc(targetLeague)} driver can be signed once you are in ${esc(targetLeague)}.</div>`;
+  sel = D.driverSelection && D.driverSelection[targetLeague];
   h += mkSection(`Available Drivers (${drivers.length} cached - set filters below, then Apply/Scan to search the whole market)`,
-  drivers.length ? mkShortlistSection(drivers, 'driId', sel && sel.targetOA, marketCash, league, 'driver', 'drivers', sel && Object.entries(sel.attributes)) : mkRec(emptyReason, 'warn'),
+  drivers.length ? mkShortlistSection(drivers, 'driId', sel && sel.targetOA, marketCash, targetLeague, 'driver', 'drivers', sel && Object.entries(sel.attributes)) : mkRec(emptyReason, 'warn'),
   'gpro-sec-market-drivers');
 
  // Driver selection criteria
@@ -7944,7 +7956,7 @@ const canAffordSessions = Math.floor(data.contract.salary / 750000);
  selHtml += `<div style="font-size:9px;color:#6b7280;padding-left:8px;margin-bottom:2px;">${info.note}</div>`;
  });
  selHtml += `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">${sel.budget}</div>`;
- h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#60a5fa;font-size:11px;font-weight:700;padding:4px 0;">What to look for (${league} league)</summary>${selHtml}</details>`;
+ h += `<details style="margin-top:8px;"><summary style="cursor:pointer;color:#60a5fa;font-size:11px;font-weight:700;padding:4px 0;">What to look for (${targetLeague || league} league)</summary>${selHtml}</details>`;
  } else if (league) {
  // D.driverSelection only has calibrated targets for Rookie/Amateur so far - rather than
  // silently omitting the section for Pro/Master/Elite (which reads as "nothing to shortlist"),
@@ -7981,7 +7993,8 @@ const canAffordSessions = Math.floor(data.contract.salary / 750000);
  // until Apply Filters / Scan is clicked - see ensureFullMarketFetched, called from inside
  // applyFilterBar/runScanAndFilter using type='drivers'/'tds' (sectionId already equals type).
  if (type === 'drivers' && sel) {
- wireScanFullStatsButton('drivers', 'driId', allRows, Object.entries(sel.attributes), league, false, domRows);
+ wireScanFullStatsButton('drivers', 'driId', allRows, Object.entries(sel.attributes), targetLeague || league, false, domRows);
+ document.getElementById('gpro-target-league')?.addEventListener('change', (e) => { GM_setValue(MARKET_TARGET_LEAGUE_KEY, e.target.value); location.reload(); });
  } else if (type === 'tds' && tdSel) {
  wireScanFullStatsButton('tds', 'tdId', allRows, Object.entries(tdSel.skills), league, false, domRows);
  }
@@ -9053,11 +9066,14 @@ training: 'Parsing driver training data...',
  }
  // OA cap validation (from gpro-pitwall) - flag drivers above this league's max OA,
  // which GPRO will not let you sign, so they're interesting to look at but unusable.
- const leagueCap = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.leagues && GPRO_DATA.leagues[league]) ? GPRO_DATA.leagues[league].driverMaxOA : null;
+ // The cap is the league the manager signs in NOW (marketSigningLeague), even when the targets
+ // are for the league they're heading to.
+ const capLeague = marketSigningLeague || league;
+ const leagueCap = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.leagues && GPRO_DATA.leagues[capLeague]) ? GPRO_DATA.leagues[capLeague].driverMaxOA : null;
  if (cfgLabel === 'driver' && leagueCap && leagueCap < 999) {
  const overCap = rows.filter(r => (parseFloat(r.OA) || 0) > leagueCap);
  if (overCap.length) {
-  h += `<div style="font-size:9px;color:#ef4444;margin-bottom:4px;">⚠️ ${overCap.length} listed above ${league}'s driver OA cap (${leagueCap}) - GPRO won't let you sign these, so they're look-don't-touch.</div>`;
+  h += `<div style="font-size:9px;color:#ef4444;margin-bottom:4px;">⚠️ ${overCap.length} listed above ${capLeague}'s driver OA cap (${leagueCap}) - GPRO won't let you sign these, so they're look-don't-touch.</div>`;
  }
  }
  // Filter bar defaults: sourced OA target range + attribute floors (Rookie/Amateur drivers today
