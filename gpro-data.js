@@ -1347,8 +1347,11 @@ Rookie: {
  // of just the raw-lowest number (e.g. Talent is untrainable and only matters starting Master/Elite,
  // so flagging it as the #1 "weakest skill" for a Rookie driver is not useful advice).
 driverAttributeLeaguePriority: {
-  Rookie: ['concentration', 'stamina', 'experience'],
-  Amateur: ['concentration', 'stamina', 'techInsight'],
+  // Rookie/Amateur re-ordered 2026-11-14 to the user's experienced-manager rules (2026-11-05:
+  // "Stamina = speed", stamina/motivation most important, tech insight not needed). The driver's
+  // stamina fell 7 -> 2 -> 0 over S113 while he ran ~1.5 s/lap off the winner at Slovakiaring.
+  Rookie: ['stamina', 'concentration', 'experience'],
+  Amateur: ['stamina', 'concentration', 'experience'],
   Pro: ['concentration', 'stamina', 'aggressiveness'],
   Master: ['concentration', 'talent', 'stamina'],
   Elite: ['talent', 'concentration', 'stamina'],

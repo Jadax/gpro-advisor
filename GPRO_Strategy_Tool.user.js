@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.39.0
+// @version 6.40.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @updateURL https://raw.githubusercontent.com/Jadax/gpro-advisor/main/GPRO_Strategy_Tool.user.js
@@ -32,7 +32,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require https://raw.githubusercontent.com/Jadax/gpro-advisor/main/gpro-data.js?v=5.8.7
+// @require https://raw.githubusercontent.com/Jadax/gpro-advisor/main/gpro-data.js?v=5.8.8
 // @run-at document-idle
 // ==/UserScript==
 
@@ -1717,7 +1717,7 @@ if (h.includes('TrainingSession.asp')) return 'training';
   // Number of compound changes needed (pit stops for tyres only, not fuel)
   const tyreStops = transitions.length;
   const raceProfile = { type: raceType, phases, transitions, tyreStops, drySegments: segCondition.map((c,i) => c === 'dry' ? i : -1).filter(i => i >= 0), wetSegments: segCondition.map((c,i) => c === 'wet' ? i : -1).filter(i => i >= 0) };
-  return { segs, maxRain, avgTemp, hasRain, startRainRisk, commitRain: startRainRisk >= 40, isRainAllRace, raceProfile };
+  return { segs, maxRain, avgTemp, hasRain, startRainRisk, commitRain: startRainRisk >= 40, isRainAllRace, raceProfile, lapsPerPeriod: lpp };
   }
 
  // ============================================================
@@ -1911,22 +1911,62 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // wet(1→transLap-1) + dry(transLap→end) so the tyre/fuel plan opens on Rain then pits for the dry
   // compound at the transition. Keeping this in ONE place guarantees Q2 and Race Setup agree — they
   // previously computed fuel plans from different wet-state sources and drifted.
+  // ---- race-start weather vs the forecast's first window (v6.40.0) ----
+  // The Q2/Race-start box IS the weather at the start (wiki "Weather"); the forecast % is the chance
+  // rain STARTS in a window (forum 18300). So the first phase of the plan follows the start weather:
+  //  - rain at the start, forecast dry: wet first, then dry (wet-start split; the stop lap is still the
+  //    old unsourced 25% of the race - wetStartChoice usually turns these into dry starts anyway);
+  //  - DRY at the start, first window(s) wet (S113 R10 Melbourne: dry box, 65-75/70-75/80-85/60-65%):
+  //    dry until rain is expected to start, then wet. The advisor used to plan Rain from lap 1 while
+  //    GPRO had set Medium for the start. Rain start lap = window start + (median fraction into the
+  //    window where logged rain really started; 0.5 until any is logged - own assumption).
+  function rainStartEvidence() {
+  const fr = [];
+  getRaceLog().forEach((r) => {
+  const ev = r.rainEvidence, ws = r.forecast && r.forecast.windows;
+  if (!ev || ev.startWet || !ev.wetLapList || !ev.wetLapList.length || !ws) return;
+  const first = Math.min(...ev.wetLapList);
+  const w = ws.find((x) => x.startLap != null && first >= x.startLap && first <= x.endLap);
+  if (w && w.endLap >= w.startLap) fr.push((first - w.startLap) / (w.endLap - w.startLap + 1));
+  });
+  return { n: fr.length, frac: fr.length ? medianOf(fr) : 0.5 };
+  }
+  function applyRaceStartWeather(analyze, laps, startWet) {
+  const rp = analyze && analyze.raceProfile;
+  if (!rp || !rp.phases || !rp.phases.length || !(laps > 0) || startWet == null) return;
+  const first = rp.phases[0];
+  const wantStart = startWet ? 'wet' : 'dry';
+  if (first.condition === wantStart) return;
+  let cut;
+  if (startWet) {
+  cut = Math.round((1 / 4) * laps) + 1;
+  } else {
+  const lpp = analyze.lapsPerPeriod || LAPS_PER_PERIOD_FALLBACK;
+  cut = first.startLap + Math.round(rainStartEvidence().frac * Math.min(lpp, first.laps));
+  }
+  cut = Math.max(2, Math.min(cut, first.endLap));
+  const head = { condition: wantStart, startLap: 1, endLap: cut - 1, laps: cut - 1 };
+  const rest = Object.assign({}, first, { startLap: cut, laps: first.endLap - cut + 1 });
+  let phases = [head].concat(rest.laps > 0 ? [rest] : [], rp.phases.slice(1));
+  // merge neighbours with the same condition (a wet start over a dry forecast)
+  phases = phases.reduce((acc, p) => {
+  const last = acc[acc.length - 1];
+  if (last && last.condition === p.condition) { last.endLap = p.endLap; last.laps = last.endLap - last.startLap + 1; } else acc.push(Object.assign({}, p));
+  return acc;
+  }, []);
+  rp.phases = phases;
+  rp.transitions = phases.slice(1).map((p, k) => ({ lap: p.startLap, from: phases[k].condition, to: p.condition }));
+  rp.tyreStops = rp.transitions.length;
+  rp.type = phases.length === 1 ? phases[0].condition : 'mixed';
+  rp.rainStartEstimated = !startWet;
+  analyze.isRainAllRace = rp.type === 'wet';
+  }
+
   function resolveRaceStartProfile(weather, totalLaps, raceStartWet, baseAnalyze) {
   const analyze = baseAnalyze || analyzeWeather(weather, totalLaps);
   if (raceStartWet === null || raceStartWet === undefined || !analyze) return { analyze, phases: (analyze && analyze.raceProfile && analyze.raceProfile.phases) || [], transitions: (analyze && analyze.raceProfile && analyze.raceProfile.transitions) || [] };
   analyze.commitRain = !!raceStartWet;
-  if (raceStartWet && analyze.raceProfile && analyze.raceProfile.type === 'dry') {
-  const rp = analyze.raceProfile;
-  const transLap = totalLaps > 0 ? Math.round((1 / 4) * totalLaps) + 1 : 0;
-  rp.type = 'mixed';
-  rp.phases = [
-  { condition: 'wet', startLap: 1, endLap: Math.max(1, transLap - 1), laps: Math.max(1, transLap - 1) },
-  { condition: 'dry', startLap: transLap, endLap: Math.max(transLap, totalLaps), laps: Math.max(1, totalLaps - transLap + 1) }
-  ];
-  rp.transitions = transLap > 0 ? [{ lap: transLap, from: 'wet', to: 'dry' }] : [];
-  rp.tyreStops = rp.transitions.length;
-  analyze.isRainAllRace = false;
-  }
+  applyRaceStartWeather(analyze, totalLaps, raceStartWet);
    return { analyze, phases: (analyze.raceProfile && analyze.raceProfile.phases) || [], transitions: (analyze.raceProfile && analyze.raceProfile.transitions) || [] };
    }
 
@@ -1959,6 +1999,10 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   while (pit1 < laps && used + rateLap(pit1 + 1) <= lockedStart) { used += rateLap(pit1 + 1); pit1++; }
   if (pit1 >= laps) return { stopLaps: [], stops: 0, stints: 1, stintFuels: [lockedStart], startRecommend: lockedStart, committedFuel: lockedStart, lockedStart };
   pit1 = Math.max(1, pit1);
+  // A weather change before the locked fuel runs out is the first stop: GPRO pits for it (wait 0)
+  // and refuels there (S113 R10 Melbourne: dry start, rain expected ~L11, 87 L would reach ~L20).
+  const earlyTrans = transLaps.filter((l) => l > 1 && l - 1 < pit1);
+  if (earlyTrans.length) pit1 = Math.min(...earlyTrans) - 1;
   const rem = laps - pit1;
   const strategyStint = maxStintLaps > 0 ? maxStintLaps : Math.ceil(laps / Math.max(1, (tyreStops || 0) + 1));
   const remStops = Math.max((tyreStops || 0) - 1, Math.ceil(rem / strategyStint) - 1, 0);
@@ -2264,21 +2308,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // Use DOM widget rain state when provided (overrides forecast-based commitRain)
   if (domRaceWet !== null && domRaceWet !== undefined && analyze) {
   analyze.commitRain = !!domRaceWet;
-  // Fix race profile: DOM says rain at start but forecast says dry → adjust to wet→dry mixed
-  if (domRaceWet && analyze.raceProfile && analyze.raceProfile.type === 'dry') {
-  const rp = analyze.raceProfile;
-  const transLap = laps > 0 ? Math.round((1 / 4) * laps) + 1 : 0;
-  // Split the single forecast-dry phase into wet (1..transLap-1) + dry (transLap..end).
-  // A single phase flipped to wet without splitting left the whole race wet — real bug (v6.25.0).
-  rp.type = 'mixed';
-  rp.phases = [
-  { condition: 'wet', startLap: 1, endLap: Math.max(1, transLap - 1), laps: Math.max(1, transLap - 1) },
-  { condition: 'dry', startLap: transLap, endLap: Math.max(transLap, laps), laps: Math.max(1, laps - transLap + 1) }
-  ];
-  rp.transitions = transLap > 0 ? [{ lap: transLap, from: 'wet', to: 'dry' }] : [];
-  rp.tyreStops = rp.transitions.length;
-  analyze.isRainAllRace = false;
-  }
+  // Race-start weather (DOM widget) decides the first phase, both ways (applyRaceStartWeather)
+  applyRaceStartWeather(analyze, laps, domRaceWet);
   }
   let finalRec;
   let recReason;
@@ -2474,19 +2505,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // Use DOM widget rain state when provided (overrides forecast-based commitRain)
   if (domRaceWet !== null && domRaceWet !== undefined && analyze) {
   analyze.commitRain = !!domRaceWet;
-  // Fix race profile: DOM says rain at start but forecast says dry → adjust to wet→dry mixed
-  if (domRaceWet && analyze.raceProfile && analyze.raceProfile.type === 'dry') {
-  const rp = analyze.raceProfile;
-  const transLap = laps > 0 ? Math.round((1 / 4) * laps) + 1 : 0;
-  rp.type = 'mixed';
-  rp.phases = [
-  { condition: 'wet', startLap: 1, endLap: Math.max(1, transLap - 1), laps: Math.max(1, transLap - 1) },
-  { condition: 'dry', startLap: transLap, endLap: Math.max(transLap, laps), laps: Math.max(1, laps - transLap + 1) }
-  ];
-  rp.transitions = transLap > 0 ? [{ lap: transLap, from: 'wet', to: 'dry' }] : [];
-  rp.tyreStops = rp.transitions.length;
-  analyze.isRainAllRace = false;
-  }
+  // Race-start weather (DOM widget) decides the first phase, both ways (applyRaceStartWeather)
+  applyRaceStartWeather(analyze, laps, domRaceWet);
   }
   const raceProfile = analyze ? analyze.raceProfile : null;
   const weatherStops = raceProfile ? raceProfile.transitions.length : 0;
@@ -3687,6 +3707,68 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const before = rows.filter((r) => r.lap > lastPit + 1 && r.lap < first && !r.boost && (!r.event || r.event === '-') && !/rain/i.test(r.weather || ''));
  if (before.length < 3) return null;
  return Math.round((medianOf(hit.map((r) => r.time)) - medianOf(before.map((r) => r.time))) * 100) / 100;
+ }
+
+ // ---- the field: RaceSummary.asp (v6.40.0) ----
+ // Every race report links its group's race summary ("Race summary -> RaceSummary.asp?Group=Rookie -
+ // 40&Season=113&Race=9"): position, manager, race time/gap, laps, pitstops, best lap, best pit time
+ // for every car. Logged with the race so "why did I finish where I did" is answered from data:
+ // pace gap to the winner, pit time vs the field, stop counts of the cars ahead. S113 R9
+ // Slovakiaring: everyone in the top 4 stopped twice; the winner's best lap was 1.45 s faster and our
+ // best pit 26.4 s vs 21-25 s for most of the field.
+ function raceSummaryHref(doc) {
+ const a = Array.from(doc.querySelectorAll('a[href*="RaceSummary.asp"]'))[0];
+ // The href carries raw spaces ("Group=Rookie - 40").
+ return a ? encodeURI(a.getAttribute('href')) : null;
+ }
+ function parseRaceSummaryDoc(doc) {
+ const rows = [];
+ doc.querySelectorAll('tr').forEach((tr) => {
+ const c = Array.from(tr.children).map((td) => td.textContent.replace(/\s+/g, ' ').trim());
+ const pos = /^(\d+)\.$/.exec(c[0] || '');
+ if (!pos) return;
+ // race time / gap: "1h35:02.105", "+ 1:18.734", "+ 41.053" or "+ 1 lap" - NOT the places-gained column ("+3")
+ const ti = c.findIndex((x) => /^(\d+h)?\d+:\d{2}\.\d{3}$|^\+\s*(\d+:)?\d+\.\d+$|^\+\s*\d+\s*laps?$/i.test(x));
+ // best lap = first lap-time cell AFTER the race time (a sub-1h winner's time has the same shape)
+ const bl = c.findIndex((x, i) => i > ti && /^\d+:\d{2}\.\d{3}$/.test(x));
+ const pit = c.slice().reverse().find((x) => /^\d+(\.\d+)?s$/.test(x));
+ if (ti < 1 || bl < 0) return;
+ const ints = c.slice(ti + 1, bl).filter((x) => /^\d+$/.test(x)).map(Number);
+ rows.push({ pos: +pos[1], name: c[ti - 1], time: c[ti], laps: ints[0] != null ? ints[0] : null, stops: ints[1] != null ? ints[1] : null,
+ bestLap: lapSeconds(c[bl]), bestPit: pit ? parseFloat(pit) : null });
+ });
+ return rows.length ? rows : null;
+ }
+ // Seconds behind the winner from the summary's "1h35:02.105" / "+ 1:27.667" (lapped cars: null).
+ function gapSeconds(t) {
+ const m = /^\+\s*(?:(\d+):)?(\d+\.\d+)$/.exec(String(t || '').trim());
+ return m ? (+(m[1] || 0)) * 60 + parseFloat(m[2]) : null;
+ }
+ function fieldReport(rec) {
+ const f = rec && rec.field;
+ if (!f || !f.length || !rec.finishPos) return null;
+ const me = f.find((r) => r.pos === rec.finishPos);
+ const win = f.find((r) => r.pos === 1);
+ if (!me || !win) return null;
+ const ahead = f.filter((r) => r.pos < me.pos);
+ const pits = f.map((r) => r.bestPit).filter((x) => x > 0);
+ const gap = me.pos === 1 ? 0 : gapSeconds(me.time);
+ return {
+ pos: me.pos, gap, perLap: gap != null && rec.laps ? gap / rec.laps : null,
+ bestLapGap: me.bestLap && win.bestLap ? me.bestLap - win.bestLap : null,
+ myPit: me.bestPit, fieldPit: pits.length ? medianOf(pits) : null, bestFieldPit: pits.length ? Math.min(...pits) : null,
+ myStops: me.stops, aheadStops: ahead.map((r) => r.stops),
+ };
+ }
+ function fieldReportHtml(rec) {
+ const r = fieldReport(rec);
+ if (!r) return '';
+ const bits = [];
+ if (r.gap != null && r.pos > 1) bits.push(`${r.gap.toFixed(1)} s behind the winner (${r.perLap.toFixed(2)} s/lap)`);
+ if (r.bestLapGap != null) bits.push(`best lap ${r.bestLapGap >= 0 ? '+' : ''}${r.bestLapGap.toFixed(2)} s vs the winner's`);
+ if (r.myPit && r.fieldPit) bits.push(`best pit ${r.myPit.toFixed(1)} s vs field median ${r.fieldPit.toFixed(1)} s (best ${r.bestFieldPit.toFixed(1)} s)`);
+ if (r.aheadStops.length) bits.push(`cars ahead stopped ${r.aheadStops.join('/')} times, you ${r.myStops}`);
+ return mkSection('Against the field', `<div style="font-size:10px;color:#d1d5db;">P${r.pos}: ${bits.join(' · ')}.</div>`);
  }
 
  function trackMemoryLine(trackName) {
@@ -6761,9 +6843,9 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const locked = new Set(st.harvest.locked || []);
  // A race counts as logged only once it carries its forecast windows - records captured before
  // v6.37.0 (and screenshot seeds) are re-read once so forecast-vs-reality covers them too.
- const logged = new Set(getRaceLog().filter((r) => r.forecast && r.forecast.windows && r.forecast.source === 'race report').map((r) => `${r.season},${r.race}`));
+ const logged = new Set(getRaceLog().filter((r) => r.forecast && r.forecast.windows && r.forecast.source === 'race report' && r.field).map((r) => `${r.season},${r.race}`));
  let queue = st.harvest.queue || [];
- if (!queue.length || Date.now() - (st.harvest.listedAt || 0) > 12 * 3600e3 || !st.harvest.forecastPass) {
+ if (!queue.length || Date.now() - (st.harvest.listedAt || 0) > 12 * 3600e3 || st.harvest.forecastPass !== 2) {
  // The season dropdown (S) lists every season this manager raced; each season's race dropdown
  // (SR) lists its races. Re-listed every 12 h so new races join the queue.
  const first = new DOMParser().parseFromString(await fetchPageHTML('RaceAnalysis.asp'), 'text/html');
@@ -6777,18 +6859,26 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  Array.from(d.querySelectorAll('select[name="SR"] option')).forEach((o) => { if (o.value && !logged.has(o.value) && !locked.has(o.value)) queue.push(o.value); });
  }
  st.harvest.listedAt = Date.now();
- st.harvest.forecastPass = true;
+ st.harvest.forecastPass = 2; // 2 = re-read once more for the race summary (v6.40.0)
  }
  let added = 0, tried = 0;
  while (queue.length && tried < maxPages) {
  const sr = queue.shift(); tried++;
  await pause(PILOT_FETCH_GAP_MS);
  try {
- const rec = parseRaceAnalysisText(docToText(new DOMParser().parseFromString(await fetchPageHTML(`RaceAnalysis.asp?S=${sr.split(',')[0]}&SR=${sr}`), 'text/html')));
- if (rec) { saveRaceRecord(rec); added++; } else locked.add(sr);
+ const rDoc = new DOMParser().parseFromString(await fetchPageHTML(`RaceAnalysis.asp?S=${sr.split(',')[0]}&SR=${sr}`), 'text/html');
+ const rec = parseRaceAnalysisText(docToText(rDoc));
+ if (rec) {
+ const sumHref = raceSummaryHref(rDoc);
+ if (sumHref) {
+ await pause(PILOT_FETCH_GAP_MS);
+ try { rec.field = parseRaceSummaryDoc(new DOMParser().parseFromString(await fetchPageHTML(sumHref), 'text/html')); } catch (e) { logError('race summary fetch failed', sr, e.message); }
+ }
+ saveRaceRecord(rec); added++;
+ } else locked.add(sr);
  } catch (e) { logError('race history fetch failed', sr, e.message); }
  }
- const st2 = pilotState(); st2.harvest = { queue, listedAt: st.harvest.listedAt, locked: Array.from(locked), forecastPass: !!st.harvest.forecastPass }; savePilotState(st2);
+ const st2 = pilotState(); st2.harvest = { queue, listedAt: st.harvest.listedAt, locked: Array.from(locked), forecastPass: st.harvest.forecastPass || 0 }; savePilotState(st2);
  if (added) say(`📒 Race log: +${added} race${added !== 1 ? 's' : ''} from your history (${queue.length} still queued)`);
  }
 
@@ -7342,6 +7432,18 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  h += mkRec('Couldn\'t read this race analysis (the text parser hasn\'t matched this page layout). Nothing was logged - please send a screenshot so the parser can be fixed.', 'warn');
  } else {
  saveRaceRecord(rec);
+ const sumHref = raceSummaryHref(document);
+ if (sumHref) {
+ fetchPageHTML(sumHref).then((html) => {
+ const field = parseRaceSummaryDoc(new DOMParser().parseFromString(html, 'text/html'));
+ if (!field) return;
+ const stored = getRaceLog().find((r) => r.season === rec.season && r.race === rec.race);
+ if (stored) { stored.field = field; saveRaceRecord(stored); }
+ const box = document.getElementById('gpro-field-report');
+ if (box) box.innerHTML = fieldReportHtml(Object.assign({}, rec, { field }));
+ }).catch((e) => logError('race summary fetch failed:', e.message));
+ }
+ h += '<div id="gpro-field-report"></div>';
  h += mkRec(`✅ Logged S${rec.season} R${rec.race} ${esc(rec.track)}${rec.startPos ? ` — P${rec.startPos} → P${rec.finishPos}` : ''}. ${rec.lapRows.length ? '' : 'Lap table not read (fuel/tyre stints may be incomplete).'}`, 'good');
  const rows = racePartWearRatios(rec);
  if (rows) {
