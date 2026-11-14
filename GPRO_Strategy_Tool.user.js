@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.41.0
+// @version 6.42.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @updateURL https://raw.githubusercontent.com/Jadax/gpro-advisor/main/GPRO_Strategy_Tool.user.js
@@ -7516,6 +7516,99 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  // Returns the stint to drive if you test now (`fields`, always computed when data allows - the
  // Testing Advisor shows it for manual testing) plus the autopilot's verdict: `skip` = the first
  // gate that fails (policy/standing/cash/wear), `autoFields` = the wear-limited stint it would drive.
+ // ---- testing with an aim + a ledger (v6.42.0, user 2026-11-14: "testing should always have an aim
+ // ... keep track of it ... testing also makes parts wear") ----
+ // Research priority -> test points per lap on P/H/A: gpro-tools.eu/en/car-testing (linear in laps;
+ // 10-lap values / 10): no priority 0.27 each; Top speed / Cornering / Hairpins put 0.65 on Power /
+ // Handling / Acceleration and 0.08 on the others; Braking/Overtaking/Chicanes 0.2/0.4 mixes; Test
+ // car limits / Setup tuning ~0.02. Test points become R&D -> Engineering -> CCP over the next 3
+ // races (wiki Car_Character_Points; gpro-pitwall TestingProjectionService); the rate depends on
+ // facilities/staff and is not published - measured below from this manager's own races.
+ const TEST_PRIORITY_POINTS = {
+ 'No special priority': { p: 0.27, h: 0.27, a: 0.27 },
+ 'Top speed': { p: 0.65, h: 0.08, a: 0.08 }, 'Cornering': { p: 0.08, h: 0.65, a: 0.08 }, 'Hairpins': { p: 0.08, h: 0.08, a: 0.65 },
+ 'Braking': { p: 0.2, h: 0.4, a: 0.2 }, 'Overtaking': { p: 0.4, h: 0.2, a: 0.2 }, 'Chicanes': { p: 0.2, h: 0.2, a: 0.4 },
+ };
+ const AXIS_PRIORITY = { p: 'Top speed', h: 'Cornering', a: 'Hairpins' };
+ const CCP_LAG_RACES = 3; // wiki: test points reach the car over the next 3 races
+ // Car P/H/A explained by part levels alone (D.phaContrib x level, = GAPP profileFactors - reproduces the
+ // real S113 R9 car 36/32/34 from its levels to within 0.2).
+ function phaFromParts(levels) {
+ const pc = D.phaContrib;
+ if (!pc || !levels || levels.length !== PART_NAMES.length) return null;
+ const out = { p: 0, h: 0, a: 0 };
+ PART_NAMES.forEach((n, i) => { const c = pc[n]; if (c) { out.p += c.power * levels[i]; out.h += c.handling * levels[i]; out.a += c.accel * levels[i]; } });
+ return out;
+ }
+ // CCP bank per logged race = the race report's car P/H/A minus what the part levels explain.
+ function ccpBankHistory() {
+ return getRaceLog().filter((r) => r.carPHA && r.partLevels).map((r) => {
+ const parts = phaFromParts(r.partLevels);
+ if (!parts) return null;
+ return { season: r.season, race: r.race, track: r.track, p: Math.round((r.carPHA.p - parts.p) * 10) / 10, h: Math.round((r.carPHA.h - parts.h) * 10) / 10, a: Math.round((r.carPHA.a - parts.a) * 10) / 10 };
+ }).filter(Boolean);
+ }
+ function getTestLog() { try { return JSON.parse(GM_getValue('gpro_test_points_log', '[]')) || []; } catch (e) { return []; } }
+ // What testing has done so far: laps/sessions per race, money, measured test points per lap, wear
+ // per test lap (UpdateCar read straight after each new Testing reading), CCP bank and the measured
+ // CCP per 100 test laps once the 3-race lag has passed.
+ function testingLedger() {
+ const log = getTestLog();
+ const byRace = {};
+ log.forEach((e) => { if (!e.race || !e.session) return; const b = byRace[e.race] = byRace[e.race] || { laps: 0 }; b.laps = Math.max(b.laps, e.session.lapsDone || 0); });
+ const races = Object.keys(byRace).filter((k) => byRace[k].laps > 0);
+ const laps = races.reduce((a, k) => a + byRace[k].laps, 0);
+ const wearPerLap = [], pointsPerLap = [];
+ for (let i = 1; i < log.length; i++) {
+ const a = log[i - 1], b = log[i];
+ if (!a.race || a.race !== b.race || !a.session || !b.session) continue;
+ const dl = (b.session.lapsDone || 0) - (a.session.lapsDone || 0);
+ if (dl <= 0) continue;
+ if (a.wear && b.wear && a.wear.length === b.wear.length) wearPerLap.push({ laps: dl, track: b.track || null, perLap: b.wear.map((w, k) => (w - a.wear[k]) / dl), pred: b.predWearPerLap || null });
+ const tp = (x) => x.points && x.points.test ? x.points.test.p + x.points.test.h + x.points.test.a : null;
+ if (tp(a) != null && tp(b) != null && tp(b) >= tp(a)) pointsPerLap.push((tp(b) - tp(a)) / dl);
+ }
+ const bank = ccpBankHistory();
+ // conversion: CCP gained between the first and the latest logged race / laps tested at least
+ // CCP_LAG_RACES races before the latest one
+ let rate = null;
+ if (bank.length >= 2 && races.length) {
+ const first = bank[0], last = bank[bank.length - 1];
+ const gain = (last.p + last.h + last.a) - (first.p + first.h + first.a);
+ const landed = races.filter((k) => { const [s, r] = k.split('-').map(Number); return s === last.season && r <= last.race - CCP_LAG_RACES + 1 && r > first.race - CCP_LAG_RACES; })
+ .reduce((acc, k) => acc + byRace[k].laps, 0);
+ if (landed >= 20) rate = { per100: gain / landed * 100, laps: landed, gain };
+ }
+ const ratios = [];
+ wearPerLap.forEach((w) => { if (w.pred) w.perLap.forEach((x, k) => { if (w.pred[k] > 0 && x >= 0) ratios.push(x / w.pred[k]); }); });
+ return { races: races.length, laps, cost: races.length * TEST_SESSION_COST, wearPerLap, testWearRatio: ratios.length >= 5 ? medianOf(ratios) : null,
+ pointsPerLap: pointsPerLap.length ? medianOf(pointsPerLap) : null, bank, rate };
+ }
+ // Aim: the axis the remaining calendar needs most relative to what the car has. CCP lands
+ // CCP_LAG_RACES races later, so tracks before that don't count; with too few left (end of season,
+ // promotion) the whole calendar stands in for next season (tracks repeat with the same P/H/A).
+ // Own heuristic.
+ function testingAim(car) {
+ const cal = D.currentSeasonPHA || [];
+ let next = null;
+ try { next = JSON.parse(GM_getValue('gpro_next_race', 'null')); } catch (e) { next = null; }
+ const from = next && next.race ? next.race + CCP_LAG_RACES : 1;
+ let tracks = cal.filter((t) => t.race >= from);
+ let scope = `races ${from}-${cal.length ? Math.max(...cal.map((t) => t.race)) : '?'}`;
+ if (tracks.length < 3) { tracks = cal; scope = 'the whole calendar (next season - CCP lands after this one ends)'; }
+ if (!tracks.length) return null;
+ const need = { p: 0, h: 0, a: 0 };
+ tracks.forEach((t) => { need.p += t.power || 0; need.h += t.handling || 0; need.a += t.accel || 0; });
+ const lv = car ? PART_LVL_KEYS.map((k) => parseInt(car[k]) || 1) : null;
+ const have = phaFromParts(lv) || { p: 1, h: 1, a: 1 };
+ const tn = need.p + need.h + need.a, th = have.p + have.h + have.a;
+ const gap = { p: need.p / tn - have.p / th, h: need.h / tn - have.h / th, a: need.a / tn - have.a / th };
+ const axis = Object.keys(gap).sort((x, y) => gap[y] - gap[x])[0];
+ const names = { p: 'Power', h: 'Handling', a: 'Acceleration' };
+ return { axis, axisName: names[axis], priority: AXIS_PRIORITY[axis], scope, perLap: TEST_PRIORITY_POINTS[AXIS_PRIORITY[axis]],
+ why: `${names[axis]}: ${scope} ask for ${Math.round(need[axis] / tn * 100)}% ${names[axis].toLowerCase()} and your car has ${Math.round(have[axis] / th * 100)}%` };
+ }
+
  function calcTestingPlan(testing, league) {
  const out = { skip: null, why: '', warnings: [] };
  const gate = (reason) => { out.warnings.push(reason); if (!out.skip) out.skip = reason; };
@@ -7544,7 +7637,7 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  }
  const car = mergeWithCachedCarData(getDataDomOnly('/UpdateCar'));
  const driver = getDataDomOnly('/DriProfile');
- const nextTrack = getDataDomOnly('/TrackProfile');
+ const nextTrack = resolveRaceTrack(getDataDomOnly('/TrackProfile'), (nextRaceInfo() || {}).track);
  const testGapp = lookupGappTrack(testing.trackName, 'trackData');
  const testWearT = lookupGappTrack(testing.trackName, 'wearData');
  if (!car || !driver || !testGapp || !testWearT) { gate(`missing ${!testGapp || !testWearT ? 'GAPP data for ' + (testing.trackName || 'the testing track') : 'car/driver data'}`); return out; }
@@ -7570,10 +7663,16 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  const df = calcDriverWearFactor(driver);
  const lf = D.gapp.levelFactors;
  const testLapsTrack = t[12] || 60;
+ // Measured test wear / GAPP prediction (testingLedger) once 5+ part readings exist.
+ const ledger = testingLedger();
+ const testWearCal = ledger.testWearRatio || 1;
+ out.predWearPerLap = [];
  let lapBudget = lapsLeft, binding = null;
  out.wearAfter = [];
  PART_NAMES.forEach((n, i) => {
- const perLap = gappPartRaceWear(testWearT, lf, i, parseInt(car[PART_LVL_KEYS[i]]) || 1, 0, df) / testLapsTrack;
+ const perLapRaw = gappPartRaceWear(testWearT, lf, i, parseInt(car[PART_LVL_KEYS[i]]) || 1, 0, df) / testLapsTrack;
+ out.predWearPerLap.push(Math.round(perLapRaw * 1000) / 1000);
+ const perLap = perLapRaw * testWearCal;
  const now = parseInt(car[PART_WEAR_KEYS[i]]) || 0, race = (raceWear[i] && raceWear[i].raceWear) || 0;
  const lapsOk = perLap > 0 ? Math.floor((TEST_WEAR_CEILING - now - race) / perLap) : lapsLeft;
  if (lapsOk < lapBudget) { lapBudget = lapsOk; binding = n; }
@@ -7588,7 +7687,13 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  out.autoLaps = autoLaps;
  out.plannedLaps = Math.min(lapBudget, lapsLeft);
  }
- out.why = `${out.why} Research priority "No special priority": GPRO doesn't document what each focus does.`;
+ out.aim = testingAim(car);
+ if (out.aim) {
+ out.fields.slResearchPriority = { text: out.aim.priority };
+ if (out.autoFields) out.autoFields.slResearchPriority = { text: out.aim.priority };
+ }
+ out.ledger = ledger;
+ out.why = `${out.why} Research priority from gpro-tools.eu's points table; the aim is an own heuristic.`;
  return out;
  }
 
@@ -7672,12 +7777,26 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
   let hist = [];
   try { hist = JSON.parse(GM_getValue('gpro_test_points_log', '[]')) || []; } catch (e) { hist = []; }
   const snap = JSON.stringify(testing.points) + (testing.session ? testing.session.lapsDone : '');
-  if (!hist.length || hist[hist.length - 1].snap !== snap) { hist.push({ at: Date.now(), snap, points: testing.points, session: testing.session }); GM_setValue('gpro_test_points_log', JSON.stringify(hist.slice(-300))); }
+  if (!hist.length || hist[hist.length - 1].snap !== snap) {
+  const entry = { at: Date.now(), snap, points: testing.points, session: testing.session, race: (nextRaceInfo() || {}).key || null, track: testing.trackName || null };
+  hist.push(entry);
+  // Fresh part wear next to every new testing reading, so consecutive readings give measured wear
+  // per test lap (testingLedger). UpdateCar is one extra page fetch, only when the reading changed.
+  fetchPageHTML('UpdateCar.asp').then((html) => {
+  const d = parseUpdateCarDOM(new DOMParser().parseFromString(html, 'text/html'));
+  const wear = d && d.parts ? PART_NAMES.map((n) => { const p = d.parts.find((x) => x.name === n); return p && p.wearFound ? p.currentWear : null; }) : null;
+  if (!wear || wear.some((w) => w == null)) return;
+  const all = getTestLog();
+  const mine = all.find((x) => x.at === entry.at);
+  if (mine) { mine.wear = wear; mine.predWearPerLap = (calcTestingPlan(testing, league) || {}).predWearPerLap || null; GM_setValue('gpro_test_points_log', JSON.stringify(all)); }
+  }).catch((e) => logError('testing wear read failed:', e.message));
+  GM_setValue('gpro_test_points_log', JSON.stringify(hist.slice(-300)));
+  }
   }
   const tp = calcTestingPlan(testing, league);
   const f = tp.fields;
   const manual = f ? mkRow('Setup', `FW ${f.FWing} · RW ${f.RWing} · Eng ${f.Engine} · Bra ${f.Brakes} · Gear ${f.Gear} · Susp ${f.Suspension}`) +
-  mkRow('Tyres / fuel', `${esc(tp.tyre)} · ${f.Fuel} L`) + mkRow('Stint length', `${f.slStintLength} laps`) + mkRow('Research priority', 'No special priority') +
+  mkRow('Tyres / fuel', `${esc(tp.tyre)} · ${f.Fuel} L`) + mkRow('Stint length', `${f.slStintLength} laps`) + mkRow('Research priority', tp.aim ? `${esc(tp.aim.priority)} <span style="color:${PALETTE.textDim};font-size:9px;">(${esc(tp.aim.why)}; ~${tp.aim.perLap[tp.aim.axis]} test pts/lap there vs 0.27 unfocused)</span>` : 'No special priority') +
   `<button id="gpro-test-fill" style="width:100%;margin-top:6px;background:${PALETTE.accent};color:#fff;border:none;padding:7px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">Fill the testing form with this stint</button>` : '';
   h += mkSection('Testing plan', mkRec(tp.skip ? `<strong>Autopilot: don't test now</strong> — ${esc(tp.skip)}` : `<strong>Autopilot: test</strong> — ${tp.autoLaps}-lap stints, ${tp.plannedLaps} laps this session`, tp.skip ? 'info' : 'good')
   + (f ? `<div style="font-size:11px;font-weight:700;color:${PALETTE.text};margin:8px 0 2px;">If you test manually</div>` + manual : '')
@@ -7694,6 +7813,24 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
   const ccp = testing.points && testing.points.ccp ? testing.points.ccp.p + testing.points.ccp.h + testing.points.ccp.a : null;
   return `<div style="font-size:10px;color:${PALETTE.text};margin-top:6px;">One car level: all 11 parts at L${nextLvl} = ${partsCost ? '$' + partsCost.toLocaleString() : '?'} (and re-bought as they wear out) vs 39 car points from testing at $1M a session. Testing points banked now: ${ccp != null ? ccp : '?'} (${ccp != null ? (ccp / 39).toFixed(2) : '?'} levels).</div>`;
   })());
+  // Ledger: what testing has bought so far (own tracking; GPRO publishes no conversion rate).
+  {
+  const L = tp.ledger || testingLedger();
+  const lastBank = L.bank.length ? L.bank[L.bank.length - 1] : null;
+  const sgn = (x) => (x >= 0 ? '+' : '') + x;
+  const lines = [];
+  lines.push(`Tested ${L.laps} lap${L.laps !== 1 ? 's' : ''} over ${L.races} race weekend${L.races !== 1 ? 's' : ''} ($${(L.cost / 1e6).toFixed(0)}M in sessions)`);
+  if (lastBank) lines.push(`CCP bank ~${sgn(lastBank.p)}/${sgn(lastBank.h)}/${sgn(lastBank.a)} P/H/A after ${esc(lastBank.track)} (race report car P/H/A minus what the part levels explain)`);
+  if (testing.points && testing.points.test) {
+  const pp = testing.points;
+  const fmt = (x) => x ? `${x.p}/${x.h}/${x.a}` : '-';
+  lines.push(`In the pipeline: test ${fmt(pp.test)} → R&D ${fmt(pp.rd)} → engineering ${fmt(pp.eng)} → CCP ${fmt(pp.ccp)} (lands over ~${CCP_LAG_RACES} races)`);
+  }
+  if (L.pointsPerLap != null) lines.push(`Measured ${L.pointsPerLap.toFixed(2)} test points/lap (gpro-tools table: ~0.8)`);
+  lines.push(L.rate ? `Conversion: ~${L.rate.per100.toFixed(1)} CCP per 100 test laps (${L.rate.laps} laps that have landed)` : `Conversion: not measured yet - needs test laps ${CCP_LAG_RACES}+ races old and race reports since`);
+  lines.push(L.testWearRatio != null ? `Test wear runs ${L.testWearRatio.toFixed(2)}x GAPP's prediction (${L.wearPerLap.length} measured stints) - the wear gates above use it` : 'Test wear per lap: measured from the next stints (part wear is read after every testing reading)');
+  h += mkSection('Testing ledger', `<div style="font-size:10px;color:${PALETTE.text};line-height:1.5;">${lines.map((x) => '• ' + x).join('<br>')}</div>`);
+  }
   publishPlan('testing', { form: 'formQual', submit: 'DriveStint', fields: tp.autoFields || {}, skip: tp.skip, meta: { lapsDone: testing.session ? testing.session.lapsDone : null }, summary: tp.skip ? '' : `${tp.autoLaps} laps on ${tp.tyre}, ${tp.autoFields.Fuel}L`, sig: tp.autoFields ? planSig(tp.autoFields) : '' });
 
   body(h);
