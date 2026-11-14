@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.42.1
+// @version 6.42.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @updateURL https://raw.githubusercontent.com/Jadax/gpro-advisor/main/GPRO_Strategy_Tool.user.js
@@ -7548,6 +7548,17 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  return { season: r.season, race: r.race, track: r.track, p: Math.round((r.carPHA.p - parts.p) * 10) / 10, h: Math.round((r.carPHA.h - parts.h) * 10) / 10, a: Math.round((r.carPHA.a - parts.a) * 10) / 10 };
  }).filter(Boolean);
  }
+ // Money value of part wear: price of the part at its level x the wear fraction (Heino 'Testing'
+ // sheet "Est. Costs", AA25:AA35 = Validation price table x test wear). Prices: D.partCosts.
+ function partWearCost(wearPctByIdx, levels) {
+ let total = 0;
+ PART_NAMES.forEach((n, i) => {
+ const lvl = Math.min(9, Math.max(1, levels[i] || 1));
+ const price = D.partCosts && D.partCosts[n] ? D.partCosts[n][lvl - 1] : null;
+ if (price && wearPctByIdx[i] > 0) total += price * wearPctByIdx[i] / 100;
+ });
+ return Math.round(total);
+ }
  function getTestLog() { try { return JSON.parse(GM_getValue('gpro_test_points_log', '[]')) || []; } catch (e) { return []; } }
  // What testing has done so far: laps/sessions per race, money, measured test points per lap, wear
  // per test lap (UpdateCar read straight after each new Testing reading), CCP bank and the measured
@@ -7655,7 +7666,25 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  const v = su.Q1;
  const stintFields = (laps) => ({ FWing: v['Front Wing'], RWing: v['Rear Wing'], Engine: v['Engine'], Brakes: v['Brakes'], Gear: v['Gearbox'], Suspension: v['Suspension'], Tyres: TYRE_CODES.Hard, Fuel: fuelFor(laps), slStintLength: laps, slResearchPriority: 0 });
  out.tyre = 'Hard';
- out.stintLaps = Math.max(5, Math.min(50, lapsLeft, tankLaps));
+ // Tyre cap (Heino 'Testing' Q3 "Max laps": the test compound's life at the testing track and its
+ // current temperature, down to the wear limit) - the old stint length looked only at 50 laps and
+ // the tank. Same GAPP tyre-life formula the race strategy uses.
+ out.tyreMaxLaps = null;
+ try {
+ const sc = D.gapp.stopCalc;
+ const sup = resolveActiveSupplier(getDataDomOnly('/TyreSuppliers'));
+ const supFactor = sup && sup.name ? gappLookupByName(sc.tyreSupplierFactor, sup.name) : undefined;
+ const pubT = D.trackPub && D.trackPub[testing.trackName];
+ const wl = gappLookupByName(sc.trackWearLevelMap, (pubT && pubT.tyreWear) || 'Medium');
+ if (supFactor !== undefined) {
+ const lifeKm = gappTyreLifeKm({ trackWearLevel: wl !== undefined ? wl : 2, temp: testing.temp != null ? testing.temp : 20, supFactor, typeIdx: 3,
+ suspLvl: parseInt(car[PART_LVL_KEYS[PART_NAMES.indexOf('Suspension')]]) || 1, aggr: numOrDefault(driver.aggressiveness, 50), exp: numOrDefault(driver.experience, 50),
+ weight: numOrDefault(driver.weight, 75), trackWearFactor: t[9], wetFactor: 1, ctFactor: 1 });
+ const wearLimit = (D.tyreConstants && D.tyreConstants.wearThreshold) || 15;
+ out.tyreMaxLaps = Math.floor(lifeKm * (100 - wearLimit) / 100 / (t[8] / (t[12] || 60)));
+ }
+ } catch (e) { logDebug('[GPRO][testing] tyre cap: ' + e.message); }
+ out.stintLaps = Math.max(5, Math.min(50, lapsLeft, tankLaps, out.tyreMaxLaps || 50));
  out.fuel = fuelFor(out.stintLaps);
  out.fields = stintFields(out.stintLaps);
  // Wear: per part, laps until test wear + the next race's predicted wear reaches the ceiling.
@@ -7694,11 +7723,14 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  if (out.wearAfter.length) out.warnings.push(`a ${out.stintLaps}-lap stint, then ${(nextTrack && nextTrack.trackName) || 'the next race'}, would take ${out.wearAfter.join(', ')} by the flag (${lapBudget > 0 ? `${lapBudget} laps stay under ${TEST_WEAR_CEILING}%` : `even the race alone gets ${binding} close to the limit`})`);
  if (lapBudget < 5) { if (!out.skip) out.skip = `${binding} would end the next race above ${TEST_WEAR_CEILING}% with any testing`; }
  else {
- const autoLaps = Math.max(5, Math.min(50, lapBudget, lapsLeft, tankLaps));
+ const autoLaps = Math.max(5, Math.min(50, lapBudget, lapsLeft, tankLaps, out.tyreMaxLaps || 50));
  out.autoFields = stintFields(autoLaps);
  out.autoLaps = autoLaps;
  out.plannedLaps = Math.min(lapBudget, lapsLeft);
  }
+ // What the stint costs beyond the $1M session: the part wear it adds, valued at part prices.
+ const lvNow = PART_LVL_KEYS.map((k) => parseInt(car[k]) || 1);
+ out.stintWearCost = partWearCost(out.predWearPerLap.map((x) => x * testWearCal * out.stintLaps), lvNow);
  out.aim = testingAim(car);
  if (out.aim) {
  out.fields.slResearchPriority = { text: out.aim.priority };
@@ -7808,7 +7840,7 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
   const tp = calcTestingPlan(testing, league);
   const f = tp.fields;
   const manual = f ? mkRow('Setup', `FW ${f.FWing} · RW ${f.RWing} · Eng ${f.Engine} · Bra ${f.Brakes} · Gear ${f.Gear} · Susp ${f.Suspension}`) +
-  mkRow('Tyres / fuel', `${esc(tp.tyre)} · ${f.Fuel} L`) + mkRow('Stint length', `${f.slStintLength} laps`) + mkRow('Research priority', tp.aim ? `${esc(tp.aim.priority)} <span style="color:${PALETTE.textDim};font-size:9px;">(${esc(tp.aim.why)}; ~${tp.aim.perLap[tp.aim.axis]} test pts/lap there vs 0.27 unfocused)</span>` : 'No special priority') +
+  mkRow('Tyres / fuel', `${esc(tp.tyre)} · ${f.Fuel} L`) + mkRow('Stint length', `${f.slStintLength} laps${tp.tyreMaxLaps ? ` <span style="color:${PALETTE.textDim};font-size:9px;">(Hards last ~${tp.tyreMaxLaps} laps here)</span>` : ''}`) + (tp.stintWearCost ? mkRow('Cost of this stint', `~$${(tp.stintWearCost / 1e6).toFixed(2)}M of part wear (part prices x predicted wear) + $1M per session`) : '') + mkRow('Research priority', tp.aim ? `${esc(tp.aim.priority)} <span style="color:${PALETTE.textDim};font-size:9px;">(${esc(tp.aim.why)}; ~${tp.aim.perLap[tp.aim.axis]} test pts/lap there vs 0.27 unfocused)</span>` : 'No special priority') +
   `<button id="gpro-test-fill" style="width:100%;margin-top:6px;background:${PALETTE.accent};color:#fff;border:none;padding:7px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">Fill the testing form with this stint</button>` : '';
   h += mkSection('Testing plan', mkRec(tp.skip ? `<strong>Autopilot: don't test now</strong> — ${esc(tp.skip)}` : `<strong>Autopilot: test</strong> — ${tp.autoLaps}-lap stints, ${tp.plannedLaps} laps this session`, tp.skip ? 'info' : 'good')
   + (f ? `<div style="font-size:11px;font-weight:700;color:${PALETTE.text};margin:8px 0 2px;">If you test manually</div>` + manual : '')
@@ -7843,7 +7875,10 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
   lines.push(tp.testWearCal ? `Test wear runs ${tp.testWearCal.ratio.toFixed(2)}x GAPP's prediction here (${tp.testWearCal.n} measured part readings) - the wear gates above use it` : 'Test wear per lap: measured from the next stints (part wear is read after every testing reading)');
   {
   const sd = (D.testWearSeed || []).slice(-1)[0];
-  if (sd) lines.push(`Last measured: ${sd.laps} laps at ${esc(sd.track)} added ${Object.entries(sd.wear).map(([k, v]) => `${k} +${v}`).join(', ')} % wear - roughly a race's worth on the wings and gearbox`);
+  if (sd) {
+  const w = PART_NAMES.map((n) => sd.wear[n] || 0), lv = PART_NAMES.map((n) => sd.levels[n] || 1);
+  lines.push(`Last measured: ${sd.laps} laps at ${esc(sd.track)} added ${Object.entries(sd.wear).map(([k, v]) => `${k} +${v}`).join(', ')} % wear - worth ~$${(partWearCost(w, lv) / 1e6).toFixed(1)}M of parts on top of the $1M session`);
+  }
   }
   h += mkSection('Testing ledger', `<div style="font-size:10px;color:${PALETTE.text};line-height:1.5;">${lines.map((x) => '• ' + x).join('<br>')}</div>`);
   }
