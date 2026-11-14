@@ -781,7 +781,7 @@ Rookie: {
   charisma: { target: '0-250', priority: 7, prefer: 'any', note: 'Sponsor income; not scored.' },
   techInsight: { target: 'not needed', priority: 8, prefer: 'any', note: 'Mostly not needed - the tool computes the setups (experienced-manager guidance). Not scored.' },
   },
-  budget: 'Pay as little as possible for the driver - around $500K/race or less. Car resets to L1 unless promoted.',
+  budget: 'Pay as little as possible for the driver - $600K/race or less (your ceiling). Car resets to L1 unless promoted.',
   },
   Amateur: {
   // Amateur: Car carries over. Invest in driver + car balance.

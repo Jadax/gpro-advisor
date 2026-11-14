@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.40.2
+// @version 6.40.3
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @updateURL https://raw.githubusercontent.com/Jadax/gpro-advisor/main/GPRO_Strategy_Tool.user.js
@@ -32,7 +32,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require https://raw.githubusercontent.com/Jadax/gpro-advisor/main/gpro-data.js?v=5.8.8
+// @require https://raw.githubusercontent.com/Jadax/gpro-advisor/main/gpro-data.js?v=5.8.9
 // @run-at document-idle
 // ==/UserScript==
 
