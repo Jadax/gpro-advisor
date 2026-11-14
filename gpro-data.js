@@ -770,7 +770,8 @@ Rookie: {
   targetOA: { min: 75, max: 85 },
   // $600K/race: the user's own Rookie ceiling (2026-11-05).
   maxSalary: 600000,
-  maxAge: 36,
+  // 34: GPRO rules - drivers lose skills from age 35 (user's 35-year-old driver: stamina 7 -> 2 -> 0 in S113). User-approved 2026-11-14.
+  maxAge: 34,
   attributes: {
   stamina: { target: 'as high as affordable', priority: 1, note: 'Stamina = speed (experienced-manager guidance). Train via Fitness Class + Testing.' },
   motivation: { target: 'as high as affordable', priority: 2, note: 'Low motivation makes a driver slower (experienced-manager guidance).' },
@@ -792,7 +793,8 @@ Rookie: {
   // Tal 110+, Exp 120+, Sta 85+. Promoting to Pro: Sta above 100, Con about 220.
   targetOA: { min: 90, max: 110 },
   maxSalary: 500000,
-  maxAge: 37,
+  // 34: GPRO rules - drivers lose skills from age 35. User-approved 2026-11-14.
+  maxAge: 34,
   attributes: {
   stamina: { target: '85+', priority: 1, note: 'Stamina = speed. Train above 100 if you mean to promote to Pro.' },
   motivation: { target: 'as high as affordable', priority: 2, note: 'Low motivation makes a driver slower.' },
