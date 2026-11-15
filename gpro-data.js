@@ -161,12 +161,9 @@ Rookie: {
  critical: 10, fastAlert: 30, slowAlert: 15,
  },
 
- // Legume: street circuits raise braking/susp stress, speedways raise engine stress.
- trackTypeWear: {
- street: { note: 'Street circuits stress brakes & suspension (×1.3-1.5) - prioritise those parts.', brakes: 1.4, susp: 1.4 },
- speedway: { note: 'Speedways stress the engine (×1.4) and reduce braking wear (×0.7).', engine: 1.4, brakes: 0.7 },
- road: { note: 'Road courses are the baseline for part wear.', brakes: 1.0, susp: 1.0, engine: 1.0 },
- },
+
+ // (trackTypeWear removed 2026-11-15: the key was defined twice - ESLint no-dupe-keys - both copies
+ // unsourced, and no track object ever carried the `type` it was keyed by, so it was dead.)
 
  // ============================================================
  // FACILITY TARGETS PER LEAGUE
@@ -1399,12 +1396,6 @@ driverAttributeLeaguePriority: {
  // Temperature wear multiplier: track temp affects tyre and component wear
  // Formula: 1 + (trackTemp - 20) * 0.015 + (riskLevel * 0.08)
  tempWearMultiplier: { baseTemp: 20, tempCoeff: 0.015, riskCoeff: 0.08 },
- // Track type wear classification (affects specific parts differently)
- trackTypeWear: {
- street: { engine: 1.2, suspension: 1.5, brakes: 1.3, note: 'Street circuits: high braking/suspension stress' },
- speedway: { engine: 1.4, brakes: 0.7, cooling: 1.3, note: 'Speedways: engine stress, less braking' },
- road: { note: 'Standard road courses: baseline wear rates' },
- },
  // Overtaking decision matrix thresholds
  overtakingDecision: {
  attackRatio: 1.5,       // reward/risk > 1.5 → attack aggressively

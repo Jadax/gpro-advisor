@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "description": "GPRO Strategy Tool - Tampermonkey userscript for gpro.net. GPRO_Strategy_Tool.user.js + gpro-data.js at the repo root are the entire shipping product.",
   "scripts": {
-    "check:userscript": "node --check GPRO_Strategy_Tool.user.js && node --check gpro-data.js"
+    "check:userscript": "node --check GPRO_Strategy_Tool.user.js && node --check gpro-data.js",
+    "lint": "npx --yes eslint@9.39.1 GPRO_Strategy_Tool.user.js gpro-data.js",
+    "verify": "npm run -s check:userscript && npm run -s lint"
   }
 }

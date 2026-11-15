@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.42.2
+// @version 6.43.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @updateURL https://raw.githubusercontent.com/Jadax/gpro-advisor/main/GPRO_Strategy_Tool.user.js
@@ -32,7 +32,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require https://raw.githubusercontent.com/Jadax/gpro-advisor/main/gpro-data.js?v=5.8.11
+// @require https://raw.githubusercontent.com/Jadax/gpro-advisor/main/gpro-data.js?v=5.8.12
 // @run-at document-idle
 // ==/UserScript==
 
@@ -3509,9 +3509,16 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  function getRaceForecasts() {
  try { return JSON.parse(GM_getValue(RACE_FORECASTS_KEY, '{}')) || {}; } catch (e) { return {}; }
  }
+ // The plan as it will be raced (GPRO's saved values once confirmed, else the advisor's plan), merged
+ // into the race's forecast snapshot so the race report can grade it (raceReview).
+ function saveRacePlanSnapshot(key, plan) {
+ const all = getRaceForecasts();
+ all[key] = Object.assign({}, all[key] || {}, { plan });
+ GM_setValue(RACE_FORECASTS_KEY, JSON.stringify(all));
+ }
  function saveRaceForecast(key, snap) {
  const all = getRaceForecasts();
- all[key] = snap;
+ all[key] = Object.assign({}, snap, all[key] && all[key].plan ? { plan: all[key].plan } : {});
  const keys = Object.keys(all);
  if (keys.length > 60) keys.slice(0, keys.length - 60).forEach((k) => delete all[k]);
  GM_setValue(RACE_FORECASTS_KEY, JSON.stringify(all));
@@ -3769,6 +3776,109 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (r.myPit && r.fieldPit) bits.push(`best pit ${r.myPit.toFixed(1)} s vs field median ${r.fieldPit.toFixed(1)} s (best ${r.bestFieldPit.toFixed(1)} s)`);
  if (r.aheadStops.length) bits.push(`cars ahead stopped ${r.aheadStops.join('/')} times, you ${r.myStops}`);
  return mkSection('Against the field', `<div style="font-size:10px;color:#d1d5db;">P${r.pos}: ${bits.join(' · ')}.</div>`);
+ }
+
+ // ---- post-race review: the saved plan vs what happened (v6.43.0) ----
+ // Every item the engine predicted is graded against the race report, so a wrong prediction shows up
+ // on its own (instead of the user having to find it) and each line names what learns from it.
+ function raceReview(rec) {
+ const plan = rec && rec.forecast && rec.forecast.plan;
+ const items = [];
+ const add = (ok, text, learns) => items.push({ ok, text, learns: learns || null });
+ if (!plan) return { items, plan: null };
+ // pit laps
+ const actualPits = (rec.pits || []).map((p) => p.lap);
+ if (plan.stopLaps && plan.stopLaps.length) {
+ const diffs = plan.stopLaps.map((l, i) => actualPits[i] != null ? actualPits[i] - l : null);
+ const sameCount = actualPits.length === plan.stopLaps.length;
+ const maxOff = Math.max(0, ...diffs.filter((d) => d != null).map(Math.abs));
+ add(sameCount && maxOff <= 1, `Pits: planned ${plan.stopLaps.map((l) => 'L' + l).join('/')} → raced ${actualPits.map((l) => 'L' + l).join('/') || 'none'}${sameCount ? '' : ` (${actualPits.length} stops vs ${plan.stopLaps.length} planned)`}`, 'fuel-rate calibration');
+ }
+ // start tyre
+ const startTyre = (rec.rainEvidence && rec.rainEvidence.startTyres) || (rec.stintInfo && rec.stintInfo[0] && rec.stintInfo[0].compound) || null;
+ if (plan.startTyre && startTyre) add(plan.startTyre === startTyre, `Start tyre: planned ${plan.startTyre}, raced ${startTyre}`);
+ // fuel rate
+ const st = raceStints(rec).filter((x) => x.fuelUsed != null && x.laps >= 5 && !x.wetLaps);
+ if (plan.fuelPerLap && st.length) {
+ const obs = st.reduce((a, x) => a + x.fuelUsed, 0) / st.reduce((a, x) => a + x.laps, 0);
+ const r = obs / plan.fuelPerLap;
+ add(Math.abs(r - 1) <= 0.04, `Fuel: planned ${plan.fuelPerLap.toFixed(2)} L/lap, used ${obs.toFixed(2)} incl. boost (${r >= 1 ? '+' : ''}${((r - 1) * 100).toFixed(0)}%)`, 'fuel-rate calibration');
+ }
+ // tyre life
+ const tw = raceStints(rec).filter((x) => x.tyrePerLap != null && x.laps >= 5 && !x.wetLaps);
+ if (plan.lifeLaps && tw.length) {
+ const perLap = tw.reduce((a, x) => a + x.tyrePerLap * x.laps, 0) / tw.reduce((a, x) => a + x.laps, 0);
+ const wearLimit = (D.tyreConstants && D.tyreConstants.wearThreshold) || 15;
+ const obsLife = perLap > 0 ? Math.floor((100 - wearLimit) / perLap) : null;
+ if (obsLife) add(Math.abs(obsLife - plan.lifeLaps) <= Math.max(3, plan.lifeLaps * 0.1), `Tyres (${esc(plan.compound || '?')}): planned ~${plan.lifeLaps} laps a set, raced ${perLap.toFixed(2)} %/lap = ~${obsLife} laps${obsLife > plan.lifeLaps * 1.25 && plan.stops > 0 ? ' - fewer stops were possible' : ''}`, 'tyre-wear calibration');
+ }
+ // part wear + failures
+ if (plan.partWear && rec.startWear && rec.finishWear) {
+ const off = [];
+ plan.partWear.forEach((p) => {
+ const i = PART_NAMES.indexOf(p.name);
+ if (i < 0 || rec.finishWear[i] >= 100 || !(p.race > 0)) return;
+ const actual = rec.finishWear[i] - rec.startWear[i];
+ const ratio = actual / p.race;
+ if (ratio < 0.8 || ratio > 1.25) off.push(`${p.name} ${actual}% vs ${p.race}%`);
+ });
+ add(!off.length, off.length ? `Part wear off by >20%: ${off.join(', ')}` : 'Part wear within 20% of the prediction on every part', 'part-wear calibration');
+ }
+ (rec.techProblems || []).forEach((tp) => {
+ const pw = tp.part && plan.partWear ? plan.partWear.find((p) => p.name === tp.part) : null;
+ const predEnd = pw ? pw.start + pw.race : null;
+ add(false, `Lap ${tp.lap}: ${esc(tp.text)}${predEnd != null ? ` - predicted to end at ${Math.round(predEnd)}% (fail line was ${plan.failLine}%)` : ''}`, 'part-failure line');
+ });
+ // weather
+ const ws = rec.forecast && rec.forecast.windows;
+ if (ws && rec.rainEvidence) {
+ const wetLaps = rec.rainEvidence.wetLapList || [];
+ add(true, wetLaps.length ? `Weather: rain on L${wetLaps[0]}-L${wetLaps[wetLaps.length - 1]} (${wetLaps.length} laps)${rec.rainEvidence.startWet ? `, stopped before L${rec.rainEvidence.rainStopLap}` : ''}` : 'Weather: dry all race', 'forecast evidence');
+ }
+ // result vs the field
+ const fr = fieldReport(rec);
+ if (fr && fr.pos > 1) add(false, `P${rec.startPos} → P${fr.pos}: ${fr.perLap != null ? `${fr.perLap.toFixed(2)} s/lap off the winner` : ''}${fr.bestLapGap != null ? `, best lap +${fr.bestLapGap.toFixed(2)} s` : ''}${fr.myPit && fr.fieldPit ? `, pit ${fr.myPit.toFixed(1)} s vs field ${fr.fieldPit.toFixed(1)} s` : ''}`);
+ else if (fr) add(true, `Won from P${rec.startPos}`);
+ return { items, plan };
+ }
+ function raceReviewHtml(rec) {
+ const r = raceReview(rec);
+ if (!r.plan) return mkRec('No saved plan for this race (Race Setup saves it from v6.43.0) - only the race data is logged.', 'info');
+ return mkSection('Plan vs reality', `<div style="font-size:10px;line-height:1.55;color:${PALETTE.text};">` +
+ r.items.map((x) => `${x.ok ? '✅' : '⚠'} ${x.text}${x.learns ? ` <span style="color:${PALETTE.textDim};font-size:9px;">→ ${x.learns}</span>` : ''}`).join('<br>') +
+ `</div><div style="font-size:9px;color:${PALETTE.textDim};margin-top:4px;">Every ⚠ line is a prediction the engine now corrects from this race's data.</div>`);
+ }
+ // ---- what the engine has learned so far (one place, measured vs assumed) ----
+ function engineLearningStatus() {
+ const rows = [];
+ const row = (name, value, basis) => rows.push({ name, value, basis });
+ const pw = partWearCalibration();
+ row('Part wear', pw.avg != null ? `×${(+pw.avg).toFixed(2)} vs GAPP` : 'GAPP', `${pw.races} dry race${pw.races !== 1 ? 's' : ''}${pw.active ? '' : ` (applies from ${MIN_WEAR_CAL_RACES})`}`);
+ const fc = fuelRateCalibration();
+ row('Fuel per lap', fc.factor != null ? `×${fc.factor.toFixed(3)} vs GAPP` : 'GAPP', `${fc.races} race${fc.races !== 1 ? 's' : ''}${fc.active ? '' : ` (applies from ${MIN_WEAR_CAL_RACES})`}`);
+ const tc = tyreWearCalibration();
+ row('Tyre wear', tc.factor != null ? `×${tc.factor.toFixed(3)} vs GAPP` : 'GAPP', `${tc.races} race${tc.races !== 1 ? 's' : ''}${tc.active ? '' : ` (applies from ${MIN_WEAR_CAL_RACES})`}`);
+ const fe = partFailureEvidence();
+ row('Part fail line', `${fe.line}%`, fe.basis ? `${fe.basis.part} broke at ~${fe.basis.wearAt}% (S${fe.basis.season} R${fe.basis.race})` : 'no failure logged - 100% default');
+ const pl = pitLossEvidence();
+ row('Cost of a stop', pl ? `${pl.median.toFixed(1)} s` : 'GAPP pit time', pl ? `${pl.n} race${pl.n !== 1 ? 's' : ''} measured` : 'not measured yet');
+ const rp = rainPolicyEvidence();
+ row('Rain on dry tyres', rp.dryTyrePenalty != null ? `+${rp.dryTyrePenalty.toFixed(1)} s/lap` : 'unknown', rp.nDry ? `${rp.nDry} race${rp.nDry !== 1 ? 's' : ''}` : 'no race with rain on dry tyres yet');
+ const fb = forecastBandEvidence();
+ row('Forecast vs rain', fb.races ? fb.bands.map((b) => `${b.lo}-${b.hi}%: ${b.rained}/${b.windows}`).join(', ') : 'none', `${fb.races} race${fb.races !== 1 ? 's' : ''}; wet cut-off 40% is still an assumption`);
+ const ws = wetStartEvidence();
+ row('Wet start lasts', ws.medianLaps != null ? `~${ws.medianLaps} laps` : 'unknown', ws.n ? `${ws.n} wet start${ws.n !== 1 ? 's' : ''}` : 'guide default (dry start)');
+ const rs = rainStartEvidence();
+ row('Rain starts at', `${Math.round(rs.frac * 100)}% into its window`, rs.n ? `${rs.n} race${rs.n !== 1 ? 's' : ''}` : 'assumption (mid-window) until logged');
+ const tl = testingLedger();
+ row('Testing', tl.rate ? `${tl.rate.per100.toFixed(1)} CCP / 100 laps` : `${tl.laps} laps logged`, tl.rate ? `${tl.rate.laps} landed laps` : 'conversion not measured yet');
+ return rows;
+ }
+ function engineLearningHtml() {
+ const rows = engineLearningStatus();
+ return mkSection('What the engine has learned', `<table style="width:100%;border-collapse:collapse;font-size:10px;">` +
+ rows.map((r) => `<tr><td style="padding:2px 4px;color:${PALETTE.textDim};">${esc(r.name)}</td><td style="padding:2px 4px;color:${PALETTE.text};font-weight:600;">${esc(r.value)}</td><td style="padding:2px 4px;color:${PALETTE.textDim};font-size:9px;">${esc(r.basis)}</td></tr>`).join('') +
+ `</table><div style="font-size:9px;color:${PALETTE.textDim};margin-top:4px;">Every number here comes from your own race reports and testing pages; anything not yet measured says so.</div>`);
  }
 
  function trackMemoryLine(trackName) {
@@ -5573,6 +5683,26 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const confirmEl = document.querySelector('[name="btnConfirmSettings"]');
   const savedFw = document.querySelector('input[name="FWing"]');
   const alreadyConfirmed = !!(confirmEl && !confirmEl.disabled && savedFw && parseInt(savedFw.value) > 0);
+  try {
+  const nrk = (nextRaceInfo() || {}).key;
+  if (nrk) {
+  const domV = (n) => { const e = document.querySelector(`[name="${n}"]`); return e ? (e.tagName === 'SELECT' ? (e.options[e.selectedIndex] || {}).text : e.value) : null; };
+  const num = (x) => (x == null || x === '' || isNaN(+x) ? null : +x);
+  const fromPage = alreadyConfirmed;
+  const pw = calcPartsWear(carData, driver, ctr, trackName) || [];
+  saveRacePlanSnapshot(nrk, {
+  at: Date.now(), confirmed: alreadyConfirmed, track: trackName || null, laps: totalLaps,
+  startTyre: fromPage ? domV('StartTyres') : (startIsWet ? 'Rain' : (tyre && tyre.bestDry ? tyre.bestDry.name : null)),
+  fills: [1, 2, 3, 4, 5].map((k) => num(fromPage ? domV('FuelStop' + k) : fields['FuelStop' + k])),
+  boost: [1, 2, 3].map((k) => num(fromPage ? domV('BoostLap' + k) : fields['BoostLap' + k])).filter((x) => x > 0),
+  waitRain: num(fromPage ? domV('LapsWaitPitRain') : fields.LapsWaitPitRain), waitDry: num(fromPage ? domV('LapsWaitPitDry') : fields.LapsWaitPitDry),
+  stopLaps: fuel && fuel.stopLaps ? fuel.stopLaps.slice() : null, fuelPerLap: fuel ? num(fuel.fuelPerLap) : null,
+  compound: chosenTyreResult ? chosenTyreResult.name : null, stops: chosenTyreResult ? chosenTyreResult.stops : null, lifeLaps: chosenTyreResult ? chosenTyreResult.lifeLaps || null : null,
+  partWear: pw.map((p) => ({ name: p.name, start: p.wear, race: Math.round(p.raceWear * 10) / 10 })),
+  failLine: FAIL_LINE(),
+  });
+  }
+  } catch (e) { logError('race plan snapshot failed', e); }
   const skip = alreadyConfirmed ? 'race setup already confirmed — left as saved' : !rv ? 'no race setup could be computed' : !fills ? 'no fuel plan (track/driver data missing)' : !driverRiskRec ? 'no risk recommendation' : null;
   publishPlan('race', { form: 'formQual', submit: 'btnConfirmSettings', fields, skip, sig: planSig(fields),
   summary: rv ? `setup FW${rv['Front Wing']} RW${rv['Rear Wing']} E${rv['Engine']} B${rv['Brakes']} G${rv['Gearbox']} S${rv['Suspension']}, stops ${fills ? fills.map((f) => `${f.fill}L@L${f.lap}`).join(' ') || 'none' : '?'}, boost ${boosts.join('/') || '—'}, risks ${driverRiskRec ? `${driverRiskRec.overtakeRisk}/${driverRiskRec.defendRisk}/${driverRiskRec.dryRisk}/${driverRiskRec.wetRisk}/${driverRiskRec.malfunctionRisk}` : '?'}` : '' });
@@ -5969,17 +6099,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  `<div style="font-size:8px;color:#6b7280;margin-top:3px;">Track-specific wear data when available; own calibration fallback otherwise. Chains forward from current wear. ❌ = fails mid-race, ⚠ = ends above 85%.</div>`);
  }
 
- // Track type wear classification (from Elite spreadsheet models)
- // Street circuits: high braking/suspension stress (×1.3-1.5)
- // Speedways: high engine stress, less braking (×1.4 engine, ×0.7 brakes)
- // Road courses: baseline wear rates
- if (trackData && (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.trackTypeWear)) {
- const trackType = trackData.type || 'road';
- const typeData = GPRO_DATA.trackTypeWear[trackType];
- if (trackType !== 'road' && typeData && typeData.note) {
- h += mkSection('Track Type Wear Note', `<div style="font-size:9px;color:#f59e0b;padding:4px 8px;background:#1e293b;border-radius:4px;border-left:3px solid #f59e0b;">${typeData.note}. Prioritize the affected parts above.</div>`);
-  }
-  }
+
 
   // Car PHA display (power/handling/acceleration from part levels)
   if (car) {
@@ -6210,6 +6330,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // without adding anything the detailed table didn't already show.
 
  h += mkSeasonMoneyPlan(String(((getStaleData('/Menu') || {}).data || {}).group || '').split(' - ')[0].trim());
+ try { h += engineLearningHtml(); } catch (e) { logError('learning status failed', e); }
 
  // Upgrade the button section
  h += `<div style="margin-top:10px;">`;
@@ -6670,7 +6791,40 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  el.dispatchEvent(new Event('change', { bubbles: true }));
  set.push(name);
  });
- return { form, missing, set };
+ return { form, missing, set, invalid: formRangeProblems(form) };
+ }
+
+ // Every enabled text box whose limits GPRO prints next to it - "(0 - 53)", "(0 - 999)", "(max 180
+ // liters)", "(min 10 - max 180 liters)" - must hold a whole number inside them, whether the plan set
+ // it or GPRO carried it over from the last race. 2026-11-11: Brands Hatch's rain wait 75 stayed in
+ // Slovakiaring's (0 - 53) box and GPRO rejected the confirm; this catches that whole class before
+ // anything is posted. Returns ["LapsWaitPitRain=75 (allowed 0-53)", ...].
+ function formRangeProblems(form) {
+ const out = [];
+ Array.from(form.elements).forEach((el) => {
+ if (el.disabled || el.readOnly || el.tagName !== 'INPUT' || !/^(text|number|)$/i.test(el.type || '')) return;
+ const lim = printedLimits(el);
+ if (!lim) return;
+ const raw = String(el.value == null ? '' : el.value).trim();
+ if (raw === '') return;
+ const v = Number(raw);
+ if (!Number.isInteger(v) || v < lim.min || v > lim.max) out.push(`${el.name}=${raw} (allowed ${lim.min}-${lim.max})`);
+ });
+ return out;
+ }
+ function printedLimits(el) {
+ const cell = el.closest('td');
+ const texts = [];
+ if (cell) { texts.push(cell.textContent); if (cell.nextElementSibling) texts.push(cell.nextElementSibling.textContent); }
+ const row = el.closest('tr');
+ if (row && row.querySelectorAll('input[type="text"], input:not([type])').length <= 3) texts.push(row.textContent);
+ for (const t of texts) {
+ const m = /\(\s*(?:min\s*)?(\d+)\s*-\s*(?:max\s*)?(\d+)[^)]*\)/i.exec(t) || null;
+ if (m) return { min: +m[1], max: +m[2] };
+ const mx = /\(\s*max\s*(\d+)[^)]*\)/i.exec(t);
+ if (mx) return { min: 0, max: +mx[1] };
+ }
+ return null;
  }
 
  // Submits the way a click does: requestSubmit(button) runs the page's own onsubmit (e.g. Q1's
@@ -6721,6 +6875,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const r = fillForm(plan, document);
  if (r.error) return report({ ok: false, msg: r.error });
  if (r.missing.length) return report({ ok: false, msg: `couldn't set ${r.missing.join(', ')}` });
+ if (r.invalid && r.invalid.length) return report({ ok: false, msg: `not posted - outside GPRO's limits: ${r.invalid.join(', ')}` });
  if (job.dryRun) return report({ ok: true, preview: true, msg: plan.summary, sig: plan.sig });
  job.stage = 'submitted'; job.meta = plan.meta || null;
  window.name = AUTO_FRAME_PREFIX + JSON.stringify(job);
@@ -7154,6 +7309,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  }
  const f = fillForm(plan, document);
  if (f.error || f.missing.length) { pilotLog(`⚠ ${name}: ${f.error || `couldn't set ${f.missing.join(', ')}`}`); return tabRunAdvance(r); }
+ if (f.invalid && f.invalid.length) { pilotLog(`⚠ ${name}: not posted - outside GPRO's limits: ${f.invalid.join(', ')}`); return tabRunAdvance(r); }
  const btn = planSubmitButton(f.form, plan.submit);
  if (!btn || btn.disabled) { pilotLog(`⚠ ${name}: the page's "${(btn && btn.value) || plan.submit}" button is ${btn ? 'disabled' : 'missing'}`); return tabRunAdvance(r); }
  Object.assign(r, { stage: 'submitted', fields: plan.fields, meta: plan.meta || null, sig: plan.sig, summary: plan.summary });
@@ -7400,7 +7556,7 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  if (t.dataset.a === 'fill') {
  const msgs = Object.keys(PAGE_PLANS).filter((k) => !PAGE_PLANS[k].skip).map((k) => {
  const r = fillForm(PAGE_PLANS[k], document);
- return r.error ? `⚠ ${r.error}` : r.missing.length ? `⚠ couldn't set ${r.missing.join(', ')}` : `Filled ${r.set.length} fields — check them, then press the game's own button`;
+ return r.error ? `⚠ ${r.error}` : r.missing.length ? `⚠ couldn't set ${r.missing.join(', ')}` : (r.invalid && r.invalid.length) ? `⚠ outside GPRO's limits: ${r.invalid.join(', ')} — fix before pressing the button` : `Filled ${r.set.length} fields — check them, then press the game's own button`;
  });
  toast(msgs.join(' · '), msgs.some((m) => m.indexOf('⚠') === 0));
  }
@@ -7444,6 +7600,10 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  }).catch((e) => logError('race summary fetch failed:', e.message));
  }
  h += '<div id="gpro-field-report"></div>';
+ {
+ const stored = getRaceLog().find((x) => x.season === rec.season && x.race === rec.race);
+ if (stored) h += raceReviewHtml(Object.assign({}, stored, { rainEvidence: stored.rainEvidence || rec.rainEvidence }));
+ }
  h += mkRec(`✅ Logged S${rec.season} R${rec.race} ${esc(rec.track)}${rec.startPos ? ` — P${rec.startPos} → P${rec.finishPos}` : ''}. ${rec.lapRows.length ? '' : 'Lap table not read (fuel/tyre stints may be incomplete).'}`, 'good');
  const rows = racePartWearRatios(rec);
  if (rows) {
