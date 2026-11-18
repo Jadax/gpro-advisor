@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.44.2
+// @version 6.45.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @updateURL https://raw.githubusercontent.com/Jadax/gpro-advisor/main/GPRO_Strategy_Tool.user.js
@@ -32,7 +32,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require https://raw.githubusercontent.com/Jadax/gpro-advisor/main/gpro-data.js?v=5.8.14
+// @require https://raw.githubusercontent.com/Jadax/gpro-advisor/main/gpro-data.js?v=5.8.15
 // @run-at document-idle
 // ==/UserScript==
 
@@ -2016,6 +2016,40 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // dryLifeLaps: usable laps of the race's DRY compound. A wet-start race's chosen compound is Rain
   // (~57-lap life at Las Vegas), so sizing its dry phases by maxStintLaps put 32 dry laps on one
   // ~20-lap Medium set (S113 R11, live advisor: "Stop 2 19-50 Medium 158L").
+  // The race plan checked against itself before it is shown as "the plan" or posted (v6.45.0): every
+  // stint fits its tyre set's life (dry stints the dry compound's, wet stints Rain's), every fill
+  // fits the tank and covers its stint, replaying the fills the way GPRO drives them gives the same
+  // stops, and no boost sits on a locked start fuel. Both Las Vegas bugs (one Medium set for 32 laps;
+  // boosts on 41 L) fail these. Returns a list of problems (empty = consistent).
+  function racePlanProblems(p) {
+  const out = [];
+  const { laps, phases, fuel, fills, boosts, tyre } = p;
+  if (!fuel || !fuel.stopLaps || !(laps > 0)) return out;
+  const wetAt = (l) => (phases || []).some((ph) => ph.condition === 'wet' && l >= ph.startLap && l <= ph.endLap);
+  const rain = tyre && tyre.results ? tyre.results.find((r) => r.isRain) : null;
+  const dryLife = tyre && tyre.bestDry ? tyre.bestDry.lifeLaps : null, wetLife = rain ? rain.lifeLaps : null;
+  const pits = fuel.stopLaps.slice().sort((a, b) => a - b);
+  const starts = [1].concat(pits.map((x) => x + 1)), ends = pits.concat([laps]);
+  starts.forEach((a, i) => {
+  const b = ends[i];
+  // laps on each kind of tyre in this stint (a weather change inside a stint is itself a planning error)
+  let dry = 0, wet = 0;
+  for (let l = a; l <= b; l++) { if (wetAt(l)) wet++; else dry++; }
+  if (dry && wet) out.push(`stint ${i + 1} (L${a}-${b}) mixes dry and wet laps without a stop`);
+  if (dry && dryLife > 0 && dry > dryLife + 1) out.push(`stint ${i + 1} runs ${dry} dry laps on one ${tyre.bestDry.name} set (life ~${dryLife})`);
+  if (wet && wetLife > 0 && wet > wetLife + 1) out.push(`stint ${i + 1} runs ${wet} wet laps on one Rain set (life ~${wetLife})`);
+  });
+  (fills || []).forEach((f, i) => { if (f && f.fill > TANK_MAX) out.push(`refuel ${i + 1} is ${f.fill} L, over the ${TANK_MAX} L tank`); });
+  if (fuel.lockedStart && (boosts || []).some((b) => b > 0 && b <= pits[0])) out.push(`boost lap inside the locked start-fuel stint (L1-${pits[0]})`);
+  if (fills && p.dryRate > 0 && pits.length) {
+  const start = fuel.lockedStart || (fuel.stintFuels && fuel.stintFuels[0]) || 0;
+  const sim = simulateSavedFuel(laps, phases, p.dryRate, p.dryRate * (p.wetRatio || 1), start, fills.map((f) => (f ? f.fill : 0)), dryLife);
+  if (sim.ranOut) out.push(`replaying the fills runs out of fuel on lap ${sim.ranOut}`);
+  else if (sim.totalStops !== pits.length) out.push(`replaying the fills gives ${sim.totalStops} stops, the plan says ${pits.length}`);
+  }
+  return out;
+  }
+
   function computeRaceFuelPlan(laps, dryRate, profile, tyreStops, committedFuel, lockedStart, maxStintLaps, wetRatio, dryLifeLaps) {
   const phases = (profile && profile.phases) || [];
   const transitions = (profile && profile.transitions) || [];
@@ -4977,7 +5011,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // ... for Qualify 2 and the Race", select DryTyres + Drive lap again; live 2026-10-30) - the lap
   // is only driven after it. meta.dryTyres answers it with the race strategy's best dry compound.
   const q1Dry = !isQ2 && tyre && tyre.bestDry ? TYRE_CODES[tyre.bestDry.name] : null;
-  publishPlan(isQ2 ? 'q2' : 'q1', { form: 'formQual', submit: 'DriveLap', fields, skip, sig: planSig(fields), meta: q1Dry ? { dryTyres: q1Dry } : null,
+  publishPlan(isQ2 ? 'q2' : 'q1', { form: 'formQual', submit: 'DriveLap', fields, skip, sig: planSig(fields), meta: q1Dry ? { dryTyres: q1Dry } : null, locked: sessionLapDriven(document, isQ2 ? 2 : 1),
   summary: `${sessionLabel} ${sv ? `FW${sv['Front Wing']} RW${sv['Rear Wing']} E${sv['Engine']} B${sv['Brakes']} G${sv['Gearbox']} S${sv['Suspension']}` : ''}, ${isQ2 ? (thisSessionWet ? 'Rain' : (tyre && tyre.bestDry ? tyre.bestDry.name : 'locked dry compound')) : sessionTyreRec}, "${riskTxt}"${isQ2 ? `, start fuel ${planQ2Fuel}L` : ''}` });
   }
 
@@ -5807,7 +5841,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   } catch (e) { logError('saved race setup check failed', e); }
   }
   const skip = alreadyConfirmed ? `race setup already confirmed — left as saved${savedWarn ? ' ⚠️ ' + savedWarn : ''}` : !rv ? 'no race setup could be computed' : !fills ? 'no fuel plan (track/driver data missing)' : !driverRiskRec ? 'no risk recommendation' : null;
-  publishPlan('race', { form: 'formQual', submit: 'btnConfirmSettings', fields, skip, sig: planSig(fields),
+  publishPlan('race', { form: 'formQual', submit: 'btnConfirmSettings', fields, skip, sig: planSig(fields), confirmed: alreadyConfirmed,
+  problems: racePlanProblems({ laps: totalLaps, phases: analyze && analyze.raceProfile ? analyze.raceProfile.phases : [], fuel, fills, boosts, tyre, dryRate: fuel ? parseFloat(fuel.fuelPerLap) : 0, wetRatio: wetFuelRatio(trackName) }),
   summary: rv ? `setup FW${rv['Front Wing']} RW${rv['Rear Wing']} E${rv['Engine']} B${rv['Brakes']} G${rv['Gearbox']} S${rv['Suspension']}, stops ${fills ? fills.map((f) => `${f.fill}L@L${f.lap}`).join(' ') || 'none' : '?'}, boost ${boosts.join('/') || '—'}, risks ${driverRiskRec ? `${driverRiskRec.overtakeRisk}/${driverRiskRec.defendRisk}/${driverRiskRec.dryRisk}/${driverRiskRec.wetRisk}/${driverRiskRec.malfunctionRisk}` : '?'}` : '' });
   }
 
@@ -6111,10 +6146,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   {
   const fields = {};
   let cost = 0;
-  const unfixable = [];
+  const unfixable = [], carProblems = [];
+  const carMaxLvl = (D.carTargets && D.carTargets[league] && D.carTargets[league].maxLevel) || 9;
   analysis.recs.forEach((r) => {
   const idx = PART_NAMES.indexOf(r.part.name);
   if (idx < 0) return;
+  if ((r.verdict === 'REPLACE' || r.verdict === 'UPGRADE') && carMaxLvl && r.newLvl > carMaxLvl) carProblems.push(`${r.part.name} to L${r.newLvl} is above the ${league || 'league'} max L${carMaxLvl}`);
   if (r.verdict === 'REPLACE' || r.verdict === 'UPGRADE') { fields[BUY_SELECTS[idx]] = { text: `Replace with level ${r.newLvl}` }; cost += r.cost || 0; }
   else if (r.verdict === 'DOWNGRADE') fields[BUY_SELECTS[idx]] = { text: `Downgrade to level ${r.newLvl}` };
   else unfixable.push(r.part.name);
@@ -6123,7 +6160,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const skip = !analysis.recs.length ? 'no part will break this race'
   : !Object.keys(fields).length ? `${unfixable.join(', ')} will break but no affordable option — yours to decide`
   : cost && cashNow - cost < PILOT_CASH_RESERVE ? `needs $${cost.toLocaleString()}, which would leave less than the $${(PILOT_CASH_RESERVE / 1e6).toFixed(0)}M reserve` : null;
-  publishPlan('car', { form: 'UpdateCar', submit: 'btnUpdateCar', fields, skip, sig: planSig(fields),
+  if (cost && cashNow - cost < PILOT_CASH_RESERVE && !skip) carProblems.push('spend would cut into the cash reserve');
+  publishPlan('car', { form: 'UpdateCar', submit: 'btnUpdateCar', fields, skip, sig: planSig(fields), problems: carProblems,
   summary: Object.keys(fields).map((k) => `${PART_NAMES[BUY_SELECTS.indexOf(k)]}: ${fields[k].text}`).join(', ') + (cost ? ` ($${cost.toLocaleString()})` : '') + (unfixable.length ? ` — ${unfixable.join(', ')} still at risk` : '') });
   }
   // Summary of parts not needing action
@@ -6839,7 +6877,99 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
 
  // ---- plans published by the advisor renders ----
  const PAGE_PLANS = {};
- function publishPlan(step, plan) { PAGE_PLANS[step] = Object.assign({ step }, plan); }
+ // plan.problems: the plan's own self-check (see racePlanProblems etc.) - any problem blocks the
+ // copilot from posting it, and the page banner shows it. plan.locked: GPRO has fixed this step for
+ // the race (Q1/Q2 driven) - the banner says so instead of comparing.
+ function publishPlan(step, plan) {
+ const p = Object.assign({ step }, plan);
+ if (p.problems && p.problems.length) p.skip = `plan self-check failed - not posted: ${p.problems.join('; ')}`;
+ PAGE_PLANS[step] = p;
+ schedulePlanCheck();
+ }
+ // ---- page vs advisor check (v6.45.0, user 2026-11-18: "ensure this issue doesn't happen going
+ // forward") ----
+ // After every advisor render, and live while the user edits the form, compares each field the
+ // advisor's plan sets with what GPRO's form holds now, using the same option matching as fillForm.
+ // One banner at the top of the panel: green = the page holds the advisor's values, amber = not
+ // entered yet, red = GPRO has SAVED something else (race setup) or the plan failed its own check.
+ // S113 R11 Las Vegas: the saved refuels were 33/34 while the advisor said 30/79/81 - nothing
+ // on screen said they differed.
+ const PLAN_CHECK_LABELS = { q1: 'Qualify 1', q2: 'Qualify 2', race: 'Race setup', car: 'Car parts', staffTrain: 'Staff training', facilities: 'Facilities', driverTrain: 'Driver training', testing: 'Testing', sponsorAnswer: 'Sponsor answer', sponsorStart: 'Sponsor negotiation' };
+ let planCheckTimers = [];
+ function schedulePlanCheck() {
+ if (window.top !== window.self) return; // hidden copilot frame: no panel to show it on
+ planCheckTimers.forEach(clearTimeout);
+ // now (after the render's body()) and again after the page pre-fill has run
+ planCheckTimers = [0, 1500].map((ms) => setTimeout(showPlanCheck, ms));
+ }
+ function radioLabel(x) {
+ return ((x.labels && x.labels[0] && x.labels[0].textContent) || (x.nextSibling && x.nextSibling.textContent) || (x.parentElement && x.parentElement.textContent) || '').replace(/\s+/g, ' ').trim();
+ }
+ function planWantedOption(el, want) {
+ const opts = Array.from(el.options);
+ // {dry: code}: that compound if the page still offers it, else the one dry compound an earlier
+ // dry session already locked in (GPRO allows one dry compound per race).
+ if (want && typeof want === 'object' && 'dry' in want) return opts.find((o) => o.value === String(want.dry)) || opts.find((o) => o.value && o.value !== '0' && o.value !== '6') || null;
+ // Option texts use non-breaking spaces (facility selects, 2026-10-30), and "level 2" must not
+ // match "level 20" - so compare whitespace-normalized text with a non-digit after the prefix.
+ if (want && typeof want === 'object' && want.text) return opts.find((o) => { const t = o.textContent.replace(/\s+/g, ' ').trim(); return t.indexOf(want.text) === 0 && !/\d/.test(t.charAt(want.text.length)); }) || null;
+ return opts.find((o) => o.value === String(want)) || null;
+ }
+ function planValueLabel(want) { return want && typeof want === 'object' ? (want.text || want.dry || JSON.stringify(want)) : String(want); }
+ // [{name, page, plan}] for every plan field the form doesn't hold; null when the form isn't here.
+ function planPageDiff(plan, doc) {
+ const form = doc.forms[plan.form] || doc.querySelector(`form[name="${plan.form}"]`);
+ if (!form) return null;
+ const diffs = [];
+ Object.keys(plan.fields || {}).forEach((name) => {
+ let want = plan.fields[name];
+ const el = form.elements[name];
+ if (want && typeof want === 'object' && 'ifEnabled' in want) { if (!el || el.disabled) return; want = want.ifEnabled; }
+ if (!el) { diffs.push({ name, page: '(not on the page)', plan: planValueLabel(want) }); return; }
+ if (el.length != null && el.tagName !== 'SELECT') {
+ const cur = Array.from(el).find((x) => x.checked);
+ const ok = cur && (want && typeof want === 'object' && want.text ? radioLabel(cur).toLowerCase().indexOf(want.text.toLowerCase()) !== -1 : cur.value === String(want));
+ if (!ok) diffs.push({ name, page: cur ? radioLabel(cur) || cur.value : '(none)', plan: planValueLabel(want) });
+ return;
+ }
+ if (el.tagName === 'SELECT') {
+ const opt = planWantedOption(el, want), cur = el.options[el.selectedIndex];
+ if (!opt || !cur || opt.value !== cur.value) diffs.push({ name, page: cur ? cur.textContent.trim() : '(none)', plan: opt ? opt.textContent.trim() : planValueLabel(want) });
+ return;
+ }
+ if (el.type === 'checkbox') { if (el.checked !== !!want) diffs.push({ name, page: el.checked ? 'on' : 'off', plan: want ? 'on' : 'off' }); return; }
+ const a = String(el.value == null ? '' : el.value).trim(), b = String(want);
+ const same = (a !== '' && !isNaN(+a) && !isNaN(+b)) ? +a === +b : a === b;
+ if (!same) diffs.push({ name, page: a || '(empty)', plan: b });
+ });
+ return { form, diffs };
+ }
+ function showPlanCheck() {
+ const bdy = document.getElementById('gpro-bdy');
+ if (!bdy) return;
+ const tone = { ok: ['#052e1a', '#10b981', '#a7f3d0'], warn: ['#2d2106', '#f59e0b', '#fde68a'], bad: ['#3b0d0d', '#ef4444', '#fecaca'], info: ['#111827', '#4b5563', '#9ca3af'] };
+ const lines = [];
+ Object.values(PAGE_PLANS).forEach((plan) => {
+ const r = planPageDiff(plan, document);
+ if (!r) return;
+ const label = PLAN_CHECK_LABELS[plan.step] || plan.step;
+ if (!r.form.dataset.gproPlanCheck) {
+ r.form.dataset.gproPlanCheck = '1';
+ const again = () => { planCheckTimers.forEach(clearTimeout); planCheckTimers = [setTimeout(showPlanCheck, 150)]; };
+ r.form.addEventListener('input', again); r.form.addEventListener('change', again);
+ }
+ const list = r.diffs.slice(0, 8).map((d) => `${d.name}: page ${d.page} → advisor ${d.plan}`).join(' · ') + (r.diffs.length > 8 ? ` · +${r.diffs.length - 8} more` : '');
+ if (plan.problems && plan.problems.length) lines.push(['bad', `⛔ ${label}: the advisor's plan failed its own check, so the copilot won't post it - ${plan.problems.join('; ')}`]);
+ else if (plan.locked) lines.push(['info', `🔒 ${label}: already done for this race - GPRO has fixed it.`]);
+ else if (plan.confirmed) lines.push(r.diffs.length ? ['bad', `⚠️ ${label}: GPRO's SAVED values differ from the advisor - this is not what will be raced: ${list}. Use "Fill this page's form", then Confirm.`] : ['ok', `✅ ${label}: GPRO's saved values match the advisor.`]);
+ else if (!Object.keys(plan.fields || {}).length || plan.skip) lines.push(['info', `${label}: advisor - no action${plan.skip ? ` (${plan.skip})` : ''}.`]);
+ else lines.push(r.diffs.length ? ['warn', `✏️ ${label}: page not yet set to the advisor's plan: ${list}.`] : ['ok', `✅ ${label}: form set to the advisor's plan${plan.step === 'race' ? '' : ' - nothing happens until the button on the page is pressed'}.`]);
+ });
+ let box = document.getElementById('gpro-plancheck');
+ if (!lines.length) { if (box) box.remove(); return; }
+ if (!box || box.parentNode !== bdy) { if (box) box.remove(); box = document.createElement('div'); box.id = 'gpro-plancheck'; bdy.insertBefore(box, bdy.firstChild); }
+ box.innerHTML = lines.map(([t, msg]) => { const c = tone[t]; return `<div style="background:${c[0]};border:1px solid ${c[1]};color:${c[2]};font-size:10px;padding:5px 7px;border-radius:6px;margin-bottom:5px;">${esc(msg)}</div>`; }).join('');
+ }
  function planSig(fields) { return JSON.stringify(Object.keys(fields).sort().map((k) => [k, fields[k]])); }
 
  // Sets the page form's fields by name. A value may be {text:'Replace with level 2'} (option chosen
@@ -6867,7 +6997,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (!el) { missing.push(name); return; }
  if (el.length != null && el.tagName !== 'SELECT') { // radio group
  // {text}: the option whose label reads like that (sponsor answers carry no meaningful value).
- const labelOf = (x) => ((x.labels && x.labels[0] && x.labels[0].textContent) || (x.nextSibling && x.nextSibling.textContent) || (x.parentElement && x.parentElement.textContent) || '').replace(/\s+/g, ' ').trim().toLowerCase();
+ const labelOf = (x) => radioLabel(x).toLowerCase();
  const r = (want && typeof want === 'object' && want.text)
  ? Array.from(el).find((x) => labelOf(x).indexOf(want.text.toLowerCase()) === 0) || Array.from(el).find((x) => labelOf(x).indexOf(want.text.toLowerCase()) !== -1)
  : Array.from(el).find((x) => x.value === String(want));
@@ -6875,15 +7005,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  r.checked = true; set.push(name); return;
  }
  if (el.tagName === 'SELECT') {
- const opts = Array.from(el.options);
- let opt = null;
- // {dry: code}: that compound if the page still offers it, else the one dry compound an earlier
- // dry session already locked in (GPRO allows one dry compound per race).
- if (want && typeof want === 'object' && 'dry' in want) opt = opts.find((o) => o.value === String(want.dry)) || opts.find((o) => o.value && o.value !== '0' && o.value !== '6');
- // Option texts use non-breaking spaces (facility selects, 2026-10-30), and "level 2" must not
- // match "level 20" - so compare whitespace-normalized text with a non-digit after the prefix.
- else if (want && typeof want === 'object' && want.text) opt = opts.find((o) => { const t = o.textContent.replace(/\s+/g, ' ').trim(); return t.indexOf(want.text) === 0 && !/\d/.test(t.charAt(want.text.length)); });
- else opt = opts.find((o) => o.value === String(want));
+ const opt = planWantedOption(el, want);
  if (!opt) { missing.push(name); return; }
  el.disabled = false; el.value = opt.value;
  } else if (el.type === 'checkbox') {
@@ -6894,7 +7016,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  el.dispatchEvent(new Event('change', { bubbles: true }));
  set.push(name);
  });
- return { form, missing, set, invalid: formRangeProblems(form) };
+ const pd = planPageDiff(plan, doc);
+ return { form, missing, set, invalid: formRangeProblems(form), unmatched: pd ? pd.diffs.filter((d) => missing.indexOf(d.name) === -1) : [] };
  }
 
  // Every enabled text box whose limits GPRO prints next to it - "(0 - 53)", "(0 - 999)", "(max 180
@@ -6979,6 +7102,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  if (r.error) return report({ ok: false, msg: r.error });
  if (r.missing.length) return report({ ok: false, msg: `couldn't set ${r.missing.join(', ')}` });
  if (r.invalid && r.invalid.length) return report({ ok: false, msg: `not posted - outside GPRO's limits: ${r.invalid.join(', ')}` });
+ if (r.unmatched && r.unmatched.length) return report({ ok: false, msg: `not posted - the form doesn't hold the plan after filling: ${r.unmatched.map((d) => `${d.name} ${d.page}≠${d.plan}`).join(', ')}` });
  if (job.dryRun) return report({ ok: true, preview: true, msg: plan.summary, sig: plan.sig });
  job.stage = 'submitted'; job.meta = plan.meta || null;
  window.name = AUTO_FRAME_PREFIX + JSON.stringify(job);
@@ -7242,24 +7366,29 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // Fills a DRIVEN session's (now empty) form boxes with the values GPRO recorded for that lap, read
  // from its own "Qualify N lap data" row - display only: nothing is submitted, and a driven session
  // can't be driven again. Without it the page shows blank boxes after the lap (user, 2026-10-31).
- function mirrorDrivenSession(doc, n) {
- if (!sessionLapDriven(doc, n)) return;
+ // GPRO's recorded values of a driven qualifying lap as form fields (null when not driven).
+ function drivenSessionFields(doc, n) {
+ if (!sessionLapDriven(doc, n)) return null;
  const head = Array.from(doc.querySelectorAll('th,td')).find((c) => c.textContent.replace(/\s+/g, ' ').trim() === `Qualify ${n} lap data`);
  const table = head && head.closest('table');
  const row = table && Array.from(table.querySelectorAll('tr')).find((tr) => /\d+:\d{2}\.\d{3}s/.test(tr.textContent));
- if (!row) return;
+ if (!row) return null;
  // Read cell by cell (textContent runs the cells together): numbers in column order (setup, then
  // Q2's fuel), the compound, and the risk text.
  const cells = Array.from(row.cells).map((c) => c.textContent.replace(/\s+/g, ' ').trim());
  const nums = cells.filter((c) => /^\d+$/.test(c));
  const tyre = (cells.join(' ').match(/Extra Soft|Soft|Medium|Hard|Rain/) || [])[0];
  const risk = cells.find((c) => QUAL_RISK_OPTIONS.indexOf(c) !== -1);
- if (nums.length < 6 || !tyre) return;
+ if (nums.length < 6 || !tyre) return null;
  const fields = { FWing: nums[0], RWing: nums[1], Engine: nums[2], Brakes: nums[3], Gear: nums[4], Suspension: nums[5], Tyres: { text: tyre } };
  if (risk) fields.Risk = { text: risk };
  if (n === 2 && nums[6]) fields.Fuel = nums[6];
  if (n === 1) fields.TypeLap = 'Qualify';
- fillForm({ form: 'formQual', fields }, doc);
+ return fields;
+ }
+ function mirrorDrivenSession(doc, n) {
+ const fields = drivenSessionFields(doc, n);
+ if (fields) fillForm({ form: 'formQual', fields }, doc);
  }
  function sessionLapDriven(doc, n) {
  const txt = (doc.body ? doc.body.textContent : '').replace(/\s+/g, ' ');
@@ -7268,15 +7397,27 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const seg = txt.slice(i, i + 140);
  return !/No (qualify|practice) laps done/i.test(seg) && /\d+:\d{2}\.\d{3}s/.test(seg);
  }
+ const DRIVER_TRAINED_RE = /able to train your driver again after the next race/i;
  function buttonEnabled(doc, name) { const b = doc.querySelector(`[name="${name}"]`); return !!b && !b.disabled; }
  const STEP_DONE_CHECKS = {
- q1: async () => sessionLapDriven(await fetchDoc('Qualify.asp'), 1),
- q2: async () => sessionLapDriven(await fetchDoc('Qualify2.asp'), 2),
+ q1: async (r) => drivenMatchesPlan(await fetchDoc('Qualify.asp'), 1, r),
+ q2: async (r) => drivenMatchesPlan(await fetchDoc('Qualify2.asp'), 2, r),
  car: async () => buttonEnabled(await fetchDoc('UpdateCar.asp'), 'btnUndoUpdateCar'),
+ driverTrain: async () => DRIVER_TRAINED_RE.test((await fetchDoc('TrainingSession.asp')).body.textContent || ''),
  facilities: async () => buttonEnabled(await fetchDoc('StaffAndFacilities.asp'), 'btnUndoFacilitiesUpdate'),
  };
+ // Driven AND with the numbers the plan posted (setup, Q2 fuel) - a lap driven on other values is not
+ // "done as planned". Without the plan's fields (an older stored run) driven is enough.
+ function drivenMatchesPlan(doc, n, r) {
+ const got = drivenSessionFields(doc, n);
+ if (!got) return sessionLapDriven(doc, n);
+ const want = (r && r.fields) || {};
+ const bad = ['FWing', 'RWing', 'Engine', 'Brakes', 'Gear', 'Suspension', 'Fuel'].filter((k) => want[k] != null && typeof want[k] !== 'object' && got[k] != null && +got[k] !== +want[k]);
+ if (bad.length) logError(`Q${n} driven on other values than planned`, bad.map((k) => `${k} ${got[k]}≠${want[k]}`).join(', '));
+ return !bad.length;
+ }
  async function verifyPost(step, r) {
- if (STEP_DONE_CHECKS[step.key]) return STEP_DONE_CHECKS[step.key]();
+ if (STEP_DONE_CHECKS[step.key]) return STEP_DONE_CHECKS[step.key](r);
  if (step.key === 'race' && r.fields) {
  const form = (await fetchDoc('RaceSetup.asp')).forms.formQual;
  if (!form) return false;
@@ -7292,7 +7433,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const t = parseTestingDOM(await fetchDoc('Testing.asp'));
  return !!(t && t.session && t.session.lapsDone > r.meta.lapsDone);
  }
- return true; // staff/driver training: GPRO shows no reliable read-back; the result page message is logged
+ return true; // staff training: GPRO shows no reliable read-back; the result page message is logged
  }
 
  // Fresh data before any run: next race + deadlines, driver/track/suppliers/staff/testing pages,
@@ -7413,6 +7554,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const f = fillForm(plan, document);
  if (f.error || f.missing.length) { pilotLog(`⚠ ${name}: ${f.error || `couldn't set ${f.missing.join(', ')}`}`); return tabRunAdvance(r); }
  if (f.invalid && f.invalid.length) { pilotLog(`⚠ ${name}: not posted - outside GPRO's limits: ${f.invalid.join(', ')}`); return tabRunAdvance(r); }
+ if (f.unmatched && f.unmatched.length) { pilotLog(`⚠ ${name}: not posted - the form doesn't hold the plan after filling: ${f.unmatched.map((d) => `${d.name} ${d.page}≠${d.plan}`).join(', ')}`); return tabRunAdvance(r); }
  const btn = planSubmitButton(f.form, plan.submit);
  if (!btn || btn.disabled) { pilotLog(`⚠ ${name}: the page's "${(btn && btn.value) || plan.submit}" button is ${btn ? 'disabled' : 'missing'}`); return tabRunAdvance(r); }
  Object.assign(r, { stage: 'submitted', fields: plan.fields, meta: plan.meta || null, sig: plan.sig, summary: plan.summary });
@@ -8254,8 +8396,11 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
   h += mkSection(leagueAttrPriority ? `Training Recommendation (${league})` : 'Training Recommendation', recHtml);
   // Autopilot / "Fill this page's form": the top recommendation's session.
   const cashNow = (getCachedCarData() || {}).cash || 0;
-  publishPlan('driverTrain', { form: 'formTraining', submit: 'TrainDriver', fields: planSession ? { SessionType: planSession.id } : {},
-  skip: !planSession ? 'no session with a confirmed effect on the top-priority skill' : cashNow - planSession.cost < PILOT_CASH_RESERVE ? 'cash below the reserve' : null,
+  // GPRO allows one session per race: after it the page hides the session select, disables Train
+  // driver and says so (read live 2026-11-18).
+  const trainedThisRace = DRIVER_TRAINED_RE.test(document.body ? document.body.textContent : '');
+  publishPlan('driverTrain', { form: 'formTraining', submit: 'TrainDriver', fields: planSession ? { SessionType: planSession.id } : {}, locked: trainedThisRace,
+  skip: trainedThisRace ? 'driver already trained for this race' : !planSession ? 'no session with a confirmed effect on the top-priority skill' : cashNow - planSession.cost < PILOT_CASH_RESERVE ? 'cash below the reserve' : null,
   summary: planSession ? `${planSession.label} for ${weakest[0].label} ($${planSession.cost.toLocaleString()})` : '' });
   }
 

@@ -6,6 +6,7 @@
   "scripts": {
     "check:userscript": "node --check GPRO_Strategy_Tool.user.js && node --check gpro-data.js",
     "lint": "npx --yes eslint@9.39.1 GPRO_Strategy_Tool.user.js gpro-data.js",
-    "verify": "npm run -s check:userscript && npm run -s lint"
+    "verify": "npm run -s check:userscript && npm run -s lint && npm run -s test",
+    "test": "node tests/plan.test.js"
   }
 }
