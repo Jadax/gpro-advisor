@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.43.1
+// @version 6.44.0
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @updateURL https://raw.githubusercontent.com/Jadax/gpro-advisor/main/GPRO_Strategy_Tool.user.js
@@ -32,7 +32,7 @@
 // @connect gpro.net
 // @connect www.gpro.net
 // @connect app.gpro.net
-// @require https://raw.githubusercontent.com/Jadax/gpro-advisor/main/gpro-data.js?v=5.8.12
+// @require https://raw.githubusercontent.com/Jadax/gpro-advisor/main/gpro-data.js?v=5.8.14
 // @run-at document-idle
 // ==/UserScript==
 
@@ -1988,11 +1988,11 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // maxStintLaps: the chosen compound's lifeLaps. Without it the locked-start re-plan assumed every
   // stint is laps/(stops+1) long - a lower bound that added a stop (S113 R7 Brands Hatch dry start:
   // 68 L locked, 2-stop Hard -> 3 stops planned where 2 fit).
-  function computeRaceFuelPlan(laps, dryRate, profile, tyreStops, committedFuel, lockedStart, maxStintLaps) {
+  function computeRaceFuelPlan(laps, dryRate, profile, tyreStops, committedFuel, lockedStart, maxStintLaps, wetRatio) {
   const phases = (profile && profile.phases) || [];
   const transitions = (profile && profile.transitions) || [];
   const transLaps = transitions.map(tr => tr.lap);
-  const wetRate = (dryRate || 2.4) * 1.12; // wet consumption ~12% higher (documented GAPP ratio)
+  const wetRate = (dryRate || 2.4) * (wetRatio > 0 ? wetRatio : wetFuelRatio(null)); // wet laps burn less (wetFuelRatio)
   if (lockedStart > 0 && laps > 0) {
   const rateLap = (l) => { for (const p of phases) { if (l >= p.startLap && l <= p.endLap) return p.condition === 'wet' ? wetRate : dryRate; } return dryRate; };
   let used = 0, pit1 = 0;
@@ -2159,7 +2159,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const raceProfileM = analyzeM ? analyzeM.raceProfile : null;
   let totalFuel;
   if (raceProfileM && raceProfileM.type === 'mixed') {
-  const wetFuelMult = 1.12; // wet tyres consume ~12% more fuel
+  const wetFuelMult = wetFuelRatio(track && track.trackName); // wet laps burn less (wetFuelRatio)
   const fpLapDry = fuelPerLap || (FUEL_BASE[consStr] || 2.4);
   const fpLapWet = fpLapDry * wetFuelMult;
   totalFuel = calcMixedRaceFuel(raceProfileM, laps, fpLapDry, fpLapWet).totalFuel;
@@ -2279,7 +2279,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   };
   // Attach mixedFuelInfo for dry compounds in mixed races
   if (!isRain && raceProfileM && raceProfileM.type === 'mixed') {
-  const wetFuelMult = 1.12;
+  const wetFuelMult = wetFuelRatio(track && track.trackName);
   const fpLapDry = fuelPerLap || (FUEL_BASE[consStr] || 2.4);
   const fpLapWet = fpLapDry * wetFuelMult;
   res.mixedFuelInfo = calcMixedRaceFuel(raceProfileM, laps, fpLapDry, fpLapWet);
@@ -2398,6 +2398,25 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
 
  // GAPP fuel use per km for a driver/car (fuelLoadCalc: track base L/km + driver/car factor).
  // Shared by the race strategy, the testing plan and the race-log fuel calibration.
+ // Wet / dry fuel per lap for a track = GAPP's wet / dry track fuel factors (both per km). Wet laps
+ // burn LESS (Brands Hatch 0.75x, Melbourne 0.64x; the user's calculator shows the same) - the old
+ // flat x1.12 "documented GAPP ratio" was unsourced and backwards. Without a track: the median over
+ // every GAPP track that has both factors.
+ function wetFuelRatio(trackName) {
+ const g = trackName ? lookupGappTrack(trackName, 'trackData') : null;
+ if (g && g.values[6] > 0 && g.values[7] > 0) return g.values[7] / g.values[6];
+ if (wetFuelRatio.median == null) {
+ const r = Object.values((D.gapp && D.gapp.trackData) || {}).filter((v) => v[6] > 0 && v[7] > 0).map((v) => v[7] / v[6]);
+ wetFuelRatio.median = r.length ? medianOf(r) : 1;
+ }
+ return wetFuelRatio.median;
+ }
+ // Tyre left at the end of a stint: the user's buffers (dry 7%, wet 15%), else the old single 15%.
+ function tyreWearLimit(isRain) {
+ const tc = D.tyreConstants || {};
+ const v = isRain ? tc.wearThresholdWet : tc.wearThresholdDry;
+ return v != null ? v : (tc.wearThreshold != null ? tc.wearThreshold : 15);
+ }
  function gappFuelPerKm(baseLkm, conc, aggr, exp, ti, engLvl, elecLvl) {
  const ff = D.gapp.fuelFactorCoeffs;
  return baseLkm + ff.concentration * conc + ff.aggressiveness * aggr + ff.experience * exp + ff.techInsight * ti + ff.engineLevel * engLvl + ff.electronicsLevel * elecLvl;
@@ -2469,7 +2488,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  function usableLifeKm(tyreTypeIdx, wetFactor, ctFactor) {
  const life = gappTyreLifeKm({ trackWearLevel, temp: rTemp, supFactor, typeIdx: tyreTypeIdx, suspLvl, aggr, exp, weight, trackWearFactor, wetFactor, ctFactor })
  / ((tyreTypeIdx !== sc.rainTyreTypeIndex && tyreCal.active) ? tyreCal.factor : 1);
- return life * ((100 - wearLimit) / 100);
+ return life * ((100 - tyreWearLimit(tyreTypeIdx === sc.rainTyreTypeIndex)) / 100);
  }
  function stopsFor(tyreTypeIdx, wetFactor, ctFactor) {
  const stops = Math.ceil(trackDistanceTotal / usableLifeKm(tyreTypeIdx, wetFactor, ctFactor)) - 1;
@@ -2525,7 +2544,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   let mixedFuelInfo = null;
   if (raceProfile && raceProfile.type === 'mixed' && !isRain) {
   const fpLapDry = testingFuelPerLap || (trackDistanceTotal * fuelLkm(trackFuelDry) / laps);
-  const fpLapWet = trackFuelWet ? (trackDistanceTotal * fuelLkm(trackFuelWet) / laps) : fpLapDry * 1.12;
+  const fpLapWet = trackFuelWet ? (trackDistanceTotal * fuelLkm(trackFuelWet) / laps) : fpLapDry * wetFuelRatio(null);
   mixedFuelInfo = calcMixedRaceFuel(raceProfile, laps, fpLapDry, fpLapWet);
   fuelPerStint = Math.ceil(mixedFuelInfo.totalFuel / stints);
   } else {
@@ -2561,7 +2580,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // Laps one set lasts to the wear limit - the longest stint this compound allows.
   lifeLaps: Math.floor(usableLifeKm(c.idx, c.wetFactor, ctFactor) / (trackDistanceTotal / laps)),
   total: total.toFixed(1), tcd: tcd.toFixed(1), fld: fld.toFixed(1), pits: pits.toFixed(1),
-  finalWear: wearLimit.toFixed(1), isRain, mixedFuelInfo,
+  finalWear: tyreWearLimit(isRain).toFixed(1), isRain, mixedFuelInfo,
   });
   });
   if (results.length === 0) return null;
@@ -2570,7 +2589,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   let totalFuel;
   if (raceProfile && raceProfile.type === 'mixed' && results.length) {
   const fpLapDry = testingFuelPerLap || (trackDistanceTotal * fuelLkm(trackFuelDry) / laps);
-  const fpLapWet = trackFuelWet ? (trackDistanceTotal * fuelLkm(trackFuelWet) / laps) : fpLapDry * 1.12;
+  const fpLapWet = trackFuelWet ? (trackDistanceTotal * fuelLkm(trackFuelWet) / laps) : fpLapDry * wetFuelRatio(null);
   totalFuel = calcMixedRaceFuel(raceProfile, laps, fpLapDry, fpLapWet).totalFuel;
   } else {
   totalFuel = Math.ceil(fuelPerLapDry * laps * 1.03);
@@ -3117,8 +3136,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const phaseBoostLaps = picked.filter(l => l >= p.startLap && l <= p.endLap).length;
   if (p.condition === 'dry') dryBoostLaps += phaseBoostLaps; else wetBoostLaps += phaseBoostLaps;
   });
-  // Wet boost laps burn ~12% more fuel per boosted lap than dry
-  estExtraFuel = Math.ceil((dryBoostLaps * lapLengthKm * fuelBase * 0.12) + (wetBoostLaps * lapLengthKm * fuelBase * 0.12 * 1.12));
+  // Wet boost laps scale like wet laps (wetFuelRatio - wet laps burn less)
+  estExtraFuel = Math.ceil((dryBoostLaps * lapLengthKm * fuelBase * 0.12) + (wetBoostLaps * lapLengthKm * fuelBase * 0.12 * wetFuelRatio(null)));
   const dryPct = dryBoostLaps > 0 ? ` (${dryBoostLaps} dry × 12%)` : '';
   const wetPct = wetBoostLaps > 0 ? ` (${wetBoostLaps} wet × 13.4%)` : '';
   note += ` Estimated extra fuel for ${picked.length} boosted laps: ~${estExtraFuel}L${dryPct}${wetPct}. Mixed-condition estimate${ratingNote}.`;
@@ -3652,6 +3671,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // can't flag every part. First data point: S113 R8 Brands Hatch, Cooling L1 91% at the start
  // broke on lap 57 of 75 (~98%), then +3 s/lap for 19 laps, P5 -> P8.
  const FAILURE_WEAR_FLOOR = 90; // own cut-off between "worn out" and "random" failures
+ const USER_REPLACE_LINE = 95;
  const FAIL_LINE = () => partFailureEvidence().line;
  const PROBLEM_PART_WORDS = [['chassis', 'Chassis'], ['engine', 'Engine'], ['front wing', 'Front Wing'], ['rear wing', 'Rear Wing'], ['underbody', 'Underbody'],
  ['sidepod', 'Sidepods'], ['cooling', 'Cooling'], ['gear', 'Gearbox'], ['brake', 'Brakes'], ['suspension', 'Suspension'], ['electronic', 'Electronics']];
@@ -3673,14 +3693,17 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  });
  });
  const worn = fails.filter((f) => f.wearAt >= FAILURE_WEAR_FLOOR);
- const line = worn.length ? Math.floor(Math.min(...worn.map((f) => f.wearAt))) : 100;
+ // The user's own guide (rejca.cz/gpro, "Replacement Threshold"): replace a part "only when it is
+ // projected to exceed 95% wear after the race" - the line never sits above that; a logged failure
+ // lower than 95 moves it down.
+ const line = Math.min(USER_REPLACE_LINE, worn.length ? Math.floor(Math.min(...worn.map((f) => f.wearAt))) : USER_REPLACE_LINE);
  return { fails, line, basis: worn.length ? worn.reduce((a, f) => (f.wearAt < a.wearAt ? f : a)) : null };
  }
  function failLineNote() {
  const ev = partFailureEvidence();
  if (!ev.basis) return '';
  const b = ev.basis;
- return `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">📒 A part counts as failing when it would end the race at ${ev.line}%+ - your ${esc(b.part)} broke at ~${b.wearAt}% (${esc(b.track)}, S${b.season} R${b.race}, lap ${b.lap}${b.secPerLap ? `, then ${b.secPerLap.toFixed(1)} s/lap slower` : ''}). GPRO publishes no failure curve; this line moves with every failure logged.</div>`;
+ return `<div style="font-size:9px;color:#9ca3af;margin-top:4px;">📒 A part counts as failing when it would end the race at ${ev.line}%+ (your guide: replace above 95%) - your ${esc(b.part)} broke at ~${b.wearAt}% (${esc(b.track)}, S${b.season} R${b.race}, lap ${b.lap}${b.secPerLap ? `, then ${b.secPerLap.toFixed(1)} s/lap slower` : ''}). GPRO publishes no failure curve; this line moves with every failure logged.</div>`;
  }
  // What a stop really cost: (pit lap + out lap) - 2 x the median clean dry lap of the race. Stops
  // whose pit/out lap also carries a mistake or problem are skipped. S113 R8 Brands Hatch: L22
@@ -3808,8 +3831,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const tw = raceStints(rec).filter((x) => x.tyrePerLap != null && x.laps >= 5 && !x.wetLaps);
  if (plan.lifeLaps && tw.length) {
  const perLap = tw.reduce((a, x) => a + x.tyrePerLap * x.laps, 0) / tw.reduce((a, x) => a + x.laps, 0);
- const wearLimit = (D.tyreConstants && D.tyreConstants.wearThreshold) || 15;
- const obsLife = perLap > 0 ? Math.floor((100 - wearLimit) / perLap) : null;
+ const obsLife = perLap > 0 ? Math.floor((100 - tyreWearLimit(plan.compound === 'Rain')) / perLap) : null;
  if (obsLife) add(Math.abs(obsLife - plan.lifeLaps) <= Math.max(3, plan.lifeLaps * 0.1), `Tyres (${esc(plan.compound || '?')}): planned ~${plan.lifeLaps} laps a set, raced ${perLap.toFixed(2)} %/lap = ~${obsLife} laps${obsLife > plan.lifeLaps * 1.25 && plan.stops > 0 ? ' - fewer stops were possible' : ''}`, 'tyre-wear calibration');
  }
  // part wear + failures
@@ -3859,7 +3881,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const tc = tyreWearCalibration();
  row('Tyre wear', tc.factor != null ? `×${tc.factor.toFixed(3)} vs GAPP` : 'GAPP', `${tc.races} race${tc.races !== 1 ? 's' : ''}${tc.active ? '' : ` (applies from ${MIN_WEAR_CAL_RACES})`}`);
  const fe = partFailureEvidence();
- row('Part fail line', `${fe.line}%`, fe.basis ? `${fe.basis.part} broke at ~${fe.basis.wearAt}% (S${fe.basis.season} R${fe.basis.race})` : 'no failure logged - 100% default');
+ row('Part fail line', `${fe.line}%`, `your guide's 95%${fe.basis ? `; ${fe.basis.part} broke at ~${fe.basis.wearAt}% (S${fe.basis.season} R${fe.basis.race})` : ''}`);
  const pl = pitLossEvidence();
  row('Cost of a stop', pl ? `${pl.median.toFixed(1)} s` : 'GAPP pit time', pl ? `${pl.n} race${pl.n !== 1 ? 's' : ''} measured` : 'not measured yet');
  const rp = rainPolicyEvidence();
@@ -4753,7 +4775,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     // pick different boost laps on this page than on Race Setup.
     let q2Plan = null;
     try {
-    q2Plan = computeRaceFuelPlan(raceLaps, raceFuelPerLap, analyze.raceProfile, chosenRace.stops, null);
+    q2Plan = computeRaceFuelPlan(raceLaps, raceFuelPerLap, analyze.raceProfile, chosenRace.stops, null, null, chosenRace.lifeLaps, wetFuelRatio((track || {}).trackName));
     } catch (e) { logDebug('[GPRO][Q2Fuel] phase-aware first stint failed: ' + e.message); }
     // Compute boost fuel for Q2 recommendation so it matches the Race Setup total
     let q2BoostPick = null;
@@ -5065,7 +5087,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
    // SINGLE shared fuel-plan source (also used by renderQualify's Q2 "First Stint Fuel") — phase-aware
    // wet/dry per stint and feasible (no non-start stint > TANK_MAX). Using computeRaceFuelPlan here
    // guarantees Q2 and Race Setup produce IDENTICAL stop laps, per-stint fuel and recommended start.
-   const plan = computeRaceFuelPlan(laps, fuelPerLap, analyze.raceProfile, tyreStops, domFuelStart, lockedStart, chosenTyreResult.lifeLaps);
+   const plan = computeRaceFuelPlan(laps, fuelPerLap, analyze.raceProfile, tyreStops, domFuelStart, lockedStart, chosenTyreResult.lifeLaps, wetFuelRatio(trackName));
    const stops = plan.stops;
    const stints = plan.stints;
    const firstStint = plan.startRecommend;
@@ -5084,7 +5106,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const rpFallback = analyzeFallback ? analyzeFallback.raceProfile : null;
   let totalFuelFb;
   if (rpFallback && rpFallback.type === 'mixed' && gappTrack) {
-  const fuelPerLapWet = gappTrack.values[7] ? gappTrack.values[7] * gappTrack.values[13] : fuelPerLapDry * 1.12;
+  const fuelPerLapWet = gappTrack.values[7] ? gappTrack.values[7] * gappTrack.values[13] : fuelPerLapDry * wetFuelRatio(null);
   totalFuelFb = calcMixedRaceFuel(rpFallback, laps, fuelPerLapDry, fuelPerLapWet).totalFuel;
   } else {
   totalFuelFb = Math.ceil(fuelPerLapDry * laps * 1.03);
@@ -7840,7 +7862,7 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  const lifeKm = gappTyreLifeKm({ trackWearLevel: wl !== undefined ? wl : 2, temp: testing.temp != null ? testing.temp : 20, supFactor, typeIdx: 3,
  suspLvl: parseInt(car[PART_LVL_KEYS[PART_NAMES.indexOf('Suspension')]]) || 1, aggr: numOrDefault(driver.aggressiveness, 50), exp: numOrDefault(driver.experience, 50),
  weight: numOrDefault(driver.weight, 75), trackWearFactor: t[9], wetFactor: 1, ctFactor: 1 });
- const wearLimit = (D.tyreConstants && D.tyreConstants.wearThreshold) || 15;
+ const wearLimit = tyreWearLimit(false);
  out.tyreMaxLaps = Math.floor(lifeKm * (100 - wearLimit) / 100 / (t[8] / (t[12] || 60)));
  }
  } catch (e) { logDebug('[GPRO][testing] tyre cap: ' + e.message); }
@@ -7931,7 +7953,7 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
   // expected numbers stand on their own; the race stand's own call sites feed real values.
   const fuelFactor = ff.concentration * 100 + ff.aggressiveness * 50 + ff.experience * 50 + ff.techInsight * 50 + ff.engineLevel * 5 + ff.electronicsLevel * 5;
   const fuelPerLapDry = (trackDistanceTotal * (trackFuelDry + fuelFactor) / (laps || 1));
-  const fuelPerLapWet = trackFuelWet ? (trackDistanceTotal * (trackFuelWet + fuelFactor) / (laps || 1)) : fuelPerLapDry * 1.12;
+  const fuelPerLapWet = trackFuelWet ? (trackDistanceTotal * (trackFuelWet + fuelFactor) / (laps || 1)) : fuelPerLapDry * wetFuelRatio(null);
   const wearLimit = (typeof GPRO_DATA !== 'undefined' && GPRO_DATA.tyreConstants && GPRO_DATA.tyreConstants.wearThreshold) ? GPRO_DATA.tyreConstants.wearThreshold : 15;
   const wearLevel = 2; // 'Medium' default — Testing.asp doesn't expose the track's wear rating
   const rTemp = 25;
@@ -8470,10 +8492,12 @@ const canAffordSessions = Math.floor(data.contract.salary / 750000);
   const contested = offer.totalOffers > 0;
   // Nightly tuning via Settings (gpro_bid_strategy): value=0.5x ask, balanced=1.0x (default,
   // material deal), aggressive=2.0x. Balanced picks 1.25x when contested, 1.0x when calm.
-  let bidStrat = contested ? 1.25 : 1.0;
+  // The user's own guide (rejca.cz/gpro, Hiring Advice): "try offering a 17-race contract at up to 20%
+  // below their asking price per race" - balanced bids 0.8x the ask; a lone bidder gets the $600K rule below.
+  let bidStrat = 0.8;
   try {
   const s = GM_getValue('gpro_bid_strategy', 'balanced');
-  bidStrat = s === 'value' ? 0.5 : s === 'aggressive' ? 2.0 : s === 'balanced' ? (contested ? 1.25 : 1.0) : bidStrat;
+  bidStrat = s === 'value' ? 0.5 : s === 'aggressive' ? 2.0 : s === 'balanced' ? 0.8 : bidStrat;
   } catch (e) {}
   let recSalary = Math.max(Math.round(ask * 0.5 / 10000) * 10000, Math.round((ask * bidStrat) / 10000) * 10000);
   // Sole bidder (user's own experience, 2026-11-05): "you can go as low as 600k if you are the only
