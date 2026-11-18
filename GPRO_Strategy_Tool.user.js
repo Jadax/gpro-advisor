@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.44.0
+// @version 6.44.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @updateURL https://raw.githubusercontent.com/Jadax/gpro-advisor/main/GPRO_Strategy_Tool.user.js
@@ -1746,7 +1746,7 @@ if (h.includes('TrainingSession.asp')) return 'training';
   }
 
   // Builds a feasible per-stint fuel plan for ANY race (dry, wet, or mixed), phase-aware.
-  // Each stint's fuel = Σ over its laps of the phase-appropriate rate (wet ~12% higher than dry) ×
+  // Each stint's fuel = Σ over its laps of the phase-appropriate rate (wet = dry x wetFuelRatio) ×
   // safety margin, so a wet-then-dry race sizes the wet opening stint by the WET rate and later
   // dry stints by the DRY rate. Mandatory tyre-transition stops are always included; extra fuel
   // stops are inserted (bisecting the longest stint) whenever a non-start stint's phase-aware fuel
@@ -1988,6 +1988,31 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // maxStintLaps: the chosen compound's lifeLaps. Without it the locked-start re-plan assumed every
   // stint is laps/(stops+1) long - a lower bound that added a stop (S113 R7 Brands Hatch dry start:
   // 68 L locked, 2-stop Hard -> 3 stops planned where 2 fit).
+  // Drives the race as GPRO would with the fills ALREADY SAVED on Race Setup: stop k refills to
+  // FuelStop k (0 = the previous stop's value, GPRO's own note), a stop comes when the fuel can't
+  // do another lap, when the weather changes (wait-to-pit 0) or when a dry set reaches its usable
+  // life. Returns the stops it would make - the advisor compares them with its own plan, so a saved
+  // setup that can't reach the flag sensibly is flagged even though "submit once" leaves it alone.
+  function simulateSavedFuel(laps, phases, dryRate, wetRate, startFuel, fills, lifeLaps) {
+  const wetAt = (l) => (phases || []).some((p) => p.condition === 'wet' && l >= p.startLap && l <= p.endLap);
+  let tank = startFuel || 0, k = 0, last = 0, setLaps = 0;
+  const stops = [];
+  for (let l = 1; l <= laps; l++) {
+  const rate = wetAt(l) ? wetRate : dryRate;
+  const change = l > 1 && wetAt(l) !== wetAt(l - 1);
+  const worn = !wetAt(l) && lifeLaps > 0 && setLaps >= lifeLaps;
+  if (tank < rate || change || worn) {
+  const f = (fills && fills[k]) > 0 ? fills[k] : last;
+  last = f; k++;
+  tank = Math.max(tank, Math.min(TANK_MAX, f));
+  stops.push(l - 1); setLaps = 0;
+  if (tank < rate) return { stops, ranOut: l, totalStops: stops.length };
+  }
+  tank -= rate; setLaps++;
+  }
+  return { stops, ranOut: null, totalStops: stops.length };
+  }
+
   function computeRaceFuelPlan(laps, dryRate, profile, tyreStops, committedFuel, lockedStart, maxStintLaps, wetRatio) {
   const phases = (profile && profile.phases) || [];
   const transitions = (profile && profile.transitions) || [];
@@ -2008,13 +2033,18 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const remStops = Math.max((tyreStops || 0) - 1, Math.ceil(rem / strategyStint) - 1, 0);
   const shift = (l) => l - pit1;
   const subPhases = phases.filter((p) => p.endLap > pit1).map((p) => Object.assign({}, p, { startLap: Math.max(1, shift(p.startLap)), endLap: shift(p.endLap), laps: shift(p.endLap) - Math.max(1, shift(p.startLap)) + 1 }));
-  // A weather transition within a third of a stint after the fuel pit merges into that pit, the
-  // same rule buildPhaseFuelPlan uses for wear stops - otherwise the plan pitted again on the next
-  // lap for 5 L (seen in a Brands Hatch harness run: pits L18 + L19).
-  const mergeGap = Math.max(1, Math.round(strategyStint / 3));
-  const subTrans = transLaps.filter((l) => l > pit1 + mergeGap).map(shift);
+  // Every weather transition after the fuel pit stays a stop: with "wait to pit" 0 GPRO pits when
+  // the track changes, whatever fuel is left. v6.38.1 merged a transition within a third of a stint
+  // into the fuel pit - but that pit happens BEFORE the change, on the old tyres, so the plan never
+  // switched compound (S113 R11 Las Vegas: 41 L locked -> pit L11 in the rain, rain stops ~L19,
+  // advisor kept Rain to L34). Only a transition ON the stint boundary is the same stop.
+  const subTrans = transLaps.filter((l) => l > pit1 + 1).map(shift);
   let sub = null;
-  try { sub = buildPhaseFuelPlan(rem, subPhases, subTrans, dryRate || 2.4, wetRate, remStops); } catch (e) { logDebug('[GPRO][Fuel] locked-start remainder failed: ' + e.message); }
+  // Stops for the rest = its weather changes + the wear stops each DRY phase needs on its own (a tyre
+  // set's life is per set: 32 dry laps after the Las Vegas switch need 2 Medium sets at ~20-23 laps).
+  const dryWear = subPhases.filter((p) => p.condition === 'dry').reduce((n, p) => n + Math.max(0, Math.ceil(p.laps / strategyStint) - 1), 0);
+  const remAll = Math.max(remStops, subTrans.length + dryWear);
+  try { sub = buildPhaseFuelPlan(rem, subPhases, subTrans, dryRate || 2.4, wetRate, remAll); } catch (e) { logDebug('[GPRO][Fuel] locked-start remainder failed: ' + e.message); }
   if (sub && sub.stintFuels) {
   const stopLaps = [pit1].concat(sub.stopLaps.map((l) => l + pit1));
   return { stopLaps, stops: stopLaps.length, stints: stopLaps.length + 1, stintFuels: [lockedStart].concat(sub.stintFuels), startRecommend: lockedStart, committedFuel: lockedStart, lockedStart };
@@ -5057,6 +5087,24 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // same race. GAPP's own tyre-stop formula already accounts for fuel load in its lost-time calc
  // (fuelPerLap/totalFuel/laps below all come straight from `tyre`), so derive the fuel plan from
  // the selected compound's stop count instead of a separate model.
+  // The dry compound GPRO has already locked: RaceSetup's DryTyres select then offers that one dry
+  // compound + Rain (S113 R11 Las Vegas after a Medium Q1: "Medium/Rain"). The plan must use it -
+  // the advisor planned Soft there.
+  const lockedDryName = (() => {
+  const sel = document.querySelector('select[name="DryTyres"]');
+  if (!sel) return null;
+  const dry = Array.from(sel.options).map((o) => o.textContent.replace(/\s+/g, ' ').trim()).filter((t) => t && !/rain|select/i.test(t));
+  return dry.length === 1 ? dry[0] : null;
+  })();
+  if (lockedDryName && tyre && tyre.results) {
+  const lr = tyre.results.find((r) => r.name === lockedDryName);
+  if (lr) {
+  tyre.bestDry = lr;
+  const fr = tyre.results.find((r) => r.name === tyre.finalRec);
+  if (!fr || !fr.isRain) tyre.finalRec = lockedDryName;
+  tyre.lockedDry = lockedDryName;
+  }
+  }
   let chosenTyreResult = tyre && tyre.results.find(r => r.name === tyre.finalRec);
   // Safety net: if the exact finalRec name isn't in results (e.g. Rain compound unavailable in
   // the data), fall back to the best dry result so fuel/stints still render rather than going null.
@@ -5210,7 +5258,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
     const stintEndOf = (i) => (i < stopList.length ? stopList[i] : totalLapsV);
     const stintFuelOf = (i) => Math.min(fuel.stintFuels[i], TANK_MAX);
     let fsHtml = `<div style="${ST.section}"><div style="${ST.sectionTitle}">⛽ Fuel &amp; Tyre Strategy</div>`;
-    fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Start fuel is entered in Q2's "First stint fuel" (read-only here); fill = the level each stop refills the tank TO (GPRO tops up what's left). @L = the lap you pit at the end of. Wet stints burn ~12% more fuel/lap.</div>`;
+    fsHtml += `<div style="font-size:9px;color:#9ca3af;margin-bottom:4px;">Start fuel is entered in Q2's "First stint fuel" (read-only here); fill = the level each stop refills the tank TO (GPRO tops up what's left). @L = the lap you pit at the end of. Wet laps burn less fuel than dry (this track's own wet/dry ratio).${tyre && tyre.lockedDry ? ` Dry compound locked by GPRO: ${esc(tyre.lockedDry)}.` : ''}</div>`;
   // Tyre temp-fit advisory: whole-race avg temp vs the supplier's declared peak working temp
   // (surfaced on TyreSuppliers.asp). The ±3°C fit band is our own heuristic — GPRO exposes no
   // formula linking track temp to compound performance, so this is disclosed as such, never
@@ -5725,7 +5773,27 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   });
   }
   } catch (e) { logError('race plan snapshot failed', e); }
-  const skip = alreadyConfirmed ? 'race setup already confirmed — left as saved' : !rv ? 'no race setup could be computed' : !fills ? 'no fuel plan (track/driver data missing)' : !driverRiskRec ? 'no risk recommendation' : null;
+  // A saved race setup is left alone ("submit once") - but if what GPRO saved can't reach the flag
+  // sensibly, say so on the panel and in the copilot's log (S113 R11 Las Vegas: saved refuels 33/34 L
+  // after a 41 L start = a stop every ~7 laps). GPRO accepts a re-confirm until 1h30 before the start.
+  let savedWarn = '';
+  if (alreadyConfirmed && fuel && fuel.stopLaps && analyze && analyze.raceProfile) {
+  try {
+  const dv = (n) => { const e = document.querySelector(`[name="${n}"]`); return e ? parseFloat(e.value) || 0 : 0; };
+  const dryR = parseFloat(fuel.fuelPerLap) || 0;
+  const sim = simulateSavedFuel(totalLaps, analyze.raceProfile.phases, dryR, dryR * wetFuelRatio(trackName), dv('FuelStart'), [1, 2, 3, 4, 5].map((k) => dv('FuelStop' + k)), chosenTyreResult && chosenTyreResult.lifeLaps);
+  const planStops = fuel.stopLaps.length;
+  const setupOff = rv ? ['FWing:Front Wing', 'RWing:Rear Wing', 'Engine:Engine', 'Brakes:Brakes', 'Gear:Gearbox', 'Suspension:Suspension'].filter((p) => { const [f, k] = p.split(':'); return Math.abs(dv(f) - (rv[k] || 0)) > 50; }).map((p) => p.split(':')[0]) : [];
+  const bits = [];
+  if (sim.ranOut || sim.totalStops > planStops + 1) bits.push(`the saved refuels would mean ${sim.totalStops} stops (plan ${planStops})${sim.ranOut ? `, out of fuel on lap ${sim.ranOut}` : ''}`);
+  if (setupOff.length) bits.push(`the saved car setup is far from the plan on ${setupOff.join('/')}`);
+  if (bits.length) {
+  savedWarn = `GPRO's saved race setup: ${bits.join('; ')}. Race setup can still be re-confirmed until 1h30 before the start (start fuel and tyres stay locked).`;
+  h = `<div style="background:#3b0d0d;border:1px solid #ef4444;color:#fecaca;font-size:11px;padding:6px 8px;border-radius:6px;margin-bottom:6px;">⚠️ ${esc(savedWarn)}</div>` + h;
+  }
+  } catch (e) { logError('saved race setup check failed', e); }
+  }
+  const skip = alreadyConfirmed ? `race setup already confirmed — left as saved${savedWarn ? ' ⚠️ ' + savedWarn : ''}` : !rv ? 'no race setup could be computed' : !fills ? 'no fuel plan (track/driver data missing)' : !driverRiskRec ? 'no risk recommendation' : null;
   publishPlan('race', { form: 'formQual', submit: 'btnConfirmSettings', fields, skip, sig: planSig(fields),
   summary: rv ? `setup FW${rv['Front Wing']} RW${rv['Rear Wing']} E${rv['Engine']} B${rv['Brakes']} G${rv['Gearbox']} S${rv['Suspension']}, stops ${fills ? fills.map((f) => `${f.fill}L@L${f.lap}`).join(' ') || 'none' : '?'}, boost ${boosts.join('/') || '—'}, risks ${driverRiskRec ? `${driverRiskRec.overtakeRisk}/${driverRiskRec.defendRisk}/${driverRiskRec.dryRisk}/${driverRiskRec.wetRisk}/${driverRiskRec.malfunctionRisk}` : '?'}` : '' });
   }
@@ -7992,7 +8060,7 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
   : `<span style="color:${VERDICT.warn};">Δ ${measured.toFixed(2)} L/lap measured (expected ${fuelPerLapDry.toFixed(2)})</span>`);
   return `<div style="${ST.row}"><span style="${ST.label}">Stint ${i + 1} (${esc(s.lapsDone)} laps)</span><span style="${ST.value}">${esc(s.setFuel)} L set / ${esc(s.fuelLeft)} L left → ${verdict}</span></div>`;
   }).join('');
-  h += mkSection('Measured test stints', stintsHtml + `<span style="font-size:9px;color:${PALETTE.textDim};">Parsed from this page. Dry-baseline comparison; wet sessions run ~12% heavier.</span>`);
+  h += mkSection('Measured test stints', stintsHtml + `<span style="font-size:9px;color:${PALETTE.textDim};">Parsed from this page. Dry-baseline comparison; wet laps burn less fuel than dry.</span>`);
   }
   }
 
