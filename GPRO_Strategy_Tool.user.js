@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.45.1
+// @version 6.45.2
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @updateURL https://raw.githubusercontent.com/Jadax/gpro-advisor/main/GPRO_Strategy_Tool.user.js
@@ -1265,7 +1265,23 @@ if (h.includes('TrainingSession.asp')) return 'training';
  });
 
  if (!trackName && !stintsDone.length) return null;
- return { trackName, stintsDone, session, points, temp };
+  // Live part level + wear, shown on the Testing page itself (read 2026-11-21: rows like
+  // "Front wing: | 3 | 12% | (0-999) | Chassis: | 3 | 6%", "Gear:" = Gearbox). The testing gate
+  // re-checks before every stint against THESE numbers - the cached UpdateCar copy doesn't change
+  // while stints are driven (S113 before R12: 6 x 8-lap stints all gated on the pre-test 80%
+  // gearbox -> 92%, after GPRO's one car update of the race was already used).
+  const TEST_PART_NAMES = { 'chassis': 'Chassis', 'engine': 'Engine', 'front wing': 'Front Wing', 'rear wing': 'Rear Wing', 'underbody': 'Underbody', 'sidepods': 'Sidepods', 'cooling': 'Cooling', 'gear': 'Gearbox', 'gearbox': 'Gearbox', 'brakes': 'Brakes', 'suspension': 'Suspension', 'electronics': 'Electronics' };
+  const partWear = {};
+  Array.from(root.querySelectorAll('tr')).filter((tr) => !tr.querySelector('tr')).forEach((tr) => {
+  const cells = Array.from(tr.cells || []).map((c) => c.textContent.replace(/\s+/g, ' ').trim());
+  for (let i = 0; i + 2 < cells.length; i++) {
+  const m = /^([A-Za-z ]+):$/.exec(cells[i]);
+  const nm = m && TEST_PART_NAMES[m[1].trim().toLowerCase()];
+  const lv = /^\d+$/.test(cells[i + 1]) ? +cells[i + 1] : null, w = /^(\d+)%$/.exec(cells[i + 2]);
+  if (nm && lv != null && w) partWear[nm] = { level: lv, wear: +w[1] };
+  }
+  });
+ return { trackName, stintsDone, session, points, temp, partWear: Object.keys(partWear).length === 11 ? partWear : null };
  } catch (e) { return null; }
  }
 
@@ -4276,6 +4292,9 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  result.carHandling = parseInt(charMatch[2]) || 0;
  result.carAcceleration = parseInt(charMatch[3]) || 0;
  }
+ // GPRO allows ONE car update per race: afterwards the page says "You've already updated your car"
+ // and Update/Undo are disabled (read live 2026-11-21) - nothing can be replaced until the race.
+ result.updateLocked = /already updated your car/i.test(pageText);
 
  return result;
  }
@@ -6018,6 +6037,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  // renderUpdateCar and the background refresh, so levels/wear/cash stay current without a visit.
  function cacheCarFromUpdateCar(domData, car) {
  if (domData.cash > 100 && car) car.cash = domData.cash;
+ if (car) { car.updateLocked = !!domData.updateLocked; car.updateLockedRace = domData.updateLocked ? ((nextRaceInfo() || {}).key || null) : null; }
 
  // Merge DOM-parsed levels/wear with API data (DOM is authoritative). Real bug fixed 2026-08-13,
  // same class as the 2026-07-31 cash-merge fix: this used to gate on `dp.currentWear > 0` /
@@ -6199,11 +6219,12 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   else unfixable.push(r.part.name);
   });
   const cashNow = (car && car.cash) || 0;
-  const skip = !analysis.recs.length ? 'no part will break this race'
+  const updLocked = /already updated your car/i.test(document.body ? document.body.textContent : '');
+  const skip = updLocked ? 'GPRO allows one car update per race - already used' : !analysis.recs.length ? 'no part will break this race'
   : !Object.keys(fields).length ? `${unfixable.join(', ')} will break but no affordable option — yours to decide`
   : cost && cashNow - cost < PILOT_CASH_RESERVE ? `needs $${cost.toLocaleString()}, which would leave less than the $${(PILOT_CASH_RESERVE / 1e6).toFixed(0)}M reserve` : null;
   if (cost && cashNow - cost < PILOT_CASH_RESERVE && !skip) carProblems.push('spend would cut into the cash reserve');
-  publishPlan('car', { form: 'UpdateCar', submit: 'btnUpdateCar', fields, skip, sig: planSig(fields), problems: carProblems,
+  publishPlan('car', { form: 'UpdateCar', submit: 'btnUpdateCar', fields, skip, sig: planSig(fields), problems: carProblems, locked: updLocked,
   summary: Object.keys(fields).map((k) => `${PART_NAMES[BUY_SELECTS.indexOf(k)]}: ${fields[k].text}`).join(', ') + (cost ? ` ($${cost.toLocaleString()})` : '') + (unfixable.length ? ` — ${unfixable.join(', ')} still at risk` : '') });
   }
   // Summary of parts not needing action
@@ -6903,15 +6924,17 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
  const PILOT_CASH_RESERVE = 5000000;
  const TYRE_CODES = { 'Extra Soft': 1, 'Soft': 2, 'Medium': 3, 'Hard': 4, 'Rain': 6 };
  const BUY_SELECTS = ['BuyChassis', 'BuyEngine', 'BuyFWing', 'BuyRWing', 'BuyUnderbody', 'BuySidepods', 'BuyCooling', 'BuyGear', 'BuyBrakes', 'BuySusp', 'BuyElectronics'];
- // Run order matters: parts before Q1 (the setup depends on part levels), Q1 before Q2 (Q1 fixes
- // the race's dry compound, Q2 the start fuel), race setup last.
+ // Run order matters: testing BEFORE parts (GPRO allows one car update per race and testing wears
+ // parts - S113 R12: the car was updated first, testing then took the gearbox 80 -> 92% with no
+ // update left), parts before Q1 (the setup depends on part levels), Q1 before Q2 (Q1 fixes the
+ // race's dry compound, Q2 the start fuel), race setup last.
  const PILOT_STEPS = [
+ { key: 'testing', label: 'Testing for car points (league timing, wear + cash gated)', url: 'Testing.asp', repeat: 10 },
  { key: 'car', label: 'Car parts — only when a part would break', url: 'UpdateCar.asp' },
  { key: 'staffTrain', label: 'Staff training', url: 'StaffAndFacilities.asp' },
  { key: 'facilities', label: 'Facility upgrades (league targets, cash permitting)', url: 'StaffAndFacilities.asp' },
  { key: 'driverTrain', label: 'Driver training', url: 'TrainingSession.asp' },
  { key: 'sponsors', label: 'Sponsor negotiations — answer questions, keep 2 going', url: 'NegotiationsOverview.asp', resolve: (log) => resolveSponsorJobs(log), everyRun: true },
- { key: 'testing', label: 'Testing for car points (league timing, wear + cash gated)', url: 'Testing.asp', repeat: 10 },
  { key: 'q1', label: 'Q1 lap', url: 'Qualify.asp' },
  { key: 'q2', label: 'Q2 lap + start fuel', url: 'Qualify2.asp' },
  { key: 'race', label: 'Race setup & strategy', url: 'RaceSetup.asp' },
@@ -8093,7 +8116,15 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  else if (standing.pos > PROMOTION_SPOTS) gate(`${league}: you're P${standing.pos} - only the top ${PROMOTION_SPOTS} are promoted, and a non-promoted Rookie loses its testing points at season end`);
  if (sess.lapsDone === 0 && cash - TEST_SESSION_COST < policy.carryLine) gate(`${league}: cash $${(cash / 1e6).toFixed(1)}M - testing only spends money above $${(policy.carryLine / 1e6).toFixed(0)}M (below it, cash carries into ${policy.nextLeague} untaxed)`);
  }
- const car = mergeWithCachedCarData(getDataDomOnly('/UpdateCar'));
+ let car = mergeWithCachedCarData(getDataDomOnly('/UpdateCar'));
+ if (testing.partWear && car) {
+ car = Object.assign({}, car);
+ PART_NAMES.forEach((n, i) => { const p = testing.partWear[n]; if (p) { car[PART_LVL_KEYS[i]] = p.level; car[PART_WEAR_KEYS[i]] = p.wear; } });
+ out.wearSource = 'live (Testing page)';
+ } else if (sess.lapsDone > 0) gate('part wear isn\'t readable on the Testing page - no more stints on wear read before this session started');
+ const nr = nextRaceInfo() || {};
+ const carLocked = !!(car && car.updateLocked && car.updateLockedRace && car.updateLockedRace === nr.key);
+ out.carLocked = carLocked;
  const driver = getDataDomOnly('/DriProfile');
  const nextTrack = resolveRaceTrack(getDataDomOnly('/TrackProfile'), (nextRaceInfo() || {}).track);
  const testGapp = lookupGappTrack(testing.trackName, 'trackData');
@@ -8162,7 +8193,12 @@ ${pagePlans.length ? `<div class="btns"><button class="btn" data-a="fill">Fill t
  out.predWearPerLap.push(Math.round(perLapRaw * 1000) / 1000);
  const perLap = perLapRaw * testWearCal;
  const now = parseInt(car[PART_WEAR_KEYS[i]]) || 0, race = (raceWear[i] && raceWear[i].raceWear) || 0;
- const lapsOk = perLap > 0 ? Math.floor((TEST_WEAR_CEILING - now - race) / perLap) : lapsLeft;
+ // A part already projected past the fail line is replaced by the car step, which runs AFTER
+ // testing (PILOT_STEPS) - test wear on it costs nothing. Only while GPRO's one car update of the
+ // race is still unused; once it is, every part must reach the flag as it is.
+ const doomed = !carLocked && now + race >= FAIL_LINE();
+ if (doomed) { out.replacedAnyway = (out.replacedAnyway || []).concat([n]); }
+ const lapsOk = doomed ? lapsLeft : perLap > 0 ? Math.floor((TEST_WEAR_CEILING - now - race) / perLap) : lapsLeft;
  if (lapsOk < lapBudget) { lapBudget = lapsOk; binding = n; }
  const end = Math.round(now + race + perLap * out.stintLaps);
  if (end > TEST_WEAR_CEILING) out.wearAfter.push(`${n} ~${end}%`);
