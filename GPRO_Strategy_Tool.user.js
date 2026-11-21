@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name GPRO Strategy Tool
 // @namespace https://gpro.net
-// @version 6.45.0
+// @version 6.45.1
 // @description Fuel setup, weather analysis, car upgrade recommendations for GPRO. Author: Tushant Sharma.
 // @author Tushant Sharma
 // @updateURL https://raw.githubusercontent.com/Jadax/gpro-advisor/main/GPRO_Strategy_Tool.user.js
@@ -1757,6 +1757,25 @@ if (h.includes('TrainingSession.asp')) return 'training';
   // driven on the PREVIOUS stint's fuel; the stop + out-lap belong to the next stint. S113 R3
   // Austin proved the old convention wrong: we labelled stint 1 as laps 1-18 / stop @L19, but the
   // car drove lap 19 on its start fuel (lap 20 carried the 24s stop), so stint 1 was really 1-19.
+  // Laps of fuel added before a forecast weather change. Own heuristic: 3 until races are logged
+  // with their planned change laps; then the largest gap seen between a planned and the real change
+  // lap + 2 (S113 R11 Las Vegas: planned dry from L19, really from L20). Capped at 10.
+  const WEATHER_MARGIN_MIN = 3;
+  function weatherChangeEvidence() {
+  const errs = [];
+  getRaceLog().forEach((rec) => {
+  const plan = rec.forecast && rec.forecast.plan, ev = rec.rainEvidence;
+  if (!plan || !plan.weatherChanges || !plan.weatherChanges.length || !ev || !ev.wetLapList || !(rec.laps > 0)) return;
+  const wet = new Set(ev.wetLapList), real = [];
+  for (let l = 2; l <= rec.laps; l++) if (wet.has(l) !== wet.has(l - 1)) real.push(l);
+  plan.weatherChanges.forEach((p) => { errs.push(real.length ? Math.min(...real.map((a) => Math.abs(a - p))) : rec.laps); });
+  });
+  return { n: errs.length, maxErr: errs.length ? Math.max(...errs) : null };
+  }
+  function weatherChangeMarginLaps() {
+  const ev = weatherChangeEvidence();
+  return ev.maxErr == null ? WEATHER_MARGIN_MIN : Math.min(10, Math.max(WEATHER_MARGIN_MIN, ev.maxErr + 2));
+  }
   function buildPhaseFuelPlan(laps, phases, transitionLaps, dryRate, wetRate, tyreStops) {
   const rateLap = (lap) => {
   if (phases && phases.length) { for (const p of phases) { if (lap >= p.startLap && lap <= p.endLap) return p.condition === 'wet' ? wetRate : dryRate; } }
@@ -1828,7 +1847,10 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   }
   const nearTrans = (lap) => { for (const t of trans) { if (Math.abs(t - lap) <= Math.max(3, Math.floor(stintLaps / 3))) return true; } return false; };
   for (const w of wearStops) if (!nearTrans(w)) bounds.push(w);
-  trans.forEach(t => bounds.push(t));
+  // GPRO pits for the weather at the END of the first lap on the changed track (S113 R11 Las Vegas:
+  // dry from L20, "Stop 3 (Lap 20) Tyres change due to the weather change", Medium from L21) - so
+  // the stint before a change also drives lap t, and the next stint starts at t+1.
+  trans.forEach(t => bounds.push(Math.min(laps + 1, t + 1)));
  bounds.push(laps + 1);
  bounds = Array.from(new Set(bounds)).filter(b => b >= 1 && b <= laps + 1).sort((a, b) => a - b);
  for (let i = bounds.length - 1; i >= 1; i--) if (bounds[i] <= bounds[i - 1]) bounds.splice(i, 1);
@@ -1852,7 +1874,22 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // Every bound after lap 1 and before the sentinel is a stint start; GPRO's pit lap is the lap before it.
   const stopLaps = bounds.slice(1, -1).map(b => b - 1);
    const stintFuels = [];
-   for (let i = 0; i < bounds.length - 1; i++) stintFuels.push(need(bounds[i], bounds[i + 1] - 1));
+   // A stint that ends at a FORECAST weather change carries weatherChangeMarginLaps() more laps of
+   // fuel at its own condition's rate: the change lap is a forecast, and if the weather holds on a
+   // little longer the car runs dry first and pits for fuel, then pits AGAIN for the weather (S113
+   // R11 Las Vegas: rain lasted to L19, one lap past the plan, the 30 L fill ran out on L19 and the
+   // weather pit came on L20 - two stops in two laps, ~30 s). Extra fuel there costs only weight:
+   // the weather pit refills TO the next level anyway.
+   const margin = weatherChangeMarginLaps();
+   for (let i = 0; i < bounds.length - 1; i++) {
+   const to = bounds[i + 1] - 1;
+   let f = need(bounds[i], to);
+   if (to < laps && trans.indexOf(bounds[i + 1] - 1) !== -1) {
+   let extra = 0; for (let k = 1; k <= margin; k++) extra += rateLap(Math.max(bounds[i], to - k + 1));
+   f = Math.min(TANK_MAX, Math.round(f + extra));
+   }
+   stintFuels.push(f);
+   }
    return { stopLaps, stints: stopLaps.length + 1, stintFuels };
    }
 
@@ -1999,7 +2036,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const stops = [];
   for (let l = 1; l <= laps; l++) {
   const rate = wetAt(l) ? wetRate : dryRate;
-  const change = l > 1 && wetAt(l) !== wetAt(l - 1);
+  // weather pit at the end of the first changed lap (see buildPhaseFuelPlan)
+  const change = l > 2 && wetAt(l - 1) !== wetAt(l - 2);
   const worn = !wetAt(l) && lifeLaps > 0 && setLaps >= lifeLaps;
   if (tank < rate || change || worn) {
   const f = (fills && fills[k]) > 0 ? fills[k] : last;
@@ -2034,7 +2072,10 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   const b = ends[i];
   // laps on each kind of tyre in this stint (a weather change inside a stint is itself a planning error)
   let dry = 0, wet = 0;
-  for (let l = a; l <= b; l++) { if (wetAt(l)) wet++; else dry++; }
+  // the last lap of a stint that ends at a weather change is driven on the old tyres (GPRO pits at
+  // the end of the first changed lap) - not a mix
+  const lastL = b > a && wetAt(b) !== wetAt(b - 1) ? b - 1 : b;
+  for (let l = a; l <= lastL; l++) { if (wetAt(l)) wet++; else dry++; }
   if (dry && wet) out.push(`stint ${i + 1} (L${a}-${b}) mixes dry and wet laps without a stop`);
   if (dry && dryLife > 0 && dry > dryLife + 1) out.push(`stint ${i + 1} runs ${dry} dry laps on one ${tyre.bestDry.name} set (life ~${dryLife})`);
   if (wet && wetLife > 0 && wet > wetLife + 1) out.push(`stint ${i + 1} runs ${wet} wet laps on one Rain set (life ~${wetLife})`);
@@ -2068,8 +2109,8 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   pit1 = Math.max(1, pit1);
   // A weather change before the locked fuel runs out is the first stop: GPRO pits for it (wait 0)
   // and refuels there (S113 R10 Melbourne: dry start, rain expected ~L11, 87 L would reach ~L20).
-  const earlyTrans = transLaps.filter((l) => l > 1 && l - 1 < pit1);
-  if (earlyTrans.length) pit1 = Math.min(...earlyTrans) - 1;
+  const earlyTrans = transLaps.filter((l) => l > 1 && l < pit1);
+  if (earlyTrans.length) pit1 = Math.min(...earlyTrans); // weather pit = end of the first changed lap
   const rem = laps - pit1;
   const strategyStint = maxStintLaps > 0 ? maxStintLaps : Math.ceil(laps / Math.max(1, (tyreStops || 0) + 1));
   const remStops = Math.max((tyreStops || 0) - 1, Math.ceil(rem / strategyStint) - 1, 0);
@@ -2080,7 +2121,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   // into the fuel pit - but that pit happens BEFORE the change, on the old tyres, so the plan never
   // switched compound (S113 R11 Las Vegas: 41 L locked -> pit L11 in the rain, rain stops ~L19,
   // advisor kept Rain to L34). Only a transition ON the stint boundary is the same stop.
-  const subTrans = transLaps.filter((l) => l > pit1 + 1).map(shift);
+  const subTrans = transLaps.filter((l) => l > pit1).map(shift);
   let sub = null;
   // Stops for the rest = its weather changes + the wear stops each DRY phase needs on its own (a tyre
   // set's life is per set: 32 dry laps after the Las Vegas switch need 2 Medium sets at ~20-23 laps).
@@ -5817,6 +5858,7 @@ const intLap = (l) => Math.max(1, Math.min(laps, Math.round(l)));
   compound: chosenTyreResult ? chosenTyreResult.name : null, stops: chosenTyreResult ? chosenTyreResult.stops : null, lifeLaps: chosenTyreResult ? chosenTyreResult.lifeLaps || null : null,
   partWear: pw.map((p) => ({ name: p.name, start: p.wear, race: Math.round(p.raceWear * 10) / 10 })),
   failLine: FAIL_LINE(),
+  weatherChanges: analyze && analyze.raceProfile && analyze.raceProfile.transitions ? analyze.raceProfile.transitions.map((t) => t.lap) : [],
   });
   }
   } catch (e) { logError('race plan snapshot failed', e); }

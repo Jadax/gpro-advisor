@@ -19,9 +19,9 @@ function grabFn(name) {
 }
 const line = (re) => { const l = src.split('\n').find((x) => re.test(x)); if (!l) throw new Error('line not found: ' + re); return l; };
 const env = [line(/const TANK_MAX = /), line(/const PART_NAMES = /), line(/const PART_LVL_KEYS\s*=/), line(/const PART_WEAR_KEYS\s*=/),
-  line(/const LAPS_PER_PERIOD_FALLBACK = /), line(/const LAPS_PER_PERIOD_CALIBRATION = /), line(/const LAST_STINT_SAFETY = /), line(/const PIT_RESERVE_LAPS = /), line(/const medianOf = /),
+  line(/const LAPS_PER_PERIOD_FALLBACK = /), line(/const LAPS_PER_PERIOD_CALIBRATION = /), line(/const LAST_STINT_SAFETY = /), line(/const PIT_RESERVE_LAPS = /), line(/const medianOf = /), line(/const WEATHER_MARGIN_MIN = /),
   ...['lookupGappTrack', 'gappLookupByName', 'gappFuelPerKm', 'gappCarPartLvl', 'gappCarPartWear', 'calcCarSetupGappSession', 'calcDriverWearFactor', 'numOrDefault',
-    'wetFuelRatio', 'tyreWearLimit', 'analyzeWeather', 'rainStartEvidence', 'applyRaceStartWeather', 'buildPhaseFuelPlan', 'computeRaceFuelPlan',
+    'wetFuelRatio', 'tyreWearLimit', 'weatherChangeEvidence', 'weatherChangeMarginLaps', 'analyzeWeather', 'rainStartEvidence', 'applyRaceStartWeather', 'buildPhaseFuelPlan', 'computeRaceFuelPlan',
     'simulateSavedFuel', 'racePlanProblems', 'calcBoostLapSuggestion'].map(grabFn)].join('\n');
 const D = global.GPRO_DATA, GPRO_DATA = D; // eslint-disable-line no-unused-vars
 const getRaceLog = () => [], logDebug = () => {}, logError = () => {}; // eslint-disable-line no-unused-vars
@@ -44,12 +44,12 @@ test('wet start: rain L1-18, dry from L19 (18 laps per forecast window)', () => 
 });
 test('live call (chosen compound = Rain) plans a fresh Medium set before 20 dry laps', () => {
   const plan = computeRaceFuelPlan(LV.laps, LV.dry, lvProfile(), 1, LV.locked, LV.locked, LV.rainLife, wetFuelRatio('Las Vegas'), LV.mediumLife);
-  assert.deepStrictEqual(plan.stopLaps, [11, 18, 34]);
+  assert.deepStrictEqual(plan.stopLaps, [11, 19, 34]); // weather pit at the end of the first dry lap (L19)
   assert.deepStrictEqual(problemsOf(plan, [16, 32, 48]), []);
 });
 test('self-check catches the v6.44.1 bug (dry phase sized by Rain life: one Medium set for 32 laps)', () => {
   const plan = computeRaceFuelPlan(LV.laps, LV.dry, lvProfile(), 1, LV.locked, LV.locked, LV.rainLife, wetFuelRatio('Las Vegas'));
-  assert.deepStrictEqual(plan.stopLaps, [11, 18]);
+  assert.deepStrictEqual(plan.stopLaps, [11, 19]);
   assert.ok(problemsOf(plan, []).some((x) => /dry laps on one Medium set/.test(x)), 'expected a tyre-life problem');
 });
 test('no boost on the locked start fuel; self-check flags one', () => {
@@ -61,6 +61,26 @@ test('no boost on the locked start fuel; self-check flags one', () => {
 test('replaying GPRO-saved refuels 33/34 after 41 L: 6 stops (what the page held)', () => {
   const sim = simulateSavedFuel(LV.laps, lvProfile().phases, LV.dry, LV.dry * wetFuelRatio('Las Vegas'), 41, [33, 34, 0, 0, 0], LV.mediumLife);
   assert.strictEqual(sim.totalStops, 6);
+});
+// S113 R11 Las Vegas REAL result: rain to L19 (dry from L20, one lap past the plan). The 30 L fill
+// before the forecast change ran dry on L19 -> fuel stop L19 + weather stop L20 (4 stops, P11).
+const lvReal = [{ condition: 'wet', startLap: 1, endLap: 19, laps: 19 }, { condition: 'dry', startLap: 20, endLap: 50, laps: 31 }];
+test('Las Vegas real weather: the old 30 L fill makes a fuel stop the lap before the weather stop', () => {
+  const sim = simulateSavedFuel(LV.laps, lvReal, LV.dry, LV.dry * wetFuelRatio('Las Vegas'), 41, [30, 79, 81, 0, 0], LV.mediumLife);
+  // reproduces the real report: Stop 1 L11 fuel, Stop 2 L19 fuel, Stop 3 L20 weather
+  assert.deepStrictEqual(sim.stops.slice(0, 3), [11, 19, 20]);
+});
+test('fill before a forecast weather change carries a margin: rain one lap longer costs no extra stop', () => {
+  const plan = computeRaceFuelPlan(LV.laps, LV.dry, lvProfile(), 1, LV.locked, LV.locked, LV.rainLife, wetFuelRatio('Las Vegas'), LV.mediumLife);
+  const fills = plan.stintFuels.slice(1);
+  const sim = simulateSavedFuel(LV.laps, lvReal, LV.dry, LV.dry * wetFuelRatio('Las Vegas'), 41, fills.concat([0, 0, 0]).slice(0, 5), LV.mediumLife);
+  assert.ok(sim.totalStops <= 3 && !sim.ranOut, 'stops ' + sim.stops + ' fills ' + fills);
+});
+test('unlocked plan (what Q2 should set): start fuel reaches the weather change with the margin', () => {
+  const plan = computeRaceFuelPlan(LV.laps, LV.dry, lvProfile(), 1, null, null, LV.rainLife, wetFuelRatio('Las Vegas'), LV.mediumLife);
+  assert.strictEqual(plan.stopLaps[0], 19);
+  const wet = LV.dry * wetFuelRatio('Las Vegas');
+  assert.ok(plan.stintFuels[0] >= Math.round(21 * wet), 'start ' + plan.stintFuels[0] + ' < 21 wet laps');
 });
 test('wet laps burn less fuel than dry on every track with both factors', () => {
   const bad = Object.entries(D.gapp.trackData).filter(([, v]) => v[6] > 0 && v[7] > 0 && v[7] >= v[6]).map(([k]) => k);
